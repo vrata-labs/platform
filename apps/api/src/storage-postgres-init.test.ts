@@ -25,9 +25,9 @@ test("Postgres initialization preserves the full original query/phase/client lif
   assert.deepEqual(h.trace.slice(start, commit), integration.trace);
   assert.equal(commit, start + integrationSql.length);
   const original = [...h.trace.slice(0, start), ...h.trace.slice(commit)];
-  // Original implementation, with the same three catalog phases supplied by this harness.
-  assert.equal(createHash("sha256").update(JSON.stringify(original)).digest("hex"), "3058f515129030d1f7822bc000352c9a63340a893e01192402d9223349e6bdaf");
-  assert.deepEqual(transactionTrace(h), ["connect", lockSql, "begin", "seed", "validateStoredTemplateVersions", "synchronizeTemplateCatalog", "commit", unlockSql, "release"]);
+  // Preserve the historical base trace; extensions have their own explicit position/await contract.
+  assert.equal(createHash("sha256").update(JSON.stringify(original.filter(entry => entry.kind !== "installRoomExtensions"))).digest("hex"), "3058f515129030d1f7822bc000352c9a63340a893e01192402d9223349e6bdaf");
+  assert.deepEqual(transactionTrace(h), ["connect", lockSql, "begin", "installRoomExtensions", "seed", "validateStoredTemplateVersions", "synchronizeTemplateCatalog", "commit", unlockSql, "release"]);
 });
 
 test("Postgres integration schema is additive and keeps managed rows from being deleted", async () => {
@@ -82,7 +82,7 @@ for (const [label, matches] of failedQueries) {
   });
 }
 
-for (const phase of ["seed", "validateStoredTemplateVersions", "synchronizeTemplateCatalog"] as const) {
+for (const phase of ["installRoomExtensions", "seed", "validateStoredTemplateVersions", "synchronizeTemplateCatalog"] as const) {
   test(`Postgres initialization stops after a failed ${phase} callback and preserves its error`, async () => {
     const failure = new Error(phase);
     const phases: InitPhase[] = [];
@@ -106,7 +106,7 @@ test("Postgres initialization waits for seeding before validation, commit and co
   const pending = initializePostgresStorage(h.pool, h.hooks);
   try {
     await reached.promise;
-    assert.deepEqual(transactionTrace(h), ["connect", lockSql, "begin", "seed"]);
+    assert.deepEqual(transactionTrace(h), ["connect", lockSql, "begin", "installRoomExtensions", "seed"]);
   } finally { resume.resolve(); }
   await pending;
   assert.equal(h.trace.at(-1)?.kind, "release");
@@ -140,14 +140,14 @@ for (const cleanup of ["rollback", "unlock", "release"] as const) {
     const initial = new Error("seed_failed");
     const failure = new Error(`${cleanup}_failed`);
     const h = createStorageInitHarness({
-      beforePhase: () => { throw initial; },
+      beforePhase: name => { if (name === "seed") throw initial; },
       beforeQuery: ({ sql }) => {
         if ((cleanup === "rollback" && sql === "rollback") || (cleanup === "unlock" && sql === unlockSql)) throw failure;
       },
       releaseError: cleanup === "release" ? failure : undefined
     });
     await assert.rejects(initializePostgresStorage(h.pool, h.hooks), error => error === failure);
-    assert.deepEqual(transactionTrace(h), ["connect", lockSql, "begin", "seed", "rollback", unlockSql, "release"]);
+    assert.deepEqual(transactionTrace(h), ["connect", lockSql, "begin", "installRoomExtensions", "seed", "rollback", unlockSql, "release"]);
   });
 }
 

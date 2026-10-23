@@ -1,4 +1,9 @@
 import { createRoomAccessDebugState, type RoomAccessDebugState, type RoomPermission, type RoomRole, type RoomTemplateSettings, type RoomTemplateSnapshotV1, type RoomTemplateSurface, type SceneBundleIntegrity } from "@vrata/shared-types";
+import { DocumentActionError, DocumentUploadError } from "./document-feedback.js";
+import { parseDocumentUploadPolicy, type DocumentUploadPolicy } from "@vrata/shared-types";
+import type { AuthoritySlots } from "./participant-authority.js";
+import { runtimeFetch as fetch } from "./session-upgrade.js";
+import { MediaTokenRequestError, retryableMediaTokenError } from "./media/media-token-error.js";
 
 interface RoomManifest {
   roomId: string;
@@ -55,6 +60,12 @@ interface StateTokenResponse {
   access: RoomAccessDebugState;
   role: RoomRole;
   permissions: RoomPermission[];
+  identityProtocolVersion?: 2;
+  participantId?: string;
+  identityCredential?: string;
+  waitingCredential?: string;
+  isOwner?: boolean;
+  authorityRevision?: number;
 }
 
 interface MediaTokenResponse {
@@ -65,6 +76,7 @@ interface MediaTokenResponse {
 
 interface RuntimeHealthResponse {
   features?: {
+    identityProtocolVersion?: 2;
     xrEnabled?: boolean;
     voiceEnabled?: boolean;
     screenShareEnabled?: boolean;
@@ -214,6 +226,9 @@ export interface RuntimeSpaceOption extends RuntimeSpaceRecord {
 
 export interface RuntimePersonalRoomResponse {
   created: boolean;
+  identityProtocolVersion?: 2;
+  identityCredential?: string;
+  participantId?: string;
   room: {
     roomId: string;
     tenantId: string;
@@ -271,17 +286,20 @@ export async function fetchStateToken(apiBaseUrl: string, roomId: string, access
     },
     body: JSON.stringify({
       roomId,
-      participantId: accessRequest.participantId,
+      ...(accessRequest.identityProtocolVersion === 2
+        ? { identityProtocolVersion: 2,
+          ...(accessRequest.identityCredential != null ? { identityCredential: accessRequest.identityCredential } : {}),
+          ...(accessRequest.waitingCredential != null ? { waitingCredential: accessRequest.waitingCredential } : {}) }
+        : { participantId: accessRequest.participantId, requestedRole: accessRequest.requestedRole }),
       displayName: accessRequest.displayName,
-      requestedRole: accessRequest.requestedRole,
-      inviteToken: accessRequest.inviteToken
+      ...(accessRequest.inviteToken != null ? { inviteToken: accessRequest.inviteToken } : {})
     })
   });
 
-  if (response.status === 202 || response.status === 403 || response.status === 401) {
-    const payload = await response.json().catch(() => ({})) as { reason?: string; accessRequestId?: string; requestId?: string };
+  if ([202, 403, 401, 409, 426, 429].includes(response.status)) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; accessRequestId?: string; requestId?: string; waitingCredential?: string };
     if (payload.reason) {
-      throw new RuntimeAccessError(response.status, payload.reason, payload.accessRequestId, payload.requestId);
+      throw new RuntimeAccessError(response.status, payload.reason, payload.accessRequestId, payload.requestId, payload.waitingCredential);
     }
   }
 
@@ -292,9 +310,10 @@ export async function fetchStateToken(apiBaseUrl: string, roomId: string, access
   return (await response.json()) as StateTokenResponse;
 }
 
-export async function fetchRuntimeSpaces(apiBaseUrl: string, roomId: string, search = ""): Promise<RuntimeSpaceOption[]> {
+export async function fetchRuntimeSpaces(apiBaseUrl: string, roomId: string, search = "", sessionToken?: string): Promise<RuntimeSpaceOption[]> {
   const response = await fetch(new URL(`/api/rooms/${roomId}/spaces${search}`, apiBaseUrl), {
-    cache: "no-store"
+    cache: "no-store",
+    headers: sessionToken ? { authorization: `Bearer ${sessionToken}` } : undefined
   });
 
   if (!response.ok) {
@@ -305,7 +324,8 @@ export async function fetchRuntimeSpaces(apiBaseUrl: string, roomId: string, sea
   return formatSpaceOptions(payload.items);
 }
 
-export async function openPersonalRoom(apiBaseUrl: string, input: { participantId: string; displayName: string }): Promise<RuntimePersonalRoomResponse> {
+export async function openPersonalRoom(apiBaseUrl: string, input: { participantId: string; displayName: string }
+  | { identityProtocolVersion: 2; displayName: string; roomId?: string; identityCredential?: string }): Promise<RuntimePersonalRoomResponse> {
   const response = await fetch(new URL("/api/personal-room", apiBaseUrl), {
     method: "POST",
     headers: {
@@ -352,6 +372,11 @@ export async function savePersonalRoomState(apiBaseUrl: string, roomId: string, 
 
 export interface RuntimeBootResult {
   roomId: string;
+  identityProtocolVersion?: 2;
+  participantId?: string;
+  identityCredential?: string;
+  isOwner?: boolean;
+  authorityRevision?: number;
   roomType: "standard" | "personal";
   ownerParticipantId?: string | null;
   template: string;
@@ -415,6 +440,9 @@ export interface RuntimeAccessRequest {
   displayName: string;
   requestedRole?: string | null;
   inviteToken?: string | null;
+  identityProtocolVersion?: 2;
+  identityCredential?: string | null;
+  waitingCredential?: string | null;
 }
 
 export class RuntimeAccessError extends Error {
@@ -422,14 +450,16 @@ export class RuntimeAccessError extends Error {
   readonly reason: string;
   readonly accessRequestId?: string;
   readonly requestId?: string;
+  readonly waitingCredential?: string;
 
-  constructor(status: number, reason: string, accessRequestId?: string, requestId?: string) {
+  constructor(status: number, reason: string, accessRequestId?: string, requestId?: string, waitingCredential?: string) {
     super(`room_access_denied:${reason}:${status}`);
     this.name = "RuntimeAccessError";
     this.status = status;
     this.reason = reason;
     this.accessRequestId = accessRequestId;
     this.requestId = requestId;
+    this.waitingCredential = waitingCredential;
   }
 }
 
@@ -449,10 +479,20 @@ export interface RuntimeSessionControlState {
 
 export interface RuntimeSessionControlResponse {
   state: RuntimeSessionControlState;
+  authorityRevision?: number;
+  revision?: number;
+  ownerParticipantId?: string | null;
+  slots?: AuthoritySlots;
+  mediaScreenReconciliation?: {
+    state: "pending" | "observed" | "unavailable";
+    desiredVersion: { authorityRevision: number | null; roomActive: boolean | null };
+  };
   participant?: {
     participantId: string;
     role: RoomRole;
     permissions: RoomPermission[];
+    isOwner?: boolean;
+    access?: RoomAccessDebugState;
     status: "active" | "blocked";
     reason?: string | null;
   } | null;
@@ -461,6 +501,8 @@ export interface RuntimeSessionControlResponse {
   access?: RoomAccessDebugState;
   role?: RoomRole;
   permissions?: RoomPermission[];
+  /** v2 plugin runtime change hint; absent from older APIs and floor-1 sessions. */
+  pluginBindingsRevision?: number;
 }
 
 export interface VoiceSessionPlan {
@@ -489,7 +531,8 @@ export async function bootRuntime(
 ): Promise<RuntimeBootResult> {
   const health = await fetchRuntimeHealth(apiBaseUrl);
   const healthFeatures = health.features ?? {};
-  const accessResponse = accessRequest ? await fetchStateToken(apiBaseUrl, roomId, accessRequest) : null;
+  const accessResponse = accessRequest ? await fetchStateToken(apiBaseUrl, roomId,
+    { ...accessRequest, identityProtocolVersion: healthFeatures.identityProtocolVersion === 2 ? 2 : undefined }) : null;
   const accessDebug = accessResponse?.access ?? createRoomAccessDebugState("guest");
   const manifest = await fetchRoomManifest(apiBaseUrl, roomId, accessResponse?.token);
   if (manifest.templateSnapshot?.defaults) {
@@ -507,6 +550,13 @@ export async function bootRuntime(
 
   return {
     roomId: manifest.roomId,
+    ...(accessResponse?.identityProtocolVersion === 2 ? {
+      identityProtocolVersion: 2 as const,
+      participantId: accessResponse.participantId,
+      identityCredential: accessResponse.identityCredential,
+      isOwner: accessResponse.isOwner === true,
+      authorityRevision: accessResponse.authorityRevision
+    } : {}),
     roomType: manifest.roomType ?? "standard",
     ownerParticipantId: manifest.ownerParticipantId ?? null,
     template: manifest.template,
@@ -560,7 +610,9 @@ export async function bootRuntime(
   };
 }
 
-export async function listRoomDocuments(apiBaseUrl: string, roomId: string, sessionToken: string): Promise<RuntimeDocumentRecord[]> {
+export interface RuntimeDocumentLibrary { items: RuntimeDocumentRecord[]; uploadPolicy: DocumentUploadPolicy | null }
+
+export async function listRoomDocuments(apiBaseUrl: string, roomId: string, sessionToken: string): Promise<RuntimeDocumentLibrary> {
   const response = await fetch(new URL(`/api/rooms/${roomId}/documents`, apiBaseUrl), {
     headers: {
       "authorization": `Bearer ${sessionToken}`
@@ -571,10 +623,11 @@ export async function listRoomDocuments(apiBaseUrl: string, roomId: string, sess
     const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
     throw new Error(`failed_to_list_documents:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
   }
-  return ((await response.json()) as { items: RuntimeDocumentRecord[] }).items;
+  const library = await response.json() as { items: RuntimeDocumentRecord[]; uploadPolicy?: unknown };
+  return { items: library.items, uploadPolicy: parseDocumentUploadPolicy(library.uploadPolicy) };
 }
 
-export async function uploadRoomDocument(apiBaseUrl: string, roomId: string, sessionToken: string, file: File, mediaMetadata?: { widthPx: number; heightPx: number; durationMs?: number }): Promise<RuntimeDocumentRecord> {
+export async function uploadRoomDocument(apiBaseUrl: string, roomId: string, sessionToken: string, file: File, mediaMetadata?: { widthPx: number; heightPx: number; durationMs?: number }, signal?: AbortSignal): Promise<RuntimeDocumentRecord> {
   const form = new FormData();
   form.set("document", file);
   if (mediaMetadata) {
@@ -587,24 +640,24 @@ export async function uploadRoomDocument(apiBaseUrl: string, roomId: string, ses
     headers: {
       "authorization": `Bearer ${sessionToken}`
     },
-    body: form
+    body: form,
+    signal
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
-    throw new Error(`failed_to_upload_document:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+    throw new DocumentUploadError(response.status, payload.reason ?? payload.error);
   }
   return ((await response.json()) as { document: RuntimeDocumentRecord }).document;
 }
 
-export async function downloadRoomDocument(apiBaseUrl: string, document: RuntimeDocumentRecord, sessionToken: string): Promise<{ blob: Blob; filename: string }> {
+export async function downloadRoomDocument(apiBaseUrl: string, document: RuntimeDocumentRecord, sessionToken: string, signal?: AbortSignal): Promise<{ blob: Blob; filename: string }> {
   const response = await fetch(new URL(document.downloadUrl, apiBaseUrl), {
     headers: {
       "authorization": `Bearer ${sessionToken}`
-    }
+    }, signal, cache: "no-store"
   });
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
-    throw new Error(`failed_to_download_document:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+    throw new DocumentActionError("download", response.status);
   }
   const disposition = response.headers.get("content-disposition") ?? "";
   const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? document.filename;
@@ -637,16 +690,15 @@ export async function fetchRoomDocumentMediaContent(apiBaseUrl: string, roomId: 
   return response.blob();
 }
 
-export async function deleteRoomDocument(apiBaseUrl: string, roomId: string, documentId: string, sessionToken: string): Promise<RuntimeDocumentRecord> {
+export async function deleteRoomDocument(apiBaseUrl: string, roomId: string, documentId: string, sessionToken: string, signal?: AbortSignal): Promise<RuntimeDocumentRecord> {
   const response = await fetch(new URL(`/api/rooms/${roomId}/documents/${documentId}`, apiBaseUrl), {
     method: "DELETE",
     headers: {
       "authorization": `Bearer ${sessionToken}`
-    }
+    }, signal
   });
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
-    throw new Error(`failed_to_delete_document:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+    throw new DocumentActionError("delete", response.status);
   }
   return ((await response.json()) as { document: RuntimeDocumentRecord }).document;
 }
@@ -816,6 +868,17 @@ export async function transferRoomHost(apiBaseUrl: string, roomId: string, sessi
   return (await response.json()) as RuntimeSessionControlResponse;
 }
 
+export async function transferRoomOwner(apiBaseUrl: string, roomId: string, sessionToken: string,
+  participantId: string, expectedRevision: number): Promise<RuntimeSessionControlResponse> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/owner/transfer`, apiBaseUrl), {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
+    body: JSON.stringify({ participantId, expectedRevision })
+  });
+  if (!response.ok) throw new Error(`failed_to_transfer_owner:${response.status}`);
+  return (await response.json()) as RuntimeSessionControlResponse;
+}
+
 export async function grantRoomPresenter(apiBaseUrl: string, roomId: string, sessionToken: string, participantId: string): Promise<RuntimeSessionControlResponse> {
   const response = await fetch(new URL(`/api/rooms/${roomId}/presenters/${encodeURIComponent(participantId)}/grant`, apiBaseUrl), {
     method: "POST",
@@ -844,11 +907,14 @@ export async function revokeRoomPresenter(apiBaseUrl: string, roomId: string, se
   return (await response.json()) as RuntimeSessionControlResponse;
 }
 
+export interface MediaPublishIntent { canPublishAudio: boolean; canPublishVideo: boolean }
+
 export async function fetchMediaToken(
   apiBaseUrl: string,
   roomId: string,
   participantId: string,
-  sessionToken: string
+  sessionToken: string,
+  publish: MediaPublishIntent = { canPublishAudio: true, canPublishVideo: false }
 ): Promise<MediaTokenResponse> {
   const response = await fetch(new URL("/api/tokens/media", apiBaseUrl), {
     method: "POST",
@@ -859,13 +925,14 @@ export async function fetchMediaToken(
     body: JSON.stringify({
       roomId,
       participantId,
-      canPublishAudio: true,
-      canPublishVideo: false
+      canPublishAudio: publish.canPublishAudio,
+      canPublishVideo: publish.canPublishVideo
     })
   });
 
   if (!response.ok) {
-    throw new Error(`failed_to_load_media_token:${response.status}`);
+    const payload = await response.json().catch(() => null) as { reason?: unknown } | null;
+    throw new MediaTokenRequestError(response.status, payload?.reason);
   }
 
   return (await response.json()) as MediaTokenResponse;
@@ -875,12 +942,18 @@ export async function planVoiceSession(
   apiBaseUrl: string,
   roomId: string,
   participantId: string,
-  sessionToken: string
+  sessionToken: string,
+  publish: MediaPublishIntent = { canPublishAudio: true, canPublishVideo: false }
 ): Promise<VoiceSessionPlan> {
   const manifest = await fetchRoomManifest(apiBaseUrl, roomId, sessionToken);
   const health = await fetchRuntimeHealth(apiBaseUrl);
   const healthFeatures = health.features ?? {};
-  const media = await fetchMediaToken(apiBaseUrl, roomId, participantId, sessionToken);
+  let media: MediaTokenResponse;
+  try { media = await fetchMediaToken(apiBaseUrl, roomId, participantId, sessionToken, publish); }
+  catch (error) {
+    if (!retryableMediaTokenError(error)) throw error;
+    media = await fetchMediaToken(apiBaseUrl, roomId, participantId, sessionToken, publish);
+  }
 
   return {
     roomId,
@@ -891,8 +964,10 @@ export async function planVoiceSession(
   };
 }
 
-export async function listPresence(apiBaseUrl: string, roomId: string): Promise<PresenceState[]> {
-  const response = await fetch(new URL(`/api/rooms/${roomId}/presence`, apiBaseUrl));
+export async function listPresence(apiBaseUrl: string, roomId: string, sessionToken?: string): Promise<PresenceState[]> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/presence`, apiBaseUrl), {
+    headers: sessionToken ? { authorization: `Bearer ${sessionToken}` } : undefined
+  });
 
   if (!response.ok) {
     throw new Error(`failed_to_list_presence:${response.status}`);

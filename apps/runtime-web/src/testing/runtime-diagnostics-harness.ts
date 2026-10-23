@@ -57,6 +57,7 @@ export function createDiagnosticsHarness(t: TestContext, debugEnabled = true) {
   };
   const context: RuntimeDiagnosticsContext = {
     apiBaseUrl: "https://example.invalid/base", roomId: "room", participantId: "participant",
+    fetch: (input, init) => globalThis.fetch(input, init), sessionGate: { reason: null },
     displayName: "Guest", roomStateAccessToken: "test-token", runtimeFlags: { remoteDiagnostics: true },
     activeSceneBundleRoot: null, debugState: createDiagnosticState(), debugEnabled,
     camera: new PerspectiveCamera(), renderer: { domElement: {} as HTMLCanvasElement },

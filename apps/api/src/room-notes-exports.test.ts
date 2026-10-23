@@ -54,7 +54,7 @@ for (const identity of ["room-session", "admin-token"] as const) {
     assert.equal(archive.schemaVersion, 1); assert.equal(archive.roomId, "demo-room");
     assert.deepEqual(archive.notes.map(i => i.note.ownerParticipantId), identity === "admin-token" ? [null, "member-1", "other"] : [null, "member-1"]);
     assert.equal(archive.notes[1]?.versions[0]?.action, "delete");
-    assert.deepEqual(h.logs.map(e => e.action), ["notes.export", "notes.export"]);
+    assert.deepEqual(h.logs.map(e => e.action), ["notes.export"], "one logical export has one authorization audit");
     const zip = await h.send("GET", `${root}/export?format=zip`);
     assert.equal(zip.headers["content-type"], "application/zip");
     assert.equal(zip.headers["content-disposition"], 'attachment; filename="vrata-demo-room-room-notes.zip"');

@@ -8,6 +8,7 @@ const POSTGRES_INIT_ADVISORY_LOCK_SQL = "select pg_advisory_lock(hashtextextende
 const POSTGRES_INIT_ADVISORY_UNLOCK_SQL = "select pg_advisory_unlock(hashtextextended('vrata:postgres-storage-init:v1', 0)) as unlocked";
 
 export interface PostgresStorageInitHooks {
+installRoomExtensions(client: PoolClient): Promise<void>;
 seed(client: PoolClient): Promise<void>;
 validateStoredTemplateVersions(client: PoolClient): Promise<void>;
 synchronizeTemplateCatalog(client: PoolClient): Promise<void>;
@@ -46,7 +47,7 @@ export async function initializePostgresStorage(pool: Pool, hooks: PostgresStora
 }
 
 async function initWithClient(client: PoolClient, hooks: PostgresStorageInitHooks): Promise<void> {
-  await ensurePostgresStorageSchema(client);
+  await ensurePostgresStorageSchema(client, hooks.installRoomExtensions);
   await ensureTemplateVersionBaseConstraints(client);
   await hooks.seed(client);
   await hooks.validateStoredTemplateVersions(client);

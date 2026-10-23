@@ -7,6 +7,7 @@ import type { ControlPlaneActor } from "../control-plane-actor.js";
 import { createRoomNotesAccess, type RoomNotesAccessContext } from "../room-notes-access.js";
 import { createRoomNotesRoutes } from "../room-notes-routes.js";
 import { MemoryStorage } from "../storage.js";
+import { createRoomEffectFacade } from "../identity/effect-facade.js";
 
 export function makeNotesExchange(method: string, path: string, body?: unknown, rawBody?: string) {
   const raw = rawBody ?? (body === undefined ? "" : JSON.stringify(body));
@@ -51,6 +52,8 @@ export function createRoomNotesHarness(t: TestContext) {
   };
   const context: RoomNotesAccessContext = {
     metrics,
+    runGuardedRoomEffect: async (current, _actor, _room, _permission, effect) => effect(createRoomEffectFacade(current, { roomWrite: true, check: () => {} })),
+    deniedEffectReason: error => error instanceof Error ? error.message : null,
     resolveControlPlaneActor: function (this: unknown, request) {
       assert.equal(this, undefined); authRequests.push(request); return state.actorResult;
     },

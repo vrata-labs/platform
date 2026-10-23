@@ -18,6 +18,7 @@ function harness(t: TestContext, mock = false) {
   const clock = t.mock.method(performance, "now", () => now);
   const context: { -readonly [K in keyof XrTelemetryContext]: XrTelemetryContext[K] } = {
     apiBaseUrl: "https://example.invalid/base", roomId: "room", participantId: "participant",
+    fetch: (input, init) => globalThis.fetch(input, init), sessionGate: { reason: null },
     renderer: { xr: { isPresenting: true } }, avatarVrMockEnabled: mock, roomStateAccessToken: "token-1",
     syntheticXrState: null, xrSelectEventCount: 0, debugState: createDiagnosticState(),
     localPoseController: { getYaw() { assert.equal(this, context.localPoseController); return 0.123456; } }
@@ -37,6 +38,7 @@ function harness(t: TestContext, mock = false) {
 
 test("construction and marking are inert with respect to runtime and XR sampling", (t) => {
   const h = harness(t); const runtime = createXrTelemetryReporter({ ...h.context,
+    get participantId(): never { throw new Error("early identity read"); },
     get debugState(): never { throw new Error("early diagnostics read"); },
     get syntheticXrState(): never { throw new Error("early input read"); },
     get roomStateAccessToken(): never { throw new Error("early token read"); },
@@ -183,4 +185,16 @@ test("reporting uses one pre-sampled input list and only the original live avata
     profile: "dual", rightGrip: { x: 4, y: 5, z: 6 }, rightController: null,
     rightResolved: null, rightHandWorld: { x: 7, y: 8, z: 9 }, rightControllerWorld: null
   });
+});
+test("a terminal identity gate suppresses XR telemetry without resampling inputs or reading the frame clock", (t) => {
+  const h = harness(t); h.context.sessionGate = { reason: "identity_recovery_required" };
+  h.runtime.markXrTelemetry("snap_turn"); h.runtime.reportXrTelemetry(frame());
+  assert.equal(h.requests.length, 0); assert.equal(h.clock.mock.callCount(), 0);
+});
+
+test("XR subject and endpoint use the identity adopted after reporter creation", (t) => {
+  const h = harness(t); h.context.participantId = "server-issued"; h.setTime(500);
+  h.runtime.reportXrTelemetry(frame());
+  assert.equal(h.requests[0]!.payload.participantId, "server-issued");
+  assert.equal(h.requests[0]!.url, "https://example.invalid/api/rooms/room/xr-telemetry/server-issued");
 });

@@ -76,16 +76,19 @@ export function createHostControlsHarness(t: TestContext) {
     presenterLineEl: new HostTestElement(), hostParticipantSelect: new HostTestSelect(),
     lockRoomButton: new HostTestElement(), unlockRoomButton: new HostTestElement(),
     endSessionButton: new HostTestElement(), removeParticipantButton: new HostTestElement(),
-    transferHostButton: new HostTestElement(), grantPresenterButton: new HostTestElement(),
+    transferHostButton: new HostTestElement(), transferOwnerButton: new HostTestElement(), grantPresenterButton: new HostTestElement(),
     revokePresenterButton: new HostTestElement()
   };
   const inputs: Pick<HostControlsContext,
-    "runtimeFlags" | "roomStateAccessToken" | "latestRealtimeParticipants" | "latestFallbackParticipants" | "debugState"
+    "runtimeFlags" | "roomStateAccessToken" | "latestRealtimeParticipants" | "latestFallbackParticipants" | "debugState" | "sessionControlBlocked" | "activeIdentityProtocolVersion" | "participantId"
   > = {
     runtimeFlags: { hostControlsEnabled: true }, roomStateAccessToken: "token-1",
+    sessionControlBlocked: false, activeIdentityProtocolVersion: null,
+    participantId: "self",
     latestRealtimeParticipants: [], latestFallbackParticipants: [],
     debugState: {
       access: { canManageRoomSession: true },
+      personalRoom: { roomType: "standard", isOwner: false, ownerParticipantId: null },
       hostControls: { enabled: false, visible: false, locked: false, ended: false,
         hostParticipantId: null, presenterParticipantId: null, selectedParticipantId: null,
         status: "idle", lastReason: null }
@@ -107,8 +110,11 @@ export function createHostControlsHarness(t: TestContext) {
     block?: HostControlsContext["disableRuntimeForSessionBlock"];
   } = {};
   const context: HostControlsContext = {
-    ...elements, apiBaseUrl: "https://example.invalid", roomId: "room", participantId: "self",
+    ...elements, apiBaseUrl: "https://example.invalid", roomId: "room",
+    get participantId() { return state.participantId; },
     get debugState() { return state.debugState; },
+    get sessionControlBlocked() { return state.sessionControlBlocked; },
+    get activeIdentityProtocolVersion() { return state.activeIdentityProtocolVersion; },
     get runtimeFlags() { return state.runtimeFlags; },
     get roomStateAccessToken() { return state.roomStateAccessToken; },
     get latestRealtimeParticipants() { return state.latestRealtimeParticipants; },
@@ -122,6 +128,10 @@ export function createHostControlsHarness(t: TestContext) {
       assert.equal(this, undefined); accessCalls.push(args);
       const access = hooks.access;
       if (access) access(...args);
+    },
+    applyAuthorityAccess(this: unknown, access) {
+      assert.equal(this, undefined); accessCalls.push([access, state.roomStateAccessToken, undefined]);
+      const hook = hooks.access; if (hook) hook(access, state.roomStateAccessToken, undefined);
     },
     disableRuntimeForSessionBlock(this: unknown, reason) {
       assert.equal(this, undefined); blockCalls.push(reason);

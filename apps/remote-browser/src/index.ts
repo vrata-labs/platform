@@ -4,11 +4,14 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
 import { chromium, type Browser, type BrowserContext, type Frame, type Page } from "playwright-core";
-import { WebSocketServer, type WebSocket } from "ws";
+import { WebSocketServer, WebSocket } from "ws";
 import type { RemoteBrowserErrorCode, RemoteBrowserExecutorInputState, RemoteBrowserMediaSourceRect, RemoteBrowserPatch, SurfaceInputEvent } from "@vrata/shared-types";
 
-import { decodeRemoteBrowserFrameToken } from "./frame-token.js";
-import { canStartRemoteBrowserSession, resolveRemoteBrowserFrameTokenSecret, resolveRemoteBrowserServicePolicy, scheduleRemoteBrowserSessionExpiry, validateRemoteBrowserSessionIdentity } from "./service-policy.js";
+import { admitRemoteBrowserFrameSocket, type RemoteBrowserFrameAdmission } from "./frame-token.js";
+import type { FrameMediaPeerNegotiation } from "./frame-media-peer.js";
+import { attachFrameSocketLifetime, type FrameSocketLifetime } from "./frame-socket-lifetime.js";
+import { remoteBrowserCloseMediaPeerInPage, remoteBrowserCreateMediaAnswerInPage, type RemoteBrowserMediaAnswerResult, type RemoteBrowserPageMediaAnswerInput } from "./frame-media-page.js";
+import { canStartRemoteBrowserSession, resolveRemoteBrowserFrameStreamId, resolveRemoteBrowserFrameTokenSecret, resolveRemoteBrowserServicePolicy, scheduleRemoteBrowserSessionExpiry, validateRemoteBrowserSessionIdentity } from "./service-policy.js";
 import { createRemoteBrowserUrlPolicy, validateRemoteBrowserUrl, type RemoteBrowserUrlPolicy } from "./url-policy.js";
 
 interface RemoteBrowserSession {
@@ -22,7 +25,7 @@ interface RemoteBrowserSession {
   context: BrowserContext;
   page: Page;
   publisherPage: Page;
-  clients: Set<WebSocket>;
+  clients: Map<WebSocket, FrameSocketGuard>;
   mediaClients: Set<WebSocket>;
   serviceAllowedOrigins: Set<string>;
   frameTimer: ReturnType<typeof setInterval>;
@@ -65,15 +68,13 @@ interface RemoteBrowserMediaOfferMessage {
   offer?: RTCSessionDescriptionInit;
 }
 
-interface RemoteBrowserMediaAnswerResult {
-  ok: boolean;
-  answer?: RTCSessionDescriptionInit;
-  hasVideo?: boolean;
-  hasAudio?: boolean;
-  trackKinds?: string[];
-  sourceFrameUrl?: string;
-  sourceRect?: RemoteBrowserMediaSourceRect;
-  errorCode?: string;
+/** Per-socket send gate. Every outbound frame or media message checks it synchronously before send. */
+type FrameSocketGuard = FrameSocketLifetime<Frame>;
+
+interface RemoteBrowserMediaAnswerOutcome {
+  result: RemoteBrowserMediaAnswerResult;
+  /** Server-side only: the frame whose peer this negotiation's nonce may own. Never sent. */
+  frame?: Frame;
 }
 
 const port = Number.parseInt(process.env.REMOTE_BROWSER_PORT ?? "4010", 10);
@@ -1042,8 +1043,12 @@ async function patchRemoteBrowserMediaSourceRect(session: RemoteBrowserSession, 
   });
 }
 
+function isCurrentFrameSession(session: RemoteBrowserSession, executorInstanceId: string): boolean {
+  return sessions.get(session.sessionId) === session && session.executorInstanceId === executorInstanceId && Date.now() < session.expiresAtMs;
+}
+
 function getWritableFrameClients(session: RemoteBrowserSession): WebSocket[] {
-  return Array.from(session.clients).filter((client) => client.readyState === client.OPEN && client.bufferedAmount <= frameBackpressureBytes);
+  return [...session.clients].filter(([client, guard]) => guard.isLive() && client.bufferedAmount <= frameBackpressureBytes).map(([client]) => client);
 }
 
 function broadcastFrame(session: RemoteBrowserSession, clients: WebSocket[], dataUrl: string): void {
@@ -1061,7 +1066,8 @@ function broadcastFrame(session: RemoteBrowserSession, clients: WebSocket[], dat
     })
   });
   for (const client of clients) {
-    if (client.readyState === client.OPEN && client.bufferedAmount <= frameBackpressureBytes) {
+    // Re-checked after the screenshot await; no await may separate this check from the send.
+    if (session.clients.get(client)?.isLive() && client.bufferedAmount <= frameBackpressureBytes) {
       client.send(payload);
     }
   }
@@ -1090,111 +1096,12 @@ async function captureFrame(session: RemoteBrowserSession, options: { force?: bo
   }
 }
 
-async function createMediaAnswerInFrame(frame: Frame, offer: RTCSessionDescriptionInit): Promise<RemoteBrowserMediaAnswerResult> {
-  return await frame.evaluate(async ({ offer: serializedOffer, iceServers }) => {
-    type MediaState = {
-      pc?: RTCPeerConnection;
-      stream?: MediaStream;
-    };
-    type CapturableVideo = HTMLVideoElement & {
-      captureStream?: () => MediaStream;
-      mozCaptureStream?: () => MediaStream;
-    };
-    const mediaWindow = window as Window & { __VRATA_REMOTE_BROWSER_MEDIA__?: MediaState };
-    const state = mediaWindow.__VRATA_REMOTE_BROWSER_MEDIA__ ?? {};
+async function createMediaAnswerInFrame(frame: Frame, input: RemoteBrowserPageMediaAnswerInput): Promise<RemoteBrowserMediaAnswerResult> {
+  return await frame.evaluate(remoteBrowserCreateMediaAnswerInPage, input);
+}
 
-    const collectVideos = (root: ParentNode): CapturableVideo[] => {
-      const videos = [...root.querySelectorAll("video")] as CapturableVideo[];
-      for (const element of [...root.querySelectorAll("*")] as HTMLElement[]) {
-        if (element.shadowRoot) {
-          videos.push(...collectVideos(element.shadowRoot));
-        }
-      }
-      return videos;
-    };
-    const pickVideo = (): CapturableVideo | null => {
-      const candidates = collectVideos(document)
-        .filter((video) => typeof video.captureStream === "function" || typeof video.mozCaptureStream === "function")
-        .sort((left, right) => (right.videoWidth * right.videoHeight) - (left.videoWidth * left.videoHeight));
-      return candidates[0] ?? null;
-    };
-    const waitForVideo = async (): Promise<CapturableVideo | null> => {
-      const startedAt = Date.now();
-      while (Date.now() - startedAt < 5000) {
-        const video = pickVideo();
-        if (video) {
-          return video;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      }
-      return null;
-    };
-    const waitForIceGatheringComplete = async (pc: RTCPeerConnection): Promise<void> => {
-      if (pc.iceGatheringState === "complete") {
-        return;
-      }
-      await new Promise<void>((resolve) => {
-        const timeout = window.setTimeout(() => {
-          pc.removeEventListener("icegatheringstatechange", onStateChange);
-          resolve();
-        }, 2500);
-        const onStateChange = () => {
-          if (pc.iceGatheringState !== "complete") {
-            return;
-          }
-          window.clearTimeout(timeout);
-          pc.removeEventListener("icegatheringstatechange", onStateChange);
-          resolve();
-        };
-        pc.addEventListener("icegatheringstatechange", onStateChange);
-      });
-    };
-
-    const source = await waitForVideo();
-    if (!source) {
-      return { ok: false, errorCode: "media_source_missing" };
-    }
-    const captureStream = source.captureStream?.bind(source) ?? source.mozCaptureStream?.bind(source);
-    if (!captureStream) {
-      return { ok: false, errorCode: "media_capture_unsupported" };
-    }
-    const stream = captureStream();
-    const tracks: MediaStreamTrack[] = stream.getTracks().filter((track: MediaStreamTrack) => track.readyState === "live");
-    if (!tracks.some((track) => track.kind === "video")) {
-      return { ok: false, errorCode: "media_video_track_missing" };
-    }
-
-    state.pc?.close();
-    const pc = new RTCPeerConnection({ iceServers });
-    for (const track of tracks) {
-      pc.addTrack(track, stream);
-    }
-    await pc.setRemoteDescription(serializedOffer);
-    await pc.setLocalDescription(await pc.createAnswer());
-    await waitForIceGatheringComplete(pc);
-    state.pc = pc;
-    state.stream = stream;
-    mediaWindow.__VRATA_REMOTE_BROWSER_MEDIA__ = state;
-    return {
-      ok: true,
-      answer: pc.localDescription ? { type: pc.localDescription.type, sdp: pc.localDescription.sdp } : undefined,
-      hasVideo: tracks.some((track) => track.kind === "video"),
-      hasAudio: tracks.some((track) => track.kind === "audio"),
-      trackKinds: tracks.map((track) => track.kind),
-      sourceFrameUrl: location.href,
-      sourceRect: (() => {
-        const rect = source.getBoundingClientRect();
-        return {
-          x: rect.x,
-          y: rect.y,
-          width: rect.width,
-          height: rect.height,
-          viewportWidth: window.innerWidth,
-          viewportHeight: window.innerHeight
-        };
-      })()
-    };
-  }, { offer, iceServers: mediaIceServers });
+function closeMediaPeerInFrame(frame: Frame, nonce: string): Promise<boolean> {
+  return frame.evaluate(remoteBrowserCloseMediaPeerInPage, nonce);
 }
 
 async function mapSourceRectToPageViewport(frame: Frame, rect: RemoteBrowserMediaSourceRect | undefined): Promise<RemoteBrowserMediaSourceRect | undefined> {
@@ -1280,28 +1187,39 @@ async function waitForRemoteBrowserMediaSourceRect(page: Page, timeoutMs = 30000
   return undefined;
 }
 
-async function createMediaAnswer(session: RemoteBrowserSession, offer: RTCSessionDescriptionInit): Promise<RemoteBrowserMediaAnswerResult> {
+async function createMediaAnswer(session: RemoteBrowserSession, offer: RTCSessionDescriptionInit, negotiation: FrameMediaPeerNegotiation<Frame>, expiresAtMs: number): Promise<RemoteBrowserMediaAnswerOutcome> {
+  const input: RemoteBrowserPageMediaAnswerInput = { offer, iceServers: mediaIceServers, nonce: negotiation.nonce, expiresAtMs };
   for (const frame of session.page.frames()) {
+    // Record the frame before the page claims a peer in it, so release, a newer offer or a failure can close
+    // that peer while its answer is pending. A released or superseded negotiation starts no further peers.
+    if (!negotiation.attach(frame)) break;
     try {
-      const result = await createMediaAnswerInFrame(frame, offer);
+      const result = await createMediaAnswerInFrame(frame, input);
       if (result.ok || result.errorCode !== "media_source_missing") {
         result.sourceRect = await mapSourceRectToPageViewport(frame, result.sourceRect).catch(() => result.sourceRect);
-        return result;
+        return { result, frame };
       }
     } catch {
-      // Cross-navigation and detached frames are expected while heavy pages load.
+      // Cross-navigation and detached frames are expected while heavy pages load. A frame that threw
+      // mid-negotiation may still hold this nonce's peer; the binding closes it by matched nonce when the
+      // negotiation attaches the next frame or ends.
     }
   }
-  return { ok: false, errorCode: "media_source_missing" };
+  return { result: { ok: false, errorCode: "media_source_missing" } };
 }
 
-async function handleFrameSocketMessage(session: RemoteBrowserSession, ws: WebSocket, raw: WebSocket.RawData): Promise<void> {
-  let message: RemoteBrowserMediaOfferMessage;
+async function handleFrameSocketMessage(session: RemoteBrowserSession, ws: WebSocket, guard: FrameSocketGuard, raw: WebSocket.RawData): Promise<void> {
+  let parsed: unknown;
   try {
-    message = JSON.parse(raw.toString()) as RemoteBrowserMediaOfferMessage;
+    parsed = JSON.parse(raw.toString());
   } catch {
     return;
   }
+  // Valid JSON that is not an object (e.g. `null`) is malformed input too: ignore it like a parse failure.
+  if (typeof parsed !== "object" || parsed === null) {
+    return;
+  }
+  const message = parsed as RemoteBrowserMediaOfferMessage;
   if (message.type === "media-connected") {
     session.mediaClients.add(ws);
     return;
@@ -1313,9 +1231,34 @@ async function handleFrameSocketMessage(session: RemoteBrowserSession, ws: WebSo
   if (message.type !== "media-offer" || !message.offer) {
     return;
   }
-  const result = await createMediaAnswer(session, message.offer);
-  if (!result.ok || !result.answer) {
+  const negotiation = guard.peer.begin();
+  if (!negotiation) {
+    return;
+  }
+  let outcome: RemoteBrowserMediaAnswerOutcome;
+  try {
+    outcome = await createMediaAnswer(session, message.offer, negotiation, guard.expiresAtMs);
+  } catch {
+    // Unexpected failure inside this negotiation: close its own peer, and report a fixed code only while it
+    // is still the viewer's live, current offer.
+    const report = guard.isLive() && negotiation.isCurrent();
+    negotiation.discard();
+    if (report) ws.send(JSON.stringify({ type: "media-error", errorCode: "media_signal_failed" }));
+    return;
+  }
+  const { result, frame } = outcome;
+  // No await below: liveness, ownership and the send are decided in one tick.
+  if (!guard.isLive() || !negotiation.isCurrent()) {
+    // A stale media-error would also tear down the viewer's newer transport.
+    negotiation.discard(frame);
+    return;
+  }
+  if (!result.ok || !result.answer || !frame) {
+    negotiation.discard(frame);
     ws.send(JSON.stringify({ type: "media-error", errorCode: result.errorCode ?? "media_answer_failed" }));
+    return;
+  }
+  if (!negotiation.complete(frame)) {
     return;
   }
   ws.send(JSON.stringify({
@@ -1370,7 +1313,7 @@ async function stopSession(sessionId: string, reason: RemoteBrowserStopReason = 
   try {
     clearInterval(session.frameTimer);
     clearTimeout(session.expiryTimer);
-    for (const client of session.clients) client.close(1000, "session_stopped");
+    for (const client of session.clients.keys()) client.close(1000, "session_stopped");
     const disconnectPublisher = (page: Page) => page.evaluate(() => {
       const pageWindow = window as Window & { __VRATA_REMOTE_BROWSER_LIVEKIT__?: { room?: { disconnect: () => void }; stream?: MediaStream; streams?: MediaStream[] } };
       pageWindow.__VRATA_REMOTE_BROWSER_LIVEKIT__?.room?.disconnect();
@@ -1457,11 +1400,12 @@ async function createSession(input: { sessionId: string; executorInstanceId: str
   });
   session = {
     ...input,
+    frameStreamId: resolveRemoteBrowserFrameStreamId(input),
     url: page.url(),
     context,
     page,
     publisherPage,
-    clients: new Set<WebSocket>(),
+    clients: new Map<WebSocket, FrameSocketGuard>(),
     mediaClients: new Set<WebSocket>(),
     serviceAllowedOrigins,
     frameTimer: setInterval(() => {
@@ -1805,6 +1749,24 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
   json(response, 404, { error: "not_found" });
 }
 
+function admitFrameSocketRequest(request: IncomingMessage, listenPort: number, env: NodeJS.ProcessEnv): RemoteBrowserFrameAdmission<RemoteBrowserSession> | null {
+  // Never log here: the query carries the frame token, and a malformed Host makes URL parsing throw.
+  try {
+    const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `localhost:${listenPort}`}`);
+    if (url.pathname !== "/frames" || !resolveRemoteBrowserServicePolicy(env).enabled) {
+      return null;
+    }
+    const tokenSecret = resolveRemoteBrowserFrameTokenSecret(env);
+    if (!tokenSecret) {
+      incrementCounter(metrics.deniedTotal, "token_config");
+      return null;
+    }
+    return admitRemoteBrowserFrameSocket({ token: url.searchParams.get("token"), secret: tokenSecret, nowMs: Date.now(), findSession: (sessionId) => sessions.get(sessionId) });
+  } catch {
+    return null;
+  }
+}
+
 export function startRemoteBrowserService(listenPort = port, env: NodeJS.ProcessEnv = process.env) {
   activeListenPort = listenPort;
   const server = createServer((request, response) => {
@@ -1818,7 +1780,8 @@ export function startRemoteBrowserService(listenPort = port, env: NodeJS.Process
         env: env.NODE_ENV ?? "development",
         requestId: id,
         errorCode: "remote_browser_error",
-        path: request.url ?? "",
+        // The query can carry credentials such as frame tokens; log the path only.
+        path: (request.url ?? "").split("?")[0],
         method: request.method ?? "GET",
         message: error instanceof Error ? error.message : "unknown",
         timestamp: new Date().toISOString()
@@ -1828,38 +1791,42 @@ export function startRemoteBrowserService(listenPort = port, env: NodeJS.Process
   });
   const wss = new WebSocketServer({ noServer: true });
   server.on("upgrade", (request, socket, head) => {
-    const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `localhost:${listenPort}`}`);
-    if (url.pathname !== "/frames") {
+    const admission = admitFrameSocketRequest(request, listenPort, env);
+    if (!admission) {
       socket.destroy();
       return;
     }
-    if (!resolveRemoteBrowserServicePolicy(env).enabled) {
-      socket.destroy();
-      return;
-    }
-    const tokenSecret = resolveRemoteBrowserFrameTokenSecret(env);
-    if (!tokenSecret) {
-      incrementCounter(metrics.deniedTotal, "token_config");
-      socket.destroy();
-      return;
-    }
-    const token = decodeRemoteBrowserFrameToken(url.searchParams.get("token"), tokenSecret);
-    const session = token ? sessions.get(token.executorSessionId) : null;
-    if (!token || !session || session.frameStreamId !== token.frameStreamId || session.objectId !== token.objectId || session.roomId !== token.roomId) {
-      socket.destroy();
-      return;
-    }
+    const { session, executorInstanceId } = admission;
     wss.handleUpgrade(request, socket, head, (ws) => {
-      session.clients.add(ws);
-      ws.on("message", (raw) => {
-        void handleFrameSocketMessage(session, ws, raw).catch(() => {
-          ws.send(JSON.stringify({ type: "media-error", errorCode: "media_signal_failed" }));
-        });
+      // Attaches the socket's error listener first, then the executor check, token lease and peer retirement.
+      const guard = attachFrameSocketLifetime<Frame>({
+        socket: {
+          isOpen: () => ws.readyState === WebSocket.OPEN,
+          close: (code, reason) => ws.close(code, reason),
+          terminate: () => ws.terminate(),
+          // The error and close payloads are dropped here; nothing from them is logged or sent.
+          onError: listener => { ws.on("error", () => listener()); },
+          onClose: listener => { ws.once("close", () => listener()); }
+        },
+        leaseExpiresAtSeconds: admission.leaseExpiresAtSeconds,
+        isCurrent: () => isCurrentFrameSession(session, executorInstanceId),
+        closePeer: closeMediaPeerInFrame,
+        detach: () => {
+          session.clients.delete(ws);
+          session.mediaClients.delete(ws);
+        },
+        onDisconnect: () => { metrics.socketDisconnectsTotal += 1; }
       });
-      ws.on("close", () => {
-        metrics.socketDisconnectsTotal += 1;
-        session.clients.delete(ws);
-        session.mediaClients.delete(ws);
+      if (!guard) return;
+      session.clients.set(ws, guard);
+      ws.on("message", (raw) => {
+        if (!guard.isLive()) return;
+        void handleFrameSocketMessage(session, ws, guard, raw).catch(() => {
+          // Negotiation failures are reported in their own scope. Anything else cannot be tied to the viewer's
+          // current offer, so nothing is sent: a stale media-error would tear down a newer transport.
+          logEvent({ service: "remote-browser", event: "frame_socket_message_failed", env: env.NODE_ENV ?? "development",
+            errorCode: "media_signal_failed", timestamp: new Date().toISOString() });
+        });
       });
       void captureFrame(session).catch(() => undefined);
     });

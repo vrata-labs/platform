@@ -14,17 +14,22 @@ import {
   applyDocumentMediaObjectsCleanup,
   applyPdfPresentationDocumentCleanup,
   applyPrivilegedRoomCommand,
+  applyVerifiedParticipantAccess,
   applySeatClaim,
   applySeatRelease,
+  handleSeatCommand,
   applySurfaceMediaAudioCommand,
   connectParticipant,
   createRoomStateServer,
   disconnectParticipant,
   isRemoteBrowserFeatureEnabled,
   relayAvatarPoseFrame,
+  releaseVerifiedParticipantSocket,
   startRoomStateService,
   verifyRemoteBrowserBinding
 } from "./index.js";
+import { SocketAuthorityError } from "./identity-boundary.js";
+import type { VerifiedRoomSessionV2 } from "./identity-v2-session.js";
 
 function createSocket() {
   const sent: string[] = [];
@@ -37,6 +42,59 @@ function createSocket() {
     }
   };
 }
+
+test("participant-wide authority retires a share once and a delayed overlapping socket cannot restore its grant", () => {
+  const server = createRoomStateServer(), a = createSocket(), b = createSocket();
+  const presenter: VerifiedRoomSessionV2 = { tenantId: "tenant", roomId: "room", participantId: "speaker", identityId: "identity",
+    displayName: "Speaker", authEpoch: 1, sessionId: "first-session", expiresAtSeconds: Math.floor(Date.now() / 1000) + 600,
+    authorityRevision: 5, role: "presenter", permissions: getRoomPermissions("presenter") };
+  connectParticipant(server, "room", "speaker", a as never, applyVerifiedParticipantAccess(server, presenter));
+  connectParticipant(server, "room", "speaker", b as never, applyVerifiedParticipantAccess(server, { ...presenter, sessionId: "other-session" }));
+  const created = applyMediaObjectCreateCommand(server, "room", "speaker", { surfaceId: "debug-main", objectType: "screen-share" });
+  assert.equal(created.accepted, true);
+  a.sent.length = 0; b.sent.length = 0;
+  const member: VerifiedRoomSessionV2 = { ...presenter, authorityRevision: 6, role: "member", permissions: getRoomPermissions("member") };
+  applyVerifiedParticipantAccess(server, member);
+  assert.equal(a.sent.length, 1); assert.equal(b.sent.length, 1);
+  assert.equal(server.rooms.get("room")!.mediaObjects.objects[created.objectId!], undefined);
+  assert.equal(server.rooms.get("room")!.mediaObjects.surfaces["debug-main"]!.activeObjectId, null);
+  assert.equal(server.socketParticipants.get(a as never)!.access.role, "member");
+  assert.equal(server.socketParticipants.get(b as never)!.access.role, "member");
+  const stale = applyVerifiedParticipantAccess(server, { ...presenter, sessionId: "late-initial-verification" });
+  connectParticipant(server, "room", "speaker", createSocket() as never, stale);
+  connectParticipant(server, "room", "speaker", createSocket() as never, { role: presenter.role, permissions: presenter.permissions });
+  assert.equal(stale.role, "member");
+  assert.equal(applyMediaObjectCreateCommand(server, "room", "speaker", { surfaceId: "debug-main", objectType: "screen-share" }).accepted, false);
+  const broadcasts = a.sent.length;
+  applyVerifiedParticipantAccess(server, member);
+  assert.equal(a.sent.length, broadcasts, "unchanged authority is not rebroadcast");
+  assert.throws(() => applyVerifiedParticipantAccess(server, { ...presenter, authorityRevision: 6 }),
+    error => error instanceof SocketAuthorityError && error.closeCode === 1013);
+  assert.equal(server.rooms.get("room")!.participants[0]!.role, "member");
+  applyVerifiedParticipantAccess(server, { ...presenter, authorityRevision: 7 });
+  assert.equal(server.rooms.get("room")!.mediaObjects.objects[created.objectId!], undefined, "a fresh grant cannot resurrect the retired object");
+  assert.equal(applyMediaObjectCreateCommand(server, "room", "speaker", { surfaceId: "debug-main", objectType: "screen-share" }).accepted, true);
+});
+
+test("authority watermarks survive pending sockets but are released after the last connection", () => {
+  const server = createRoomStateServer(), admitted = createSocket() as never, pending = createSocket() as never, other = createSocket() as never;
+  const session: VerifiedRoomSessionV2 = { tenantId: "tenant", roomId: "room", participantId: "speaker", identityId: "identity",
+    displayName: "Speaker", authEpoch: 1, sessionId: "session", expiresAtSeconds: Math.floor(Date.now() / 1000) + 600,
+    authorityRevision: 6, role: "member", permissions: getRoomPermissions("member") };
+  server.v2Connections.set(admitted, { roomId: "room", participantId: "speaker" });
+  server.v2Connections.set(pending, { roomId: "room", participantId: "speaker" });
+  server.v2Connections.set(other, { roomId: "room", participantId: "other" });
+  connectParticipant(server, "room", "speaker", admitted, applyVerifiedParticipantAccess(server, session));
+  applyVerifiedParticipantAccess(server, { ...session, participantId: "other", identityId: "other" });
+  releaseVerifiedParticipantSocket(server, admitted);
+  assert.equal(server.participantAuthorities.get("room")!.get("speaker")!.authorityRevision, 6, "pending initial verification retains the watermark");
+  releaseVerifiedParticipantSocket(server, pending);
+  assert.equal(server.participantAuthorities.get("room")!.has("speaker"), false);
+  assert.equal(server.participantAuthorities.get("room")!.has("other"), true);
+  assert.equal(server.rooms.get("room")!.participants.length, 1, "cache release does not bypass disconnect grace cleanup");
+  releaseVerifiedParticipantSocket(server, other); releaseVerifiedParticipantSocket(server, other);
+  assert.equal(server.participantAuthorities.size, 0); assert.equal(server.v2Connections.size, 0);
+});
 
 test("room-state readiness endpoint reports ready", async () => {
   process.env.VRATA_DISABLE_AUTOSTART = "1";
@@ -63,6 +121,7 @@ test("room-state readiness endpoint reports ready", async () => {
     const metricsText = await metricsResponse.text();
     assert.match(metricsText, /vrata_room_state_active_rooms \d+/);
     assert.match(metricsText, /vrata_room_state_active_participants \d+/);
+    assert.match(metricsText, /vrata_room_state_screen_share_retired_total\{reason="permission_lost"\} \d+/);
     assert.match(metricsText, /vrata_image_viewers_started_total \d+/);
     assert.match(metricsText, /vrata_video_playback_commands_total\{command="play"\} \d+/);
 
@@ -79,7 +138,7 @@ test("room-state websocket requires valid signed room session token in productio
   process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.NODE_ENV = "production";
   process.env.STATE_TOKEN_SECRET = "room-state-session-secret";
-  const server = startRoomStateService(4034);
+  const server = startRoomStateService(4034, { readIdentityPolicy: async () => ({ minimumProtocolVersion: 1, roomRequiresV2: false }) });
   const nowSeconds = Math.floor(Date.now() / 1000);
   const token = signRoomSessionToken({
     tenantId: "demo-tenant",
@@ -596,11 +655,13 @@ test("remote browser executor callback activates LiveKit media tracks", () => {
     patch: { type: "open-url", url: "https://example.com", inputEventId: "host:open:1" }
   });
   assert.equal(opened.accepted, true);
+  // Open-url commits revision 1; that server-owned revision, not the client event id, is the executor instance.
+  const executorInstanceId = `remote-browser:${objectId}:instance:1`;
   assert.equal(verifyRemoteBrowserBinding(server, {
     roomId: "demo-room",
     objectId,
     executorSessionId: `remote-browser:${objectId}`,
-    executorInstanceId: `remote-browser:${objectId}:instance:host:open:1`,
+    executorInstanceId,
     mediaParticipantId: `remote-browser:${objectId}`
   }), true);
   assert.equal(verifyRemoteBrowserBinding(server, {
@@ -609,13 +670,30 @@ test("remote browser executor callback activates LiveKit media tracks", () => {
     executorSessionId: `remote-browser:${objectId}`,
     executorInstanceId: `remote-browser:${objectId}:instance:stale`
   }), false);
+  const binding = {
+    roomId: "demo-room",
+    objectId,
+    executorSessionId: `remote-browser:${objectId}`,
+    executorInstanceId
+  };
+  const frameStreamId = `remote-browser:${objectId}:frames`;
+  const storedFrameStreamId = () => (server.rooms.get("demo-room")?.mediaObjects.objects[objectId]?.state as { frameStreamId?: string } | undefined)?.frameStreamId;
+  // Open-url never stores a frame stream; the credential binds the one derived from the executor session.
+  assert.equal(storedFrameStreamId(), undefined);
+  assert.equal(verifyRemoteBrowserBinding(server, { ...binding, frameStreamId }), true);
+  for (const wrong of [`remote-browser:${objectId}:frame`, "remote-browser:other:frames", `${objectId}:frames`, ""]) {
+    assert.equal(verifyRemoteBrowserBinding(server, { ...binding, frameStreamId: wrong }), false);
+  }
+  assert.equal(verifyRemoteBrowserBinding(server, { ...binding, executorSessionId: "remote-browser:other", frameStreamId: "remote-browser:other:frames" }), false);
+  assert.equal(verifyRemoteBrowserBinding(server, { ...binding, executorInstanceId: `remote-browser:${objectId}:instance:stale`, frameStreamId }), false);
+  assert.equal(storedFrameStreamId(), undefined);
 
   const active = applyRemoteBrowserExecutorPatchCommand(server, {
     roomId: "demo-room",
     surfaceId: "debug-main",
     objectId,
     executorSessionId: `remote-browser:${objectId}`,
-    executorInstanceId: `remote-browser:${objectId}:instance:host:open:1`,
+    executorInstanceId,
     patch: {
       type: "mark-active",
       mediaParticipantId: `remote-browser:${objectId}`,
@@ -633,6 +711,59 @@ test("remote browser executor callback activates LiveKit media tracks", () => {
   const payload = JSON.parse(hostSocket.sent[hostSocket.sent.length - 1]!);
   assert.equal(payload.type, "room_state");
   assert.equal(payload.room.mediaObjects.objects[objectId].state.mediaTrackSid, "TR_VP");
+  assert.equal("frameStreamId" in payload.room.mediaObjects.objects[objectId].state, false);
+});
+
+test("remote browser open-url forwards the derived frame stream without storing it", () => {
+  const previousUrl = process.env.REMOTE_BROWSER_INTERNAL_URL;
+  const originalFetch = globalThis.fetch;
+  const forwarded: Array<{ url: string; body: Record<string, unknown> }> = [];
+  process.env.REMOTE_BROWSER_INTERNAL_URL = "http://remote-browser.test";
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    forwarded.push({ url: String(url), body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+    return new Response(null, { status: 200 });
+  }) as typeof fetch;
+  try {
+    const server = createRoomStateServer();
+    const hostSocket = createSocket();
+    connectParticipant(server, "demo-room", "host", hostSocket as never, { role: "host" });
+    const created = applyMediaObjectCreateCommand(server, "demo-room", "host", {
+      commandId: "cmd-create-browser",
+      surfaceId: "debug-main",
+      objectType: "remote-browser"
+    });
+    const objectId = created.objectId ?? "";
+    const opened = applyMediaObjectPatchCommand(server, "demo-room", "host", {
+      commandId: "cmd-open-browser",
+      surfaceId: "debug-main",
+      objectId,
+      expectedRevision: 0,
+      patch: { type: "open-url", url: "https://example.com", inputEventId: "host:open:1" }
+    });
+    assert.equal(opened.accepted, true);
+    assert.deepEqual(forwarded.map(({ url, body }) => [url, body.sessionId, body.executorInstanceId, body.frameStreamId]), [
+      ["http://remote-browser.test/api/sessions", `remote-browser:${objectId}`, `remote-browser:${objectId}:instance:1`, `remote-browser:${objectId}:frames`]
+    ]);
+    // An immediate replay of the same open is a duplicate: no revision, no new instance, no second executor request.
+    const replayed = applyMediaObjectPatchCommand(server, "demo-room", "host", {
+      commandId: "cmd-open-browser-replay",
+      surfaceId: "debug-main",
+      objectId,
+      expectedRevision: 1,
+      patch: { type: "open-url", url: "https://example.com", inputEventId: "host:open:1" }
+    });
+    assert.equal(replayed.accepted, false);
+    assert.equal(replayed.blockedReason, "duplicate-input-event");
+    assert.equal(forwarded.length, 1);
+    assert.equal(server.rooms.get("demo-room")?.mediaObjects.objects[objectId]?.revision, 1);
+    assert.equal((server.rooms.get("demo-room")?.mediaObjects.objects[objectId]?.state as { frameStreamId?: string } | undefined)?.frameStreamId, undefined);
+    const payload = JSON.parse(hostSocket.sent[hostSocket.sent.length - 1]!);
+    assert.equal("frameStreamId" in payload.room.mediaObjects.objects[objectId].state, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousUrl === undefined) delete process.env.REMOTE_BROWSER_INTERNAL_URL;
+    else process.env.REMOTE_BROWSER_INTERNAL_URL = previousUrl;
+  }
 });
 
 test("applySeatClaim switches seats for same participant atomically", () => {
@@ -722,4 +853,64 @@ test("reconnect during disconnect grace keeps occupied seat", async () => {
   const room = server.rooms.get("demo-room");
   assert.equal(room?.participants.length, 1);
   assert.equal(room?.seatOccupancy["seat-a"], "p1");
+});
+
+test("correlated seat commands echo claim IDs and acknowledge releases after their broadcast", () => {
+  const server = createRoomStateServer();
+  const own = createSocket(), other = createSocket();
+  connectParticipant(server, "demo-room", "p1", own as never);
+  connectParticipant(server, "demo-room", "p2", other as never);
+  const replies: unknown[] = [];
+  const reply = (message: unknown) => { replies.push(message); own.sent.push(JSON.stringify(message)); };
+  own.sent.length = 0;
+  assert.equal(handleSeatCommand(server, "demo-room", "p1", { type: "seat_claim", seatId: "seat-a", commandId: "plugin:1" }, reply), true);
+  assert.deepEqual(replies.at(-1), { type: "seat_claim_result", seatClaimResult: { seatId: "seat-a", accepted: true, occupantId: "p1", previousSeatId: null, commandId: "plugin:1" } });
+  own.sent.length = 0;
+  handleSeatCommand(server, "demo-room", "p1", { type: "seat_release", seatId: "seat-a", commandId: "release:1" }, reply);
+  const types = own.sent.map(raw => JSON.parse(raw).type);
+  assert.deepEqual(types, ["room_state", "seat_release_result"], "the occupancy broadcast precedes the targeted acknowledgement");
+  assert.deepEqual(replies.at(-1), { type: "seat_release_result", seatReleaseResult: { commandId: "release:1", seatId: "seat-a", releasedSeatId: "seat-a" } });
+  handleSeatCommand(server, "demo-room", "p1", { type: "seat_release", seatId: "seat-a", commandId: "release:2" }, reply);
+  assert.deepEqual(replies.at(-1), { type: "seat_release_result", seatReleaseResult: { commandId: "release:2", seatId: "seat-a", releasedSeatId: null } });
+  assert.equal(other.sent.some(raw => JSON.parse(raw).type === "seat_release_result"), false, "acknowledgements are never broadcast");
+  assert.equal(JSON.parse(other.sent.at(-1)!).capabilities.seatCommandCorrelation, 1);
+});
+
+test("legacy and malformed seat command IDs keep the exact previous replies", () => {
+  const server = createRoomStateServer();
+  connectParticipant(server, "demo-room", "p1", createSocket() as never);
+  const replies: unknown[] = [];
+  handleSeatCommand(server, "demo-room", "p1", { type: "seat_claim", seatId: "seat-a" }, message => replies.push(message));
+  handleSeatCommand(server, "demo-room", "p1", { type: "seat_claim", seatId: "seat-b", commandId: "x".repeat(65) }, message => replies.push(message));
+  handleSeatCommand(server, "demo-room", "p1", { type: "seat_claim", seatId: "seat-b", commandId: "bad id" }, message => replies.push(message));
+  for (const message of replies) assert.equal(Object.hasOwn((message as { seatClaimResult: object }).seatClaimResult, "commandId"), false);
+  handleSeatCommand(server, "demo-room", "p1", { type: "seat_release" }, message => replies.push(message));
+  handleSeatCommand(server, "demo-room", "p1", { type: "seat_release", commandId: { forged: true } }, message => replies.push(message));
+  assert.equal(replies.length, 3, "uncorrelated releases stay unacknowledged");
+  assert.equal(server.rooms.get("demo-room")?.seatOccupancy["seat-b"], undefined);
+  assert.equal(handleSeatCommand(server, "demo-room", "p1", { type: "participant_update" }, () => assert.fail("not a seat command")), false);
+});
+
+test("eight correlated claims take eight seats and a ninth participant stays at the entry", () => {
+  const server = createRoomStateServer();
+  const seats = Array.from({ length: 8 }, (_, index) => `seat-${index + 1}`);
+  const results = new Map<string, string[]>();
+  for (let index = 1; index <= 9; index++) {
+    const participantId = `p${index}`; connectParticipant(server, "demo-room", participantId, createSocket() as never);
+    const accepted: string[] = [];
+    // Each arrival tries candidates from a different offset, like the external auto-seat plugin.
+    for (let attempt = 0; attempt < seats.length && !accepted.length; attempt++) {
+      const seatId = seats[(index + attempt) % seats.length];
+      handleSeatCommand(server, "demo-room", participantId, { type: "seat_claim", seatId, commandId: `plugin-seat:${index}:${attempt}` }, message => {
+        const result = (message as { seatClaimResult: { accepted: boolean; seatId: string } }).seatClaimResult;
+        if (result.accepted) accepted.push(result.seatId);
+      });
+    }
+    results.set(participantId, accepted);
+  }
+  const occupancy = server.rooms.get("demo-room")!.seatOccupancy;
+  assert.equal(Object.keys(occupancy).length, 8);
+  assert.equal(new Set(Object.values(occupancy)).size, 8);
+  assert.deepEqual(results.get("p9"), [], "the ninth arrival gets no seat and keeps its spawn");
+  for (let index = 1; index <= 8; index++) assert.equal(results.get(`p${index}`)!.length, 1);
 });

@@ -1,7 +1,135 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { describeManifest, fetchRuntimeSpaces, formatSpaceOptions, resolveCurrentSpace, resolveJoinMode } from "./index.js";
+import { describeManifest, fetchMediaToken, planVoiceSession, fetchRuntimeSpaces, fetchStateToken, formatSpaceOptions, listPresence, resolveCurrentSpace, resolveJoinMode, transferRoomOwner } from "./index.js";
+import { MediaTokenRequestError, planBaseMedia } from "./media/media-token-error.js";
+
+test("optional base share refusal makes one real mic-only HTTP request with unchanged proof and no state renewal", async () => {
+  const previous = globalThis.fetch, sent: boolean[] = []; let renewals = 0;
+  globalThis.fetch = async (url, init) => {
+    const path = new URL(String(url)).pathname;
+    if (path === "/health") return Response.json({ features: {} });
+    if (path.endsWith("/manifest")) return Response.json({ features: { spatialAudio: false } });
+    if (path === "/api/tokens/state") renewals++;
+    assert.equal(path, "/api/tokens/media");
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer original-proof");
+    const body = JSON.parse(String(init?.body)); sent.push(body.canPublishVideo);
+    if (body.canPublishVideo) return Response.json({ reason: "media_publish_not_allowed" }, { status: 403 });
+    return Response.json({ token: "mic", livekitUrl: "ws://media.example.test" });
+  };
+  try {
+    const result = await planBaseMedia({ optionalShare: true, proofStillCurrent: () => true,
+      plan: screenShare => planVoiceSession("https://example.test", "room", "participant", "original-proof",
+        { canPublishAudio: true, canPublishVideo: screenShare }) });
+    assert.equal(result.token, "mic"); assert.deepEqual(sent, [true, false]); assert.equal(renewals, 0);
+  } finally { globalThis.fetch = previous; }
+});
+
+test("media request intent explicitly scopes microphone and screen share while preserving the session proof", async () => {
+  const previous = globalThis.fetch; const sent: unknown[] = [];
+  globalThis.fetch = async (_url, init) => {
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer original-proof");
+    sent.push(JSON.parse(String(init?.body)));
+    return Response.json({ token: "media", expiresInSeconds: 7, livekitUrl: "ws://media.example.test" });
+  };
+  try {
+    await fetchMediaToken("https://example.test", "room", "participant", "original-proof");
+    await fetchMediaToken("https://example.test", "room", "participant", "original-proof", { canPublishAudio: true, canPublishVideo: true });
+    assert.deepEqual(sent, [
+      { roomId: "room", participantId: "participant", canPublishAudio: true, canPublishVideo: false },
+      { roomId: "room", participantId: "participant", canPublishAudio: true, canPublishVideo: true }
+    ]);
+  } finally { globalThis.fetch = previous; }
+});
+
+for (const [status, reason, retry] of [[409, "room_state_changed", true], [503, "media_credential_preparation_expired", true],
+  [401, "identity_session_expired", false], [403, "media_publish_not_allowed", false], [409, "identity_recovery_required", false],
+  [503, "identity_authority_unavailable", false]] as const) {
+  test(`media plan retry is bounded and does not renew proof: ${status}/${reason}`, async () => {
+    const previous = globalThis.fetch; let mediaCalls = 0, stateCalls = 0;
+    globalThis.fetch = async (url, init) => {
+      const path = new URL(String(url)).pathname;
+      if (path === "/api/tokens/state") stateCalls++;
+      if (path === "/health") return Response.json({ features: {} });
+      if (path.endsWith("/manifest")) return Response.json({ features: { spatialAudio: true } });
+      assert.equal(path, "/api/tokens/media"); mediaCalls++;
+      assert.equal(new Headers(init?.headers).get("authorization"), "Bearer original-proof");
+      if (mediaCalls === 1) return Response.json({ reason }, { status });
+      return Response.json({ token: "prepared", livekitUrl: "ws://media.example.test" });
+    };
+    try {
+      const run = () => planVoiceSession("https://example.test", "room", "participant", "original-proof");
+      if (retry) assert.equal((await run()).token, "prepared");
+      else await assert.rejects(run(), error => error instanceof MediaTokenRequestError && error.status === status);
+      assert.equal(mediaCalls, retry ? 2 : 1); assert.equal(stateCalls, 0);
+    } finally { globalThis.fetch = previous; }
+  });
+}
+
+test("a second media conflict stops at two attempts with a fixed error and no credential renewal", async () => {
+  const previous = globalThis.fetch; let count = 0;
+  globalThis.fetch = async url => {
+    if (String(url).endsWith("/health")) return Response.json({ features: {} });
+    if (String(url).endsWith("/manifest")) return Response.json({ features: { spatialAudio: false } });
+    count++; return Response.json({ reason: "room_state_changed" }, { status: 409 });
+  };
+  try {
+    await assert.rejects(planVoiceSession("https://example.test", "room", "participant", "proof"), /failed_to_load_media_token:409/);
+    assert.equal(count, 2);
+  } finally { globalThis.fetch = previous; }
+});
+
+test("ownership handoff sends the admitted session and exact authority revision", async () => {
+  const previous = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async (url, init) => {
+    calls++;
+    assert.equal(String(url), "https://example.test/api/rooms/personal-room/owner/transfer");
+    assert.equal(init?.method, "POST");
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer room-session");
+    assert.deepEqual(JSON.parse(String(init?.body)), { participantId: "recipient", expectedRevision: 7 });
+    return Response.json({ revision: 8, ownerParticipantId: "recipient", state: {} });
+  };
+  try {
+    const result = await transferRoomOwner("https://example.test", "personal-room", "room-session", "recipient", 7);
+    assert.equal(result.revision, 8);
+    assert.equal(calls, 1);
+  } finally { globalThis.fetch = previous; }
+});
+
+test("v2 admission omits absent proofs but preserves an explicitly invalid proof for server rejection", async () => {
+  const previous = globalThis.fetch;
+  const requests: Record<string, unknown>[] = [];
+  globalThis.fetch = async (_url, init) => {
+    requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return new Response(JSON.stringify({ token: "session" }), { status: 200 });
+  };
+  try {
+    const access = { identityProtocolVersion: 2 as const, participantId: "untrusted", displayName: "Guest",
+      identityCredential: null, waitingCredential: null, inviteToken: null };
+    await fetchStateToken("http://127.0.0.1:4000", "demo-room", access);
+    await fetchStateToken("http://127.0.0.1:4000", "demo-room", { ...access, identityCredential: "" });
+    assert.deepEqual(requests[0], { roomId: "demo-room", identityProtocolVersion: 2, displayName: "Guest" });
+    assert.deepEqual(requests[1], { roomId: "demo-room", identityProtocolVersion: 2, identityCredential: "", displayName: "Guest" });
+  } finally { globalThis.fetch = previous; }
+});
+
+test("v2 room listings and fallback presence forward the admitted session", async () => {
+  const previous = globalThis.fetch;
+  const calls: Array<{ url: string; authorization: string | undefined }> = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), authorization: new Headers(init?.headers).get("authorization") ?? undefined });
+    return new Response(JSON.stringify({ items: [] }), { status: 200 });
+  };
+  try {
+    await fetchRuntimeSpaces("http://127.0.0.1:4000", "demo-room", "", "session-v2");
+    await listPresence("http://127.0.0.1:4000", "demo-room", "session-v2");
+    assert.deepEqual(calls, [
+      { url: "http://127.0.0.1:4000/api/rooms/demo-room/spaces", authorization: "Bearer session-v2" },
+      { url: "http://127.0.0.1:4000/api/rooms/demo-room/presence", authorization: "Bearer session-v2" }
+    ]);
+  } finally { globalThis.fetch = previous; }
+});
 
 test("resolveJoinMode detects mobile agents", () => {
   assert.equal(resolveJoinMode("Mozilla/5.0 (iPhone)"), "mobile");

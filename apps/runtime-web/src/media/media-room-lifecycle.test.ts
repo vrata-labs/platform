@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { cleanupMediaRoomConsumers, createDeferredMediaStopQueue, createMediaRoomIdleScheduler, hasMediaRoomSurfaceConsumer, planMediaRoomIdleAction, shouldHandleMediaRoomEvent, transitionPassiveMediaOwnership } from "./media-room-lifecycle.js";
+import { cleanupMediaRoomConsumers, createDeferredMediaStopQueue, createMediaRoomIdleScheduler, disconnectMediaRoomWithCleanup, hasMediaRoomSurfaceConsumer, planMediaRoomIdleAction, shouldHandleMediaRoomEvent, transitionPassiveMediaOwnership } from "./media-room-lifecycle.js";
+
+test("a failed surface cleanup cannot prevent media disconnection", async () => {
+  let disconnected = false;
+  const failure = new Error("surface dispose failure");
+  await assert.rejects(disconnectMediaRoomWithCleanup(() => { throw failure; }, async () => { disconnected = true; }), error => error === failure);
+  assert.equal(disconnected, true);
+});
 
 function createFakeTimers() {
   let nowMs = 0;
@@ -70,6 +77,13 @@ test("each media consumer class independently owns the room", () => {
       passiveMediaRequired: false
     }), "keep-room");
   }
+});
+
+test("a prepared publication keeps its room alive before the surface object exists", () => {
+  const state = { roomIsCurrent: true, audioSessionJoined: false, hasPhysicalConsumer: false, passiveMediaRequired: false };
+  assert.equal(planMediaRoomIdleAction({ ...state, pendingPublication: true }), "keep-room");
+  assert.equal(planMediaRoomIdleAction({ ...state, pendingPublication: false }), "schedule-disconnect");
+  assert.equal(planMediaRoomIdleAction({ ...state, pendingPublication: true, roomIsCurrent: false }), "ignore-stale-room");
 });
 
 test("removing the final media consumer allows idle disconnect", () => {

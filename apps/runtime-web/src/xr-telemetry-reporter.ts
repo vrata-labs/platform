@@ -7,7 +7,9 @@ type RuntimeDebugState = ReturnType<typeof createRuntimeDebugState>;
 export interface XrTelemetryContext {
   apiBaseUrl: string;
   roomId: string;
-  participantId: string;
+  readonly participantId: string;
+  fetch: typeof globalThis.fetch;
+  readonly sessionGate: { readonly reason: string | null };
   renderer: { xr: { isPresenting: boolean } };
   avatarVrMockEnabled: boolean;
   readonly roomStateAccessToken: string;
@@ -23,7 +25,7 @@ export interface XrTelemetryContext {
 }
 
 export function createXrTelemetryReporter(context: XrTelemetryContext) {
-  const { apiBaseUrl, roomId, participantId, renderer, avatarVrMockEnabled, localPoseController } = context;
+  const { apiBaseUrl, roomId, renderer, avatarVrMockEnabled, localPoseController, fetch } = context;
   // The queue and throttle belong to this reporter; input sampling and pose stay outside.
   let lastXrTelemetryReportAt = 0;
   let lastXrTelemetryKinds: string[] = [];
@@ -36,6 +38,7 @@ export function createXrTelemetryReporter(context: XrTelemetryContext) {
   }
 
   function reportXrTelemetry(frameContext: RuntimeFrameContext): void {
+    if (context.sessionGate.reason) return;
     if (!renderer.xr.isPresenting && !(avatarVrMockEnabled && context.syntheticXrState)) {
       return;
     }
@@ -78,6 +81,7 @@ export function createXrTelemetryReporter(context: XrTelemetryContext) {
     const rightAxes = context.syntheticXrState
       ? [context.syntheticXrState.axes.turnX, context.syntheticXrState.axes.turnY, context.syntheticXrState.axes.turnX, context.syntheticXrState.axes.turnY]
       : rightInputSource?.gamepad?.axes ?? [];
+    const participantId = context.participantId;
     const payload = {
       participantId,
       roomId,

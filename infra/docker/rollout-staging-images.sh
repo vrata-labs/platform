@@ -11,11 +11,20 @@ ENV_FILE="$ROOT_DIR/infra/docker/.env.staging"
 COMPOSE_FILE="$ROOT_DIR/infra/docker/compose.staging.yml"
 [[ -f "$ENV_FILE" ]] || { printf '%s\n' 'missing_staging_env' >&2; exit 1; }
 
+# Add the separate proxy proof for compatible targets without rotating sessions.
+# Older portable rollback targets do not implement this identity boundary.
+KEY_HELPER="$(dirname "$0")/staging-state-key.py"
+if [[ ! -f "$KEY_HELPER" ]]; then KEY_HELPER="$ROOT_DIR/tools/staging-state-key.py"; fi
+if [[ -f "$KEY_HELPER" ]]; then
+  python3 -B "$KEY_HELPER" --env-file "$ENV_FILE" --ensure-proxy-key
+fi
+
 # Environment normalization never discovers addresses from a cloud metadata endpoint.
 python3 - "$ENV_FILE" "$IMAGE_TAG" <<'PY'
 import ipaddress
 import os
 from pathlib import Path
+import secrets
 import sys
 
 path = Path(sys.argv[1])
@@ -36,9 +45,13 @@ for key in ('VRATA_APP_DOMAIN', 'VRATA_STATE_DOMAIN', 'VRATA_LIVEKIT_DOMAIN', 'V
         raise SystemExit('staging_public_domain_required')
 if not values.get('VRATA_STAGING_STATE_DIR') or not values.get('VRATA_STAGING_SCENE_ROOT'):
     raise SystemExit('staging_managed_scene_state_required')
+internal = values.get('VRATA_INTERNAL_SERVICE_TOKEN', '').strip().strip('"').strip("'")
+if len(internal) < 32 or internal.startswith('REPLACE_WITH_') or internal == 'unconfigured-read-only-preflight' or any(character.isspace() for character in internal):
+    raise SystemExit('staging_internal_service_token_required')
 values['IMAGE_TAG'] = sys.argv[2]
 values['LIVEKIT_TURN_TLS_PORT'] = ''
 values['LIVEKIT_TURN_EXTERNAL_TLS'] = 'false'
+values.setdefault('REMOTE_BROWSER_TOKEN_SECRET', secrets.token_urlsafe(48))
 path.write_text('\n'.join(f'{key}={value}' for key, value in values.items()) + '\n')
 path.chmod(0o600)
 PY

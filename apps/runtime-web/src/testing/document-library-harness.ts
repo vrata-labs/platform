@@ -18,7 +18,7 @@ export function createDocumentLibraryHarness(t: TestContext) {
   const permissions: RoomPermission[] = ["document.view", "document.upload", "document.download", "document.delete", "document.present"];
   const context = {
     apiBaseUrl: "https://example.invalid", roomId: "room", roomStateAccessToken: "token-1",
-    runtimeFlags: { documentsEnabled: true as boolean }, roomStateConnected: true as boolean,
+    runtimeFlags: { documentsEnabled: true as boolean }, roomStateConnected: true as boolean, sessionControlBlocked: false as boolean,
     presentationActionInFlight: false as boolean, roomDocuments: [] as RuntimeDocumentRecord[], selectedDocumentId: "",
     debugState: { access: { permissions }, documents: {
       enabled: true, count: 0, selectedDocumentId: "", selectedFilename: null as string | null,
@@ -28,11 +28,13 @@ export function createDocumentLibraryHarness(t: TestContext) {
     documentUploadButton: new DocumentTestElement("button"), documentSelect: new DocumentTestElement("select"),
     documentDownloadButton: new DocumentTestElement("button"), documentSurfaceButton: new DocumentTestElement("button"),
     documentDeleteButton: new DocumentTestElement("button"), documentStatusEl: new DocumentTestElement(),
+    documentUploadPolicyEl: new DocumentTestElement(), documentOperationProgressEl: new DocumentTestElement("progress"),
+    documentRefreshButton: new DocumentTestElement("button"),
     renderPresentationControls() { log("presentation", context.presentationActionInFlight); },
     renderDocumentMediaControls() { log("media", context.presentationActionInFlight); },
     listRoomDocuments: async function (this: unknown, ...args: Parameters<Services["listRoomDocuments"]>) {
       assert.equal(this, undefined); log("list", ...args);
-      return hooks.listRoomDocuments ? hooks.listRoomDocuments(...args) : [];
+      return hooks.listRoomDocuments ? hooks.listRoomDocuments(...args) : { items: [], uploadPolicy: null };
     },
     uploadRoomDocument: async function (this: unknown, ...args: Parameters<Services["uploadRoomDocument"]>) {
       assert.equal(this, undefined); log("upload", ...args);

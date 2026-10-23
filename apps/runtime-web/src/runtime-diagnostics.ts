@@ -1,13 +1,16 @@
 import type * as THREE from "three";
 import type { createRuntimeDebugState } from "./runtime-debug-state.js";
 import type { captureCanvasDiagnostics, inspectSceneObject } from "./scene-debug.js";
+import { SessionUpgradeError } from "./session-upgrade.js";
 
 type RuntimeDebugState = ReturnType<typeof createRuntimeDebugState>;
 
 export interface RuntimeDiagnosticsContext {
   apiBaseUrl: string;
   roomId: string;
-  participantId: string;
+  readonly participantId: string;
+  fetch: typeof globalThis.fetch;
+  readonly sessionGate: { readonly reason: string | null };
   readonly displayName: string;
   readonly roomStateAccessToken: string;
   readonly runtimeFlags: { remoteDiagnostics: boolean };
@@ -25,11 +28,17 @@ export interface RuntimeDiagnosticsContext {
   setStatus(message: string): void;
 }
 
+/** Startup telemetry is observational: neither stats collection nor its HTTP
+ * response may gate room readiness, presence heartbeats or avatar publishing. */
+export function reportRuntimeBootDiagnostics(report: (note: string) => Promise<void>): void {
+  void Promise.resolve().then(() => report("runtime_booted")).catch(() => undefined);
+}
+
 export function createRuntimeDiagnostics(context: RuntimeDiagnosticsContext) {
   const {
-    apiBaseUrl, roomId, participantId, debugEnabled, camera, renderer,
+    apiBaseUrl, roomId, debugEnabled, camera, renderer,
     reportLineEl, debugPanel, xrDebugPanelEl, refreshWebRtcDiagnostics,
-    captureCanvasDiagnostics, inspectSceneObject, setStatus
+    captureCanvasDiagnostics, inspectSceneObject, setStatus, fetch
   } = context;
   // Read mutable runtime state only at the original use sites, including after awaits.
 
@@ -73,10 +82,14 @@ export function createRuntimeDiagnostics(context: RuntimeDiagnosticsContext) {
   }
 
   async function reportDiagnostics(note?: string, options: { reportId?: string } = {}): Promise<void> {
-    if (!context.runtimeFlags.remoteDiagnostics) {
+    if (context.sessionGate.reason || !context.runtimeFlags.remoteDiagnostics) {
       return;
     }
     await refreshWebRtcDiagnostics();
+    // The endpoint is room-scoped: with no admitted session (before entry or after a failed boot) there is no subject.
+    // An empty Bearer would hit the identity boundary and replace the actual failure with an upgrade prompt.
+    if (context.sessionGate.reason || !context.roomStateAccessToken) return;
+    const participantId = context.participantId;
     if (context.activeSceneBundleRoot) {
       context.debugState.sceneDebug = inspectSceneObject({
         root: context.activeSceneBundleRoot,
@@ -168,6 +181,7 @@ export function createRuntimeDiagnostics(context: RuntimeDiagnosticsContext) {
   }
 
   function reportUnhandledRuntimeError(error: unknown, note: string): void {
+    if (error instanceof SessionUpgradeError || context.sessionGate.reason) return;
     const reportId = createClientReportId();
     const message = error instanceof Error ? error.message : String(error ?? "unknown");
     showReportId(reportId);

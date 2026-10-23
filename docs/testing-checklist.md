@@ -6,6 +6,7 @@ This document is the source of truth for where Vrata tests live, where they run,
 
 - Unit and integration tests live next to the code they validate: `apps/**`, `packages/**`, and `tools/*.test.mjs`.
 - Browser e2e tests live in `tests/e2e/`.
+- The private four-person public demo has a PostgreSQL lifecycle integration test and shared local/staging browser scenario; setup, voice and human acceptance gates are documented in [`docs/demo/README.md`](demo/README.md).
 - Staging-facing e2e tests use the Playwright `@staging` tag and live in `tests/e2e/runtime-staging.spec.ts` or focused staging specs.
 - Private scene asset tests use the Playwright `@private-assets` tag and are excluded from public platform CI.
 - Product milestone acceptance tests live under `tests/e2e/m0.5/` and `tests/e2e/m1-media/`.

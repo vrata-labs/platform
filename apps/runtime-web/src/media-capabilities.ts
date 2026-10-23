@@ -4,7 +4,8 @@ export type MediaCapabilityReason =
   | "webrtc_missing"
   | "media_devices_missing"
   | "get_user_media_missing"
-  | "get_display_media_missing";
+  | "get_display_media_missing"
+  | "display_capture_unsupported";
 
 export interface MediaDevicesLike {
   enumerateDevices?: unknown;
@@ -112,9 +113,18 @@ export function describeMediaCapabilityReason(reason: MediaCapabilityReason): st
       return "getUserMedia missing";
     case "get_display_media_missing":
       return "getDisplayMedia missing";
+    case "display_capture_unsupported":
+      return "screen capture unavailable in this browser environment";
     case "supported":
       return "supported";
   }
+}
+
+/** API presence alone does not guarantee that the browser can start capture.
+ * Keep an observed unsupported result for this page without changing audio or
+ * the fact that getDisplayMedia exists. A new page detects support again. */
+export function recordDisplayCaptureUnsupported(capabilities: BrowserMediaCapabilities): void {
+  if (capabilities.screenShare.supported) capabilities.screenShare = { supported: false, reason: "display_capture_unsupported" };
 }
 
 export function formatUnsupportedMediaCapabilities(capabilities: BrowserMediaCapabilities): string {

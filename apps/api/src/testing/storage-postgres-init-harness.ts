@@ -55,6 +55,7 @@ export function createStorageInitHarness(options: {
     await options.beforePhase?.(name, receivedClient);
   };
   const hooks: PostgresStorageInitHooks = {
+    installRoomExtensions: (value) => phase("installRoomExtensions", value),
     seed: (value) => phase("seed", value),
     validateStoredTemplateVersions: (value) => phase("validateStoredTemplateVersions", value),
     synchronizeTemplateCatalog: (value) => phase("synchronizeTemplateCatalog", value)

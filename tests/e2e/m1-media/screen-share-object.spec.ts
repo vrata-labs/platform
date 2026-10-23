@@ -58,7 +58,11 @@ async function waitForKernel(page: Page, role: "guest" | "member" | "host" | "ad
     return {
       connected: debug?.roomStateConnected ?? false,
       role: debug?.access?.role ?? null,
-      hasSurface: debug?.mediaObjects?.surfaces?.some((surface) => surface.surfaceId === "debug-main") ?? false
+      // The physical debug-main mesh exists before room-state finishes its
+      // admission check. Wait for the logical allowlist from its first snapshot
+      // before sending a command, including the expected guest denial.
+      hasSurface: debug?.mediaObjects?.surfaces?.some((surface) =>
+        surface.surfaceId === "debug-main" && surface.allowedObjectTypes?.includes("screen-share")) ?? false
     };
   }, {
     timeout: 30000,

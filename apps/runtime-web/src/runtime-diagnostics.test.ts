@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Object3D } from "three";
-import { createRuntimeDiagnostics } from "./runtime-diagnostics.js";
+import { createRuntimeDiagnostics, reportRuntimeBootDiagnostics } from "./runtime-diagnostics.js";
+import { SessionUpgradeError } from "./session-upgrade.js";
 import { createDiagnosticState, createDiagnosticsHarness, deferred } from "./testing/runtime-diagnostics-harness.js";
 
 const reportedStateKeys = [
@@ -17,6 +18,7 @@ const reportedStateKeys = [
 test("construction does not read live state, render or send before main initializes diagnostics", (t) => {
   const h = createDiagnosticsHarness(t);
   const runtime = createRuntimeDiagnostics({ ...h.context,
+    get participantId(): never { throw new Error("early identity read"); },
     get debugState(): never { throw new Error("early diagnostics read"); },
     get runtimeFlags(): never { throw new Error("early flag read"); },
     get displayName(): never { throw new Error("early name read"); },
@@ -32,6 +34,23 @@ test("disabled remote diagnostics return before refresh, scene capture or transp
   await h.runtime.reportDiagnostics(); assert.deepEqual(h.events, []);
   h.inputs.runtimeFlags = { remoteDiagnostics: true };
   await h.runtime.reportDiagnostics(); assert.equal(h.requests.length, 1);
+});
+
+test("boot diagnostics return immediately while stats collection is held", async t => {
+  const h = createDiagnosticsHarness(t), stats = deferred<void>(); h.hooks.refresh = () => stats.promise;
+  assert.equal(reportRuntimeBootDiagnostics(h.runtime.reportDiagnostics), undefined);
+  await new Promise(resolve => setImmediate(resolve)); assert.deepEqual(h.events, ["refresh"]);
+  stats.resolve(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.requests.length, 1); assert.equal(h.requests[0].body.note, "runtime_booted");
+});
+
+test("boot diagnostics do not propagate a pending HTTP response or a reporting failure", async t => {
+  const h = createDiagnosticsHarness(t), response = deferred<Response>(); h.hooks.fetch = () => response.promise;
+  assert.equal(reportRuntimeBootDiagnostics(h.runtime.reportDiagnostics), undefined);
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(h.requests.length, 1);
+  const status = h.inputs.debugState.statusLine, issue = h.inputs.debugState.issueCode;
+  response.reject(new Error("diagnostics_unavailable")); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.inputs.debugState.statusLine, status); assert.equal(h.inputs.debugState.issueCode, issue);
 });
 
 test("report preserves the complete payload, URL, method and optional-field omission", async (t) => {
@@ -127,4 +146,46 @@ test("concurrent reports are not coalesced and IDs follow response arrival order
   await new Promise(resolve => setImmediate(resolve)); assert.equal(h.requests.length, 2);
   second.resolve(new Response('{"reportId":"second"}')); await two; assert.equal(h.inputs.debugState.lastReportId, "second");
   first.resolve(new Response('{"reportId":"first"}')); await one; assert.equal(h.inputs.debugState.lastReportId, "first");
+});
+test("a terminal identity gate prevents diagnostic refresh and network publication", async (t) => {
+  const h = createDiagnosticsHarness(t);
+  h.inputs.sessionGate = { reason: "identity_upgrade_required" };
+  await h.runtime.reportDiagnostics("blocked");
+  h.runtime.reportUnhandledRuntimeError(new Error("private error"), "blocked");
+  assert.deepEqual(h.events, []); assert.deepEqual(h.requests, []);
+});
+
+test("an identity-upgrade exception is not converted to a generic runtime error report", (t) => {
+  const h = createDiagnosticsHarness(t);
+  h.runtime.reportUnhandledRuntimeError(new SessionUpgradeError("identity_upgrade_required"), "upgrade");
+  assert.deepEqual(h.events, []); assert.deepEqual(h.requests, []);
+});
+
+test("identity loss during a pending diagnostic refresh prevents capture and transport", async (t) => {
+  const h = createDiagnosticsHarness(t), ready = deferred<void>(), resume = deferred<void>();
+  h.hooks.refresh = async () => { ready.resolve(); await resume.promise; };
+  const pending = h.runtime.reportDiagnostics("pending"); await ready.promise;
+  h.inputs.sessionGate = { reason: "identity_recovery_required" }; resume.resolve(); await pending;
+  assert.deepEqual(h.events, ["refresh"]); assert.deepEqual(h.requests, []);
+});
+
+test("a report without an admitted session sends nothing, so a failed boot keeps its own status", async (t) => {
+  const h = createDiagnosticsHarness(t); h.inputs.roomStateAccessToken = "";
+  const status = h.inputs.debugState.statusLine;
+  await h.runtime.reportDiagnostics("runtime_boot_failed");
+  assert.deepEqual(h.events, ["refresh"]); assert.equal(h.requests.length, 0);
+  assert.equal(h.inputs.debugState.statusLine, status);
+  h.inputs.roomStateAccessToken = "admitted-session"; await h.runtime.reportDiagnostics("runtime_booted");
+  assert.equal(h.requests.length, 1);
+  assert.equal((h.requests[0]!.init.headers as Record<string, string>).authorization, "Bearer admitted-session");
+});
+
+test("diagnostic subject follows identity adoption during refresh and matches the refreshed session token", async (t) => {
+  const h = createDiagnosticsHarness(t), ready = deferred<void>(), resume = deferred<void>();
+  h.hooks.refresh = async () => { ready.resolve(); await resume.promise; };
+  const pending = h.runtime.reportDiagnostics("after-admission"); await ready.promise;
+  h.inputs.participantId = "server-issued"; h.inputs.roomStateAccessToken = "fresh-session";
+  resume.resolve(); await pending;
+  assert.equal(h.requests[0]!.body.participantId, "server-issued");
+  assert.equal((h.requests[0]!.init.headers as Record<string, string>).authorization, "Bearer fresh-session");
 });

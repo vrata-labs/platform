@@ -68,7 +68,7 @@ def bootstrap_env(root, public_ip, image_sha, registry_id="crp9cm29k6p76hqo8lti"
         "CADDY_CONFIG_FILE": "./Caddyfile.staging",
     })
     for key in ("CONTROL_PLANE_ADMIN_TOKEN", "STATE_TOKEN_SECRET", "REMOTE_BROWSER_TOKEN_SECRET",
-                "VRATA_INTERNAL_SERVICE_TOKEN", "REMOTE_BROWSER_INTERNAL_TOKEN", "POSTGRES_PASSWORD", "MINIO_ROOT_PASSWORD"):
+                 "VRATA_INTERNAL_SERVICE_TOKEN", "VRATA_IDENTITY_PROXY_TOKEN", "REMOTE_BROWSER_INTERNAL_TOKEN", "POSTGRES_PASSWORD", "MINIO_ROOT_PASSWORD"):
         values[key] = secrets.token_urlsafe(48)
     values["POSTGRES_URL"] = f'postgres://{values["POSTGRES_USER"]}:{values["POSTGRES_PASSWORD"]}@postgres:5432/{values["POSTGRES_DB"]}'
     content = "# Private host configuration, generated once.\n" + "\n".join(f"{key}={value}" for key, value in values.items()) + "\n"

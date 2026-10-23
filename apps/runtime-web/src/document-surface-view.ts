@@ -8,7 +8,7 @@ type DocumentQueries = Pick<ReturnType<typeof createMediaObjectQueries>,
 >;
 
 export interface DocumentSurfaceViewContext extends DocumentQueries {
-  participantId: string;
+  readonly participantId: string;
   readonly roomStateServerOffsetMs: number;
   readonly selectedMediaSurfaceId: string;
   readonly presentationActionInFlight: boolean;
@@ -38,7 +38,7 @@ export interface DocumentSurfaceViewContext extends DocumentQueries {
 
 export function createDocumentSurfaceView(context: DocumentSurfaceViewContext) {
   const {
-    participantId, currentPdfPresentationObject, currentImageViewerObject,
+    currentPdfPresentationObject, currentImageViewerObject,
     currentVideoPlayerObject, canPresentDocuments, goToPresentationPage,
     getPdfPresentationRuntime, debugState, presentationControlsEl,
     presentationPrevButton, presentationNextButton, presentationPageLabel,
@@ -52,11 +52,11 @@ export function createDocumentSurfaceView(context: DocumentSurfaceViewContext) {
   let presentationThumbnailSignature = "";
 
   function presentationInputEventId(kind: string): string {
-    return `${participantId}:pdf-presentation:${kind}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+    return `${context.participantId}:pdf-presentation:${kind}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
   }
 
   function documentMediaInputEventId(kind: string): string {
-    return `${participantId}:document-media:${kind}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+    return `${context.participantId}:document-media:${kind}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
   }
 
   function formatMediaTime(milliseconds: number): string {

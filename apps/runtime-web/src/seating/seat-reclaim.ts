@@ -13,13 +13,18 @@ export function planSeatReclaimOnReconnect(input: {
   seatingEnabled: boolean;
   roomStateClientAvailable: boolean;
   pendingReleaseSeatIds?: readonly string[];
+  /** Cancelled-claim releases awaiting acknowledgement; resent before any new claim. */
+  pendingCorrelatedReleases?: readonly { seatId: string; commandId: string }[];
   retryDelayMs?: number;
 }): SeatReclaimPlan {
   if (!input.roomStateClientAvailable) {
     return { seatId: null, commands: [], retryDelayMs: null };
   }
 
-  const releaseCommands: RuntimeCommand[] = (input.pendingReleaseSeatIds ?? []).map(seatId => ({ type: "send_seat_release", seatId }));
+  const releaseCommands: RuntimeCommand[] = [
+    ...(input.pendingCorrelatedReleases ?? []).map(release => ({ type: "send_seat_release" as const, seatId: release.seatId, commandId: release.commandId })),
+    ...(input.pendingReleaseSeatIds ?? []).map(seatId => ({ type: "send_seat_release" as const, seatId }))
+  ];
   if (!input.currentSeatId || !input.seatingEnabled) {
     return { seatId: null, commands: releaseCommands, retryDelayMs: null };
   }

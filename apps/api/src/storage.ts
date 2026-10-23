@@ -44,7 +44,9 @@ import type {
   RoomNoteScope,
   RoomNoteVersionAction,
   RoomNoteVersionRecord,
+  RoomPersonalState,
   RoomRecord,
+  RoomSessionControlState,
   RuntimeDiagnosticRecord,
   SceneBundleUpdateInput,
   Storage,
@@ -58,6 +60,40 @@ import { initializePostgresStorage } from "./storage-postgres-init.js";
 import { DEFAULT_SESSION_CONTROL_JSON, DEFAULT_PERSONAL_STATE_JSON } from "./storage-postgres-schema.js";
 import { assertRoomTemplatePatch, materializeStoredRoomInput } from "./room-template-policy.js";
 import { transitionPostgresReferenceCatalog } from "./storage-template-catalog.js";
+import { createMemoryRoomIdentities } from "./identity/memory.js";
+import { createPostgresRoomIdentities, assertPostgresEffect, loadPostgresPersonalOwner } from "./identity/postgres.js";
+import { assertPersonalOwnerResponse } from "./identity/personal-owner-response.js";
+import type { RoomIdentityCredential } from "@vrata/shared-types/identity-credential";
+import { createMemoryAdmissionBudget, createPostgresAdmissionBudget } from "./identity/admission-budget.js";
+import { assertCurrentEffect, type RoomEffectGuard, type RoomEffectActor } from "./identity/effect-write-guard.js";
+import type { RoomIdentityEffectStorage } from "./storage-contracts.js";
+import type { LegacyAdmissionWriteInput, LegacyAdmissionWriteReceipt, LegacyRoomControlReceipt, LegacyRoomCredentialSelector,
+  LegacyRoomCredentialSnapshot, LegacyRoomEffectOptions, VirtualRoomEffectOptions, VirtualRoomEffectStorage } from "./storage-contracts.js";
+import { captureLegacyCredentialRelease, legacyCredentialSnapshot } from "./identity/legacy-credential-release.js";
+import {
+  assertLegacyWriteLeases, captureLegacyAdmissionWrite, decideLegacyWrite, effectiveLegacyLeases, LEGACY_HOST_READY, LEGACY_WRITE_CHANGED,
+  legacyHostSeat, legacyPendingReceipt, legacyWritePins, rawLegacyHostSeat, unwrittenLegacyReceipt
+} from "./identity/legacy-admission-mutation.js";
+import {
+  assertLegacyControlLease, captureLegacyRoomControl, reduceLegacyRoomControl, type LegacyRoomControlInput, type LegacyRoomControlOptions
+} from "./identity/legacy-room-control.js";
+import { sanitizeSessionControlState } from "./room-session-control.js";
+import { createRoomEffectFacade } from "./identity/effect-facade.js";
+import { createMemoryTelemetryStage, type MemoryTelemetrySink } from "./identity/memory-telemetry-stage.js";
+import { assertVirtualRoomDeadline, captureVirtualRoomGuard, runVirtualRoomEffect } from "./identity/virtual-effect-facade.js";
+import { roomFenceTransaction, confirmedRoomWriteRejection, RoomFenceCommitUncertain } from "./identity/fence-transaction.js";
+import { IdentityBoundaryError } from "./identity/legacy-boundary.js";
+import { installRoomIdentitySchema } from "./identity/postgres-schema.js";
+import { identityLifecycleChanged, IDENTITY_LIFECYCLE_REQUIRES_V2 } from "./identity/lifecycle.js";
+import { identityLifecycle } from "./identity/authority.js";
+import { assertV2InviteInput } from "./identity/invite-policy.js";
+import { assertActorSession } from "./identity/authority.js";
+import { IdentityStorageError, type RoomIdentityRecord } from "./identity/contracts.js";
+import { createMemoryIdentityProtocol, createPostgresIdentityProtocol } from "./identity/protocol.js";
+import { createMemoryRoomPlugins } from "./plugins/memory.js";
+import { createPostgresRoomPluginAdapter, preparePostgresRoomPluginRemoval } from "./plugins/postgres.js";
+import { installRoomPluginSchema } from "./plugins/postgres-schema.js";
+import { assertPluginAuthor, pluginSessionGuard } from "./plugins/access-policy.js";
 import { MemoryIntegrationOperations, PostgresIntegrationOperations } from "./storage-integration-operations.js";
 
 export { initPostgresStorageWithRetry } from "./storage-init-retry.js";
@@ -100,7 +136,19 @@ function roomNoteId(roomId: string, scope: RoomNoteScope, ownerParticipantId?: s
   return scope === "shared" ? `${roomId}:shared` : `${roomId}:private:${ownerParticipantId ?? ""}`;
 }
 
+function assertAdministrativeRoomSeed(minimumProtocol: unknown, input: Partial<RoomRecord>): 1 | 2 {
+  if (minimumProtocol !== 1 && minimumProtocol !== 2) throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+  const control = input.sessionControl;
+  if (minimumProtocol === 2 && (input.ownerParticipantId != null || control?.hostParticipantId != null
+    || control?.presenterParticipantId != null)) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+  return minimumProtocol;
+}
+
 const XR_TELEMETRY_EVENT_LIMIT = 1000;
+const LEGACY_CONTROL_CHANGED: LegacyRoomControlReceipt = Object.freeze({ kind: "changed" } as const);
+/** Sanitized from the column as written; spare raw keys stay in the row, never in the receipt. */
+const appliedLegacyControl = (stored: RoomSessionControlState): LegacyRoomControlReceipt =>
+  Object.freeze({ kind: "applied" as const, state: sanitizeSessionControlState(stored) });
 
 const seedTemplateDefinitions = listTemplateDefinitions();
 const defaultTemplates: TemplateRecord[] = seedTemplateDefinitions.map((definition) => ({
@@ -183,6 +231,196 @@ export class MemoryStorage implements Storage {
   private waitingRoomRequests = new Map<string, WaitingRoomRequestRecord>();
   private roomNotes = new Map<string, RoomNoteRecord>();
   private roomNoteVersions = new Map<string, RoomNoteVersionRecord[]>();
+  private readonly identityAdapter: ReturnType<typeof createMemoryRoomIdentities>;
+  private readonly identityPolicy = createMemoryIdentityProtocol();
+  readonly identityProtocol: Storage["identityProtocol"] = this.identityPolicy;
+  readonly roomIdentities: Storage["roomIdentities"];
+  readonly reserveIdentityAdmission: Storage["reserveIdentityAdmission"];
+  private readonly pluginAdapter: ReturnType<typeof createMemoryRoomPlugins>;
+  readonly roomPlugins: Storage["roomPlugins"];
+  readonly roomPluginAccess: Storage["roomPluginAccess"];
+  constructor(private readonly identityNow = Date.now) {
+    this.reserveIdentityAdmission = createMemoryAdmissionBudget(identityNow);
+    this.identityAdapter = createMemoryRoomIdentities(roomId => this.rooms.get(roomId), identityNow,
+      hash => [...this.roomInvites.values()].find(invite => invite.tokenHash === hash), () => this.identityPolicy.current(),
+      id => this.roomInvites.get(id), id => this.waitingRoomRequests.get(id), request => { this.waitingRoomRequests.set(request.requestId, request); });
+    this.roomIdentities = this.identityAdapter.storage;
+    this.pluginAdapter = createMemoryRoomPlugins(roomId => this.rooms.get(roomId), {
+      minimum: () => this.identityPolicy.current(), now: identityNow,
+      check: (actor, author) => {
+        const scope = actor.actorType === "room-session" ? actor.proof : actor.scope;
+        const room = this.rooms.get(scope.roomId);
+        if (!room || room.tenantId !== scope.tenantId) throw new IdentityStorageError("room_not_found");
+        if (actor.actorType === "room-session") {
+          const current = this.identityAdapter.assertCurrentEffect(pluginSessionGuard(actor));
+          if (author) assertPluginAuthor(current, room.roomType);
+        } else {
+          if (!author) throw new IdentityStorageError("identity_forbidden");
+          // Reuse the adapter's synchronous admin lifecycle admission, without creating an invite.
+          // It observes the canonical authority lifecycle, including end transitions during await.
+          this.identityAdapter.authorizeInvite(scope.roomId, { actorType: "admin-token", actorId: "plugin-administrator", role: "admin" }, () => null!);
+        }
+      }
+    });
+    this.roomPlugins = this.pluginAdapter.storage;
+    this.roomPluginAccess = this.pluginAdapter.access;
+  }
+
+  async hasRoomIdentityAuthority(roomId: string): Promise<boolean> { return this.identityAdapter.hasRoomBindings(roomId); }
+  async releasePersonalRoomOwnerResponse(proof: RoomIdentityCredential, send: (room: RoomRecord, identity: RoomIdentityRecord) => undefined): Promise<void> {
+    const identity = this.identityAdapter.assertPersonalOwnerResponse(proof);
+    send({ ...structuredClone(this.rooms.get(proof.roomId)!), ownerParticipantId: identity.participantId }, identity);
+  }
+  async releaseLegacyRoomCredential(selector: LegacyRoomCredentialSelector, options: Pick<LegacyRoomEffectOptions, "lockTimeoutMs" | "idleTimeoutMs">,
+    send: (fresh: LegacyRoomCredentialSnapshot) => undefined): Promise<void> {
+    const guard = captureLegacyCredentialRelease(selector, options, send);
+    // One synchronous turn: every check and map read precedes the only release.
+    const room = this.rooms.get(guard.roomId);
+    if (!room || room.tenantId !== guard.tenantId) throw new IdentityStorageError("room_not_found");
+    const floor = this.identityPolicy.current();
+    if (!Number.isSafeInteger(floor) || floor < 1) throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+    if (floor !== 1 || this.identityAdapter.hasRoomBindings(guard.roomId)) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+    const invite = guard.inviteTokenHash === null ? undefined : [...this.roomInvites.values()]
+      .find(item => item.roomId === guard.roomId && item.tokenHash === guard.inviteTokenHash);
+    const waiting = invite && [...this.waitingRoomRequests.values()]
+      .find(item => item.roomId === guard.roomId && item.inviteId === invite.inviteId && item.participantId === guard.participantId);
+    send(legacyCredentialSnapshot(structuredClone(room), invite ? structuredClone(invite) : null, waiting ? structuredClone(waiting) : null));
+  }
+  async writeLegacyAdmission(input: LegacyAdmissionWriteInput, options: Pick<LegacyRoomEffectOptions, "lockTimeoutMs" | "idleTimeoutMs">):
+    Promise<LegacyAdmissionWriteReceipt> {
+    const guard = captureLegacyAdmissionWrite(input, options);
+    // One synchronous turn: checks, the decision, the single staged mutation and the last lease check precede the receipt.
+    const room = this.rooms.get(guard.roomId);
+    if (!room || room.tenantId !== guard.tenantId) throw new IdentityStorageError("room_not_found");
+    const floor = this.identityPolicy.current();
+    if (!Number.isSafeInteger(floor) || floor < 1) throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+    if (floor !== 1 || this.identityAdapter.hasRoomBindings(guard.roomId)) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+    const invite = guard.inviteTokenHash === null ? undefined : [...this.roomInvites.values()]
+      .find(item => item.roomId === guard.roomId && item.tokenHash === guard.inviteTokenHash);
+    const waiting = invite && [...this.waitingRoomRequests.values()]
+      .find(item => item.roomId === guard.roomId && item.inviteId === invite.inviteId && item.participantId === guard.participantId);
+    const fresh = () => legacyCredentialSnapshot(structuredClone(room), invite ? structuredClone(invite) : null, waiting ? structuredClone(waiting) : null);
+    const pins = legacyWritePins(rawLegacyHostSeat(room.sessionControl, guard.participantId), invite ?? null, waiting ?? null);
+    const at = this.identityNow();
+    assertLegacyWriteLeases(guard.leases, at);
+    const intent = decideLegacyWrite(guard, fresh(), at, pins, false);
+    const leases = effectiveLegacyLeases(guard, intent, pins);
+    let publish = () => {};
+    let receipt: LegacyAdmissionWriteReceipt;
+    if (intent.kind === "set_host") {
+      // Only the host key; every other raw control key and room field is kept.
+      const next: RoomRecord = { ...room, sessionControl: { ...room.sessionControl, hostParticipantId: guard.participantId } };
+      publish = () => { this.rooms.set(guard.roomId, next); };
+      receipt = LEGACY_HOST_READY;
+    } else if (intent.kind === "insert_pending") {
+      // The natural key spans every room, as SQL unique (invite_id, participant_id) does; an alias is drift.
+      const taken = [...this.waitingRoomRequests.values()].some(item => item.inviteId === intent.inviteId && item.participantId === guard.participantId);
+      const request: WaitingRoomRequestRecord = { requestId: crypto.randomUUID(), roomId: guard.roomId, inviteId: intent.inviteId,
+        participantId: guard.participantId, displayName: guard.displayName!, status: "pending", createdAt: new Date(at).toISOString(),
+        decidedAt: null, decidedBy: null };
+      if (!taken) publish = () => { this.waitingRoomRequests.set(request.requestId, request); };
+      receipt = taken ? LEGACY_WRITE_CHANGED : legacyPendingReceipt(request.requestId, true);
+    } else receipt = unwrittenLegacyReceipt(intent, fresh);
+    assertLegacyWriteLeases(leases, this.identityNow());
+    publish();
+    return receipt;
+  }
+  async applyLegacyRoomControl(input: LegacyRoomControlInput, options: LegacyRoomControlOptions): Promise<LegacyRoomControlReceipt> {
+    const guard = captureLegacyRoomControl(input, options);
+    // One synchronous turn: scope, floor, the decision on the raw row, the staged merge and the last lease check precede the publish.
+    const room = this.rooms.get(guard.roomId);
+    if (!room || room.tenantId !== guard.tenantId) throw new IdentityStorageError("room_not_found");
+    const floor = this.identityPolicy.current();
+    if (!Number.isSafeInteger(floor) || floor < 1) throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+    if (floor !== 1 || this.identityAdapter.hasRoomBindings(guard.roomId)) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+    const decision = reduceLegacyRoomControl(guard, { tenantId: room.tenantId, roomId: room.roomId, status: room.status ?? null,
+      disabledAt: room.disabledAt, rawControl: structuredClone(room.sessionControl) }, this.identityNow());
+    let publish = () => {};
+    let receipt: LegacyRoomControlReceipt = decision.kind === "apply" ? LEGACY_CONTROL_CHANGED : decision;
+    // The row read is the CAS: a row swapped during the presence sample writes nothing.
+    if (decision.kind === "apply" && this.rooms.get(guard.roomId) === room) {
+      // Only the patch keys over the current raw control; spare keys and every other room field are kept.
+      const sessionControl = structuredClone({ ...room.sessionControl, ...decision.patch });
+      publish = () => { this.rooms.set(guard.roomId, { ...room, sessionControl }); };
+      receipt = appliedLegacyControl(structuredClone(sessionControl));
+    }
+    assertLegacyControlLease(guard, this.identityNow());
+    publish();
+    return receipt;
+  }
+  async withRoomIdentityEffect<T>(guard: RoomEffectGuard, effect: (scoped: RoomIdentityEffectStorage, current: RoomEffectActor) => Promise<T>): Promise<T> {
+    let active = true;
+    const current = this.identityAdapter.assertCurrentEffect(guard);
+    const check = () => {
+      if (!active) throw new Error("room_effect_scope_closed");
+      this.identityAdapter.assertCurrentEffect(guard);
+    };
+    const stage = createMemoryTelemetryStage(guard.roomId);
+    try {
+      const result = await effect(createRoomEffectFacade(this, { roomWrite: guard.roomWrite, check, telemetry: stage.database }), current);
+      stage.commit(check, this.telemetrySink);
+      return result;
+    } finally { active = false; }
+  }
+  async withLegacyRoomEffect<T>(scope: { tenantId: string; roomId: string }, options: LegacyRoomEffectOptions,
+    effect: (scoped: RoomIdentityEffectStorage) => Promise<T>): Promise<T> {
+    let active = true;
+    const check = () => {
+      if (!active) throw new Error("room_effect_scope_closed");
+      const room = this.rooms.get(scope.roomId);
+      if (!room || room.tenantId !== scope.tenantId) throw new IdentityStorageError("room_not_found");
+      if (this.identityPolicy.current() !== 1 || this.identityAdapter.hasRoomBindings(scope.roomId)) {
+        throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      }
+    };
+    check();
+    const stage = createMemoryTelemetryStage(scope.roomId);
+    try {
+      const result = await effect(createRoomEffectFacade(this, { roomWrite: options.roomWrite, check, telemetry: stage.database }));
+      stage.commit(check, this.telemetrySink);
+      return result;
+    } finally { active = false; }
+  }
+  async withLegacyVirtualRoomEffect<T>(roomId: string, options: VirtualRoomEffectOptions,
+    effect: (scoped: VirtualRoomEffectStorage) => Promise<T>): Promise<T> {
+    const guard = captureVirtualRoomGuard(roomId, options);
+    let active = true;
+    const check = () => {
+      if (!active) throw new Error("room_effect_scope_closed");
+      if (this.identityPolicy.current() !== 1) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      if (this.rooms.has(guard.roomId)) throw new IdentityBoundaryError(409, "room_state_changed");
+      if (this.identityAdapter.hasRoomBindings(guard.roomId)) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      assertVirtualRoomDeadline(guard, this.identityNow());
+    };
+    check();
+    const stage = createMemoryTelemetryStage(guard.roomId);
+    try {
+      const result = await runVirtualRoomEffect(stage.database, guard, check, effect);
+      stage.commit(check, this.telemetrySink);
+      return result;
+    } finally { active = false; }
+  }
+  async getPersonalRoomState(tenantId: string, roomId: string): Promise<RoomPersonalState | null> {
+    const room = this.rooms.get(roomId);
+    return room?.tenantId === tenantId && room.roomType === "personal" ? structuredClone(room.personalState ?? {}) : null;
+  }
+  async updatePersonalRoomState(tenantId: string, roomId: string, state: RoomPersonalState): Promise<RoomPersonalState | null> {
+    const room = this.rooms.get(roomId);
+    if (!room || room.tenantId !== tenantId || room.roomType !== "personal") return null;
+    const value = structuredClone(state);
+    this.rooms.set(roomId, { ...room, personalState: value });
+    return structuredClone(value);
+  }
+  async setRoomSceneBundleUrl(tenantId: string, roomId: string, sceneBundleUrl: string): Promise<RoomRecord | null> {
+    const room = this.rooms.get(roomId);
+    if (!room || room.tenantId !== tenantId) return null;
+    assertRoomTemplatePatch(room, { sceneBundleUrl });
+    const updated = { ...room, sceneBundleUrl, templateSnapshot: {
+      ...room.templateSnapshot, roomConfig: { ...room.templateSnapshot.roomConfig, sceneBundleUrl }
+    } };
+    this.rooms.set(roomId, updated);
+    return updated;
+  }
   private integrationTenants = new Map<string, IntegrationTenantRecord>();
   private integrationOperations = new MemoryIntegrationOperations();
 
@@ -259,10 +497,10 @@ export class MemoryStorage implements Storage {
     const room = this.rooms.get(roomId);
     return room ? structuredClone(room) : null;
   }
-  async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
+  private createRoomSync(input: Partial<RoomRecord>, options?: { allowUnownedPersonal?: boolean }): RoomRecord {
     const templateId = input.templateId ?? (input.roomType === "personal" ? "personal-workspace-basic" : "meeting-room-basic");
     const versionSnapshot = this.requireActiveTemplateVersion(templateId);
-    input = materializeStoredRoomInput(versionSnapshot, input);
+    input = materializeStoredRoomInput(versionSnapshot, input, options);
     const roomType = defaultRoomType(input.roomType);
     const roomWithoutTemplateMetadata: RoomRecordWithoutTemplateMetadata = {
       roomId: input.roomId ?? crypto.randomUUID(),
@@ -292,8 +530,35 @@ export class MemoryStorage implements Storage {
       personalState: defaultPersonalState(input.personalState)
     };
     const room = bindRoomTemplateMetadata(roomWithoutTemplateMetadata, versionSnapshot);
+    if (this.identityAdapter.hasRoomBindings(room.roomId) || (this.identityPolicy.current() >= 2 && this.rooms.has(room.roomId))) throw new Error(IDENTITY_LIFECYCLE_REQUIRES_V2);
     this.rooms.set(room.roomId, structuredClone(room));
     return structuredClone(room);
+  }
+  async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> { return this.createRoomSync(input); }
+  async createAdministrativeRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
+    input = structuredClone(input);
+    const floor = assertAdministrativeRoomSeed(this.identityPolicy.current(), input);
+    if (input.roomId != null && this.rooms.has(input.roomId)) throw new Error("room_slug_conflict");
+    return this.createRoomSync(input, { allowUnownedPersonal: floor >= 2 });
+  }
+  async createLegacyPersonalRoom(input: Parameters<Storage["createLegacyPersonalRoom"]>[0]) {
+    if (this.identityPolicy.current() !== 1) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+    const existing = [...this.rooms.values()].find(room => room.tenantId === input.tenantId
+      && room.roomType === "personal" && room.ownerParticipantId === input.ownerParticipantId);
+    if (existing) {
+      if (this.identityAdapter.hasRoomBindings(existing.roomId)) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      return { room: structuredClone(existing), created: false };
+    }
+    if (this.rooms.has(input.roomId)) throw new Error("room_slug_conflict");
+    return { room: this.createRoomSync({ ...input, roomType: "personal" }), created: true };
+  }
+  async createPersonalOwnedRoom(input: Parameters<Storage["createPersonalOwnedRoom"]>[0]) {
+    if (this.identityPolicy.current() < 2 || typeof input.displayName !== "string" || input.displayName.length > 80) throw new Error("identity_upgrade_required");
+    const participantId = crypto.randomUUID();
+    const room = this.createRoomSync({ ...input, roomId: crypto.randomUUID(), roomType: "personal",
+      ownerParticipantId: participantId, visibility: "private", guestAllowed: false, sessionControl: { hostParticipantId: participantId } });
+    try { return { room, identity: this.identityAdapter.bootstrapOwner(room, participantId, input.displayName) }; }
+    catch (error) { this.rooms.delete(room.roomId); throw error; }
   }
   async updateRoom(roomId: string, input: Partial<RoomRecord>, expectedTemplateBinding?: ExpectedRoomTemplateBinding): Promise<RoomRecord | null> {
     const existing = this.rooms.get(roomId);
@@ -342,18 +607,27 @@ export class MemoryStorage implements Storage {
       updatedWithoutTemplateMetadata,
       this.requireTemplateVersion(existing.templateId, existing.templateVersion)
     );
+    if ((this.identityPolicy.current() >= 2 || this.identityAdapter.hasRoomBindings(roomId)) && identityLifecycleChanged(existing, updated)) {
+      throw new Error(IDENTITY_LIFECYCLE_REQUIRES_V2);
+    }
     this.rooms.set(roomId, structuredClone(updated));
     return structuredClone(updated);
   }
-  async deleteRoom(roomId: string): Promise<boolean> {
+  async deleteRoom(roomId: string, pluginDeletion?: { tenantId: string; deletionId: string }): Promise<boolean> {
+    const room = this.rooms.get(roomId);
+    if (room && pluginDeletion && room.tenantId !== pluginDeletion.tenantId) return false;
+    if (room) this.pluginAdapter.assertRoomDeletable({ tenantId: room.tenantId, roomId }, pluginDeletion?.deletionId);
+    this.identityAdapter.deleteRoom(roomId);
     return this.rooms.delete(roomId);
   }
-  async createRoomInvite(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy"> & { inviteId?: string; createdAt?: string }): Promise<RoomInviteRecord> {
+  private createRoomInviteSync(input: Parameters<Storage["createRoomInvite"]>[0]): RoomInviteRecord {
+    if (input.protocolVersion === 2 && this.identityPolicy.current() < 2) throw new Error("identity_upgrade_required");
     const invite: RoomInviteRecord = {
       inviteId: input.inviteId ?? crypto.randomUUID(),
       roomId: input.roomId,
       tokenHash: input.tokenHash,
       role: input.role,
+      protocolVersion: input.protocolVersion ?? 1,
       waitingRoomEnabled: input.waitingRoomEnabled,
       createdAt: input.createdAt ?? new Date().toISOString(),
       expiresAt: input.expiresAt,
@@ -362,23 +636,40 @@ export class MemoryStorage implements Storage {
       revokedBy: null
     };
     this.roomInvites.set(invite.inviteId, invite);
-    return invite;
+    return structuredClone(invite);
+  }
+  async createRoomInvite(input: Parameters<Storage["createRoomInvite"]>[0]): Promise<RoomInviteRecord> {
+    if (input.protocolVersion === 2) throw new IdentityStorageError("identity_forbidden");
+    return this.createRoomInviteSync(input);
+  }
+  async createRoomInviteV2(input: Parameters<Storage["createRoomInviteV2"]>[0]): Promise<RoomInviteRecord> {
+    assertV2InviteInput(input, this.identityNow);
+    const { actor, ...invite } = input;
+    return this.identityAdapter.authorizeInvite(input.roomId, actor,
+      at => {
+        assertV2InviteInput(input, () => at);
+        return this.createRoomInviteSync({ ...invite, createdAt: new Date(at).toISOString(),
+          createdBy: actor.actorType === "admin-token" ? actor.actorId : actor.proof.participantId, protocolVersion: 2 });
+      });
   }
   async listRoomInvites(roomId: string): Promise<RoomInviteRecord[]> {
-    return Array.from(this.roomInvites.values()).filter((invite) => invite.roomId === roomId);
+    return Array.from(this.roomInvites.values()).filter((invite) => invite.roomId === roomId).map(invite => structuredClone(invite));
   }
   async getRoomInvite(inviteId: string): Promise<RoomInviteRecord | null> {
-    return this.roomInvites.get(inviteId) ?? null;
+    const invite = this.roomInvites.get(inviteId);
+    return invite ? structuredClone(invite) : null;
   }
   async getRoomInviteByTokenHash(tokenHash: string): Promise<RoomInviteRecord | null> {
-    return Array.from(this.roomInvites.values()).find((invite) => invite.tokenHash === tokenHash) ?? null;
+    const invite = Array.from(this.roomInvites.values()).find((item) => item.tokenHash === tokenHash);
+    return invite ? structuredClone(invite) : null;
   }
   async revokeRoomInvite(roomId: string, inviteId: string, revokedAt: string, revokedBy?: string | null): Promise<RoomInviteRecord | null> {
     const invite = this.roomInvites.get(inviteId);
     if (!invite || invite.roomId !== roomId) return null;
+    if (invite.revokedAt) return structuredClone(invite);
     const updated = { ...invite, revokedAt, revokedBy: revokedBy ?? null };
     this.roomInvites.set(inviteId, updated);
-    return updated;
+    return structuredClone(updated);
   }
   async createWaitingRoomRequest(input: Omit<WaitingRoomRequestRecord, "requestId" | "createdAt" | "status" | "decidedAt" | "decidedBy"> & { requestId?: string; createdAt?: string; status?: WaitingRoomRequestRecord["status"] }): Promise<WaitingRoomRequestRecord> {
     const request: WaitingRoomRequestRecord = {
@@ -393,23 +684,29 @@ export class MemoryStorage implements Storage {
       decidedBy: null
     };
     this.waitingRoomRequests.set(request.requestId, request);
-    return request;
+    return structuredClone(request);
   }
   async listWaitingRoomRequests(roomId: string): Promise<WaitingRoomRequestRecord[]> {
-    return Array.from(this.waitingRoomRequests.values()).filter((request) => request.roomId === roomId);
+    return Array.from(this.waitingRoomRequests.values()).filter((request) => request.roomId === roomId).map(request => structuredClone(request));
   }
   async getWaitingRoomRequest(requestId: string): Promise<WaitingRoomRequestRecord | null> {
-    return this.waitingRoomRequests.get(requestId) ?? null;
+    const request = this.waitingRoomRequests.get(requestId);
+    return request ? structuredClone(request) : null;
   }
   async getWaitingRoomRequestForInviteParticipant(inviteId: string, participantId: string): Promise<WaitingRoomRequestRecord | null> {
-    return Array.from(this.waitingRoomRequests.values()).find((request) => request.inviteId === inviteId && request.participantId === participantId) ?? null;
+    const request = Array.from(this.waitingRoomRequests.values()).find((item) => item.inviteId === inviteId && item.participantId === participantId);
+    return request ? structuredClone(request) : null;
   }
   async updateWaitingRoomRequest(roomId: string, requestId: string, input: Partial<Pick<WaitingRoomRequestRecord, "status" | "decidedAt" | "decidedBy">>): Promise<WaitingRoomRequestRecord | null> {
     const existing = this.waitingRoomRequests.get(requestId);
     if (!existing || existing.roomId !== roomId) return null;
+    if (this.identityPolicy.current() >= 2 && existing.status !== "pending") {
+      if (input.status === existing.status) return structuredClone(existing);
+      throw new Error("waiting_decision_finalized");
+    }
     const updated = { ...existing, ...input };
     this.waitingRoomRequests.set(requestId, updated);
-    return updated;
+    return structuredClone(updated);
   }
   async getRoomNote(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null): Promise<RoomNoteRecord | null> {
     const note = this.roomNotes.get(roomNoteId(roomId, scope, ownerParticipantId));
@@ -516,7 +813,7 @@ export class MemoryStorage implements Storage {
   }
   async markRoomDocumentDeleted(roomId: string, documentId: string, deletedAt: string, deletedBy?: string | null): Promise<RoomDocumentRecord | null> {
     const existing = this.roomDocuments.get(documentId);
-    if (!existing || existing.roomId !== roomId) return null;
+    if (!existing || existing.roomId !== roomId || existing.deletedAt) return null;
     const updated = { ...existing, deletedAt, deletedBy: deletedBy ?? null, linkedSurfaceId: null };
     this.roomDocuments.set(documentId, updated);
     return structuredClone(updated);
@@ -566,22 +863,30 @@ export class MemoryStorage implements Storage {
     }
     return this.assets.delete(assetId);
   }
+  private readonly telemetrySink: MemoryTelemetrySink = {
+    appendDiagnostic: (roomId, payload) => {
+      const entries = this.diagnostics.get(roomId) ?? [];
+      entries.push(payload);
+      while (entries.length > 200) entries.shift();
+      this.diagnostics.set(roomId, entries);
+    },
+    appendXrTelemetry: (roomId, entry) => {
+      const entries = this.xrTelemetry.get(roomId) ?? [];
+      entries.push(entry);
+      while (entries.length > XR_TELEMETRY_EVENT_LIMIT) entries.shift();
+      this.xrTelemetry.set(roomId, entries);
+    }
+  };
   async addDiagnostic(roomId: string, payload: RuntimeDiagnosticRecord): Promise<void> {
-    const entries = this.diagnostics.get(roomId) ?? [];
-    entries.push(payload);
-    while (entries.length > 200) entries.shift();
-    this.diagnostics.set(roomId, entries);
+    this.telemetrySink.appendDiagnostic(roomId, payload);
   }
   async getDiagnostics(roomId: string): Promise<RuntimeDiagnosticRecord[]> { return this.diagnostics.get(roomId) ?? []; }
   async addXrTelemetry(roomId: string, participantId: string, payload: Record<string, unknown>): Promise<void> {
-    const entries = this.xrTelemetry.get(roomId) ?? [];
-    entries.push({
+    this.telemetrySink.appendXrTelemetry(roomId, {
       participantId,
       payload: structuredClone(payload),
       createdAt: new Date().toISOString()
     });
-    while (entries.length > XR_TELEMETRY_EVENT_LIMIT) entries.shift();
-    this.xrTelemetry.set(roomId, entries);
   }
   async getXrTelemetry(roomId: string): Promise<XrTelemetryEventRecord[]> {
     return (this.xrTelemetry.get(roomId) ?? []).map((entry) => structuredClone(entry));
@@ -744,14 +1049,273 @@ function isUniqueViolation(error: unknown): boolean {
 }
 
 export class PostgresStorage implements Storage {
+  readonly roomPlugins: Storage["roomPlugins"];
+  readonly roomPluginAccess: Storage["roomPluginAccess"];
+  readonly roomIdentities: Storage["roomIdentities"];
+  readonly identityProtocol: Storage["identityProtocol"];
+  readonly reserveIdentityAdmission: Storage["reserveIdentityAdmission"];
   private readonly integrationOperations: PostgresIntegrationOperations;
-
-  constructor(private readonly pool: Pool) {
+  constructor(private readonly pool: Pool, private readonly identityNow = Date.now, private readonly effectClient?: PoolClient,
+    private readonly effectRoomWrite = false, private readonly effectMode: "v2" | "legacy" = "v2") {
+    this.reserveIdentityAdmission = createPostgresAdmissionBudget(pool, identityNow);
     this.integrationOperations = new PostgresIntegrationOperations(pool);
+    this.roomIdentities = createPostgresRoomIdentities(pool, identityNow);
+    this.identityProtocol = createPostgresIdentityProtocol(pool);
+    const plugins = createPostgresRoomPluginAdapter(pool, identityNow);
+    this.roomPlugins = plugins.storage;
+    this.roomPluginAccess = plugins.access;
+  }
+  private get effectDatabase(): Pool | PoolClient { return this.effectClient ?? this.pool; }
+  async releasePersonalRoomOwnerResponse(proof: RoomIdentityCredential, send: (room: RoomRecord, identity: RoomIdentityRecord) => undefined): Promise<void> {
+    await roomFenceTransaction(this.pool, {}, async (client, checkAlive) => {
+      const held = await client.query("select 1 from rooms where tenant_id=$1 and room_id=$2 for share", [proof.tenantId, proof.roomId]);
+      if (!held.rowCount) throw new IdentityStorageError("room_not_found");
+      const room = await new PostgresStorage(this.pool, this.identityNow, client).getRoom(proof.roomId);
+      const state = await loadPostgresPersonalOwner(client, proof);
+      checkAlive();
+      const identity = assertPersonalOwnerResponse(state, proof, this.identityNow());
+      if (!room) throw new IdentityStorageError("room_not_found");
+      send({ ...room, ownerParticipantId: identity.participantId }, identity);
+    });
+  }
+  async releaseLegacyRoomCredential(selector: LegacyRoomCredentialSelector, options: Pick<LegacyRoomEffectOptions, "lockTimeoutMs" | "idleTimeoutMs">,
+    send: (fresh: LegacyRoomCredentialSnapshot) => undefined): Promise<void> {
+    const guard = captureLegacyCredentialRelease(selector, options, send);
+    await roomFenceTransaction(this.pool, guard, async (client, checkAlive) => {
+      // Parent before policy, matching schema init. Room FOR SHARE admits concurrent
+      // releases; child FOR SHARE holds revoke/decision autocommit writes until COMMIT.
+      const held = await client.query("select 1 from rooms where tenant_id=$1 and room_id=$2 for share", [guard.tenantId, guard.roomId]);
+      if (!held.rowCount) throw new IdentityStorageError("room_not_found");
+      const policy = (await client.query("select minimum_protocol from room_identity_protocol_policy where singleton=true for share")).rows[0];
+      if (!policy || !Number.isSafeInteger(policy.minimum_protocol) || policy.minimum_protocol < 1) {
+        throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+      }
+      const bound = (await client.query("select 1 from room_identity_authority_v2 where tenant_id=$1 and room_id=$2",
+        [guard.tenantId, guard.roomId])).rowCount;
+      if (policy.minimum_protocol !== 1 || bound) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      // Every read stays on the borrowed client; this.pool methods would borrow a second connection.
+      const room = await new PostgresStorage(this.pool, this.identityNow, client, false, "legacy").getRoom(guard.roomId);
+      if (!room || room.tenantId !== guard.tenantId) throw new IdentityStorageError("room_not_found");
+      const invite = guard.inviteTokenHash === null ? undefined : (await client.query(`select invite_id, room_id, token_hash, role, protocol_version,
+        waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites
+        where room_id=$1 and token_hash=$2 for share`, [guard.roomId, guard.inviteTokenHash])).rows[0];
+      const waiting = invite === undefined ? undefined : (await client.query(`select request_id, room_id, invite_id, participant_id,
+        display_name, status, created_at, decided_at, decided_by from room_waiting_requests
+        where room_id=$1 and invite_id=$2 and participant_id=$3 for share`, [guard.roomId, invite.invite_id, guard.participantId])).rows[0];
+      checkAlive();
+      // The release is the final authorized operation: read-only COMMIT follows with no recheck.
+      send(legacyCredentialSnapshot(room, invite ? mapRoomInviteRow(invite) : null, waiting ? mapWaitingRoomRequestRow(waiting) : null));
+    });
+  }
+  async writeLegacyAdmission(input: LegacyAdmissionWriteInput, options: Pick<LegacyRoomEffectOptions, "lockTimeoutMs" | "idleTimeoutMs">):
+    Promise<LegacyAdmissionWriteReceipt> {
+    const guard = captureLegacyAdmissionWrite(input, options);
+    // The last effective pair, frozen store copies, rechecked on a fresh store instant just before COMMIT.
+    let leases = guard.leases;
+    return roomFenceTransaction(this.pool, guard, async (client, checkAlive) => {
+      // Parent before policy, matching schema init. A host claim holds NO KEY UPDATE so the seat cannot move; a pending
+      // insert never touches the parent, so SHARE suffices. Child FOR SHARE holds revoke/decision autocommit writes until COMMIT.
+      const held = (await client.query(`select jsonb_typeof(session_control) as control_type, session_control->>'hostParticipantId' as host
+        from rooms where tenant_id=$1 and room_id=$2 ${guard.mode === "claim_host" ? "for no key update" : "for share"}`,
+        [guard.tenantId, guard.roomId])).rows[0];
+      if (!held) throw new IdentityStorageError("room_not_found");
+      const policy = (await client.query("select minimum_protocol from room_identity_protocol_policy where singleton=true for share")).rows[0];
+      if (!policy || !Number.isSafeInteger(policy.minimum_protocol) || policy.minimum_protocol < 1) {
+        throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+      }
+      const bound = (await client.query("select 1 from room_identity_authority_v2 where tenant_id=$1 and room_id=$2",
+        [guard.tenantId, guard.roomId])).rowCount;
+      if (policy.minimum_protocol !== 1 || bound) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      // Every read stays on the borrowed client; this.pool methods would borrow a second connection.
+      const room = await new PostgresStorage(this.pool, this.identityNow, client, false, "legacy").getRoom(guard.roomId);
+      if (!room || room.tenantId !== guard.tenantId) throw new IdentityStorageError("room_not_found");
+      const inviteRow = guard.inviteTokenHash === null ? undefined : (await client.query(`select invite_id, room_id, token_hash, role, protocol_version,
+        waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites
+        where room_id=$1 and token_hash=$2 for share`, [guard.roomId, guard.inviteTokenHash])).rows[0];
+      const invite = inviteRow ? mapRoomInviteRow(inviteRow) : null;
+      const readWaiting = async () => {
+        const row = invite && (await client.query(`select request_id, room_id, invite_id, participant_id,
+          display_name, status, created_at, decided_at, decided_by from room_waiting_requests
+          where room_id=$1 and invite_id=$2 and participant_id=$3 for share`, [guard.roomId, invite.inviteId, guard.participantId])).rows[0];
+        return row ? mapWaitingRoomRequestRow(row) : null;
+      };
+      let waiting = await readWaiting();
+      const seat = legacyHostSeat(held.control_type === "object", held.host, guard.participantId);
+      const fresh = () => legacyCredentialSnapshot(structuredClone(room), invite && structuredClone(invite), waiting && structuredClone(waiting));
+      const recheck = () => { checkAlive(); assertLegacyWriteLeases(leases, this.identityNow()); };
+      const decideNow = (redecided: boolean) => {
+        checkAlive();
+        const at = this.identityNow();
+        assertLegacyWriteLeases(guard.leases, at);
+        const pins = legacyWritePins(seat, invite, waiting);
+        const intent = decideLegacyWrite(guard, fresh(), at, pins, redecided);
+        leases = effectiveLegacyLeases(guard, intent, pins);
+        recheck();
+        return { at, intent };
+      };
+      const first = decideNow(false);
+      if (first.intent.kind === "set_host") {
+        // Only the host key, only while the raw control is an object with no host: drift writes nothing.
+        const seated = await client.query(`update rooms set session_control = session_control || jsonb_build_object('hostParticipantId', $3::text)
+          where tenant_id=$1 and room_id=$2 and jsonb_typeof(session_control)='object' and coalesce(session_control->>'hostParticipantId','')=''`,
+          [guard.tenantId, guard.roomId, guard.participantId]);
+        recheck();
+        return seated.rowCount === 1 ? LEGACY_HOST_READY : LEGACY_WRITE_CHANGED;
+      }
+      if (first.intent.kind !== "insert_pending") return unwrittenLegacyReceipt(first.intent, fresh);
+      // status is fixed pending, never inherited from a DB default
+      const requestId = crypto.randomUUID();
+      const inserted = await client.query(`insert into room_waiting_requests (request_id, room_id, invite_id, participant_id, display_name, status, created_at)
+        values ($1,$2,$3,$4,$5,'pending',$6) on conflict (invite_id, participant_id) do nothing returning request_id`,
+        [requestId, guard.roomId, first.intent.inviteId, guard.participantId, guard.displayName, new Date(first.at).toISOString()]);
+      recheck();
+      if (inserted.rows[0]?.request_id === requestId) return legacyPendingReceipt(requestId, true);
+      // A concurrent request took the natural key: re-read it under SHARE and decide once more, never inserting again.
+      waiting = await readWaiting();
+      return unwrittenLegacyReceipt(decideNow(true).intent, fresh);
+    }, () => { assertLegacyWriteLeases(leases, this.identityNow()); return undefined; });
+  }
+  async applyLegacyRoomControl(input: LegacyRoomControlInput, options: LegacyRoomControlOptions): Promise<LegacyRoomControlReceipt> {
+    const guard = captureLegacyRoomControl(input, options);
+    return roomFenceTransaction(this.pool, guard, async (client, checkAlive) => {
+      // Parent before policy, matching schema init. NO KEY UPDATE holds the raw control column until COMMIT.
+      const row = (await client.query(`select tenant_id, room_id, status, disabled_at, session_control
+        from rooms where tenant_id=$1 and room_id=$2 for no key update`, [guard.tenantId, guard.roomId])).rows[0];
+      if (!row) throw new IdentityStorageError("room_not_found");
+      const policy = (await client.query("select minimum_protocol from room_identity_protocol_policy where singleton=true for share")).rows[0];
+      if (!policy || !Number.isSafeInteger(policy.minimum_protocol) || policy.minimum_protocol < 1) {
+        throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+      }
+      const bound = (await client.query("select 1 from room_identity_authority_v2 where tenant_id=$1 and room_id=$2",
+        [guard.tenantId, guard.roomId])).rowCount;
+      if (policy.minimum_protocol !== 1 || bound) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      const recheck = () => { checkAlive(); assertLegacyControlLease(guard, this.identityNow()); };
+      checkAlive();
+      const at = this.identityNow();
+      assertLegacyControlLease(guard, at);
+      // Raw row as stored: a null or non-object column is drift (changed), never defaults; presence is sampled only in here.
+      const decision = reduceLegacyRoomControl(guard, { tenantId: row.tenant_id, roomId: row.room_id, status: row.status,
+        disabledAt: row.disabled_at, rawControl: row.session_control }, at);
+      if (decision.kind !== "apply") return decision;
+      recheck();
+      // Only the control column, only while it is still the exact object read: drift writes nothing.
+      const updated = await client.query(`update rooms set session_control = session_control || $3::jsonb
+        where tenant_id=$1 and room_id=$2 and jsonb_typeof(session_control)='object' and session_control = $4::jsonb
+        returning session_control`, [guard.tenantId, guard.roomId, JSON.stringify(decision.patch), JSON.stringify(row.session_control)]);
+      recheck();
+      return updated.rowCount === 1 ? appliedLegacyControl(updated.rows[0].session_control) : LEGACY_CONTROL_CHANGED;
+    }, () => { assertLegacyControlLease(guard, this.identityNow()); return undefined; });
+  }
+  async withRoomIdentityEffect<T>(guard: RoomEffectGuard, effect: (scoped: RoomIdentityEffectStorage, current: RoomEffectActor) => Promise<T>): Promise<T> {
+    return roomFenceTransaction(this.pool, {}, async (client, checkAlive) => {
+      // Every v2 transfer/revoke locks this parent room FOR UPDATE. Keep only
+      // the DB mutation (never S3 or a room-state RPC) behind this short fence.
+      const room = await client.query(guard.roomWrite
+        ? "select 1 from rooms where tenant_id=$1 and room_id=$2 for no key update"
+        : "select 1 from rooms where tenant_id=$1 and room_id=$2 for share",
+        [guard.tenantId, guard.roomId]);
+      if (!room.rowCount) throw new IdentityStorageError("room_not_found");
+      const current = await assertPostgresEffect(client, guard, this.identityNow);
+      // The parent lock pins role/epoch, but awaited SQL can outlive the original
+      // session deadline: recheck it before each operation and before COMMIT.
+      const check = () => { checkAlive(); assertCurrentEffect(guard, current, this.identityNow()); };
+      const scoped = createRoomEffectFacade(new PostgresStorage(this.pool, this.identityNow, client, guard.roomWrite === true),
+        { roomWrite: guard.roomWrite, check });
+      let released = false;
+      const result = await effect({ ...scoped, releaseResponse: send => scoped.releaseResponse(() => { released = true; send(); }) }, current);
+      // A released response was the final authorized operation; the facade rejects any later one.
+      if (!released) check();
+      return result;
+    });
+  }
+  async withLegacyRoomEffect<T>(scope: { tenantId: string; roomId: string }, options: LegacyRoomEffectOptions,
+    effect: (scoped: RoomIdentityEffectStorage) => Promise<T>): Promise<T> {
+    return roomFenceTransaction(this.pool, options, async (client, checkAlive) => {
+      const room = await client.query(options.roomWrite
+        ? "select 1 from rooms where tenant_id=$1 and room_id=$2 for no key update"
+        : "select 1 from rooms where tenant_id=$1 and room_id=$2 for share", [scope.tenantId, scope.roomId]);
+      if (!room.rowCount) throw new IdentityStorageError("room_not_found");
+      const policy = (await client.query("select minimum_protocol from room_identity_protocol_policy where singleton=true for share")).rows[0];
+      if (!policy || !Number.isSafeInteger(policy.minimum_protocol) || policy.minimum_protocol < 1) {
+        throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+      }
+      const bound = (await client.query("select 1 from room_identity_authority_v2 where tenant_id=$1 and room_id=$2",
+        [scope.tenantId, scope.roomId])).rowCount;
+      if (policy.minimum_protocol !== 1 || bound) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      return effect(createRoomEffectFacade(new PostgresStorage(this.pool, this.identityNow, client, options.roomWrite === true, "legacy"),
+        { roomWrite: options.roomWrite, check: checkAlive }));
+    });
+  }
+  async withLegacyVirtualRoomEffect<T>(roomId: string, options: VirtualRoomEffectOptions,
+    effect: (scoped: VirtualRoomEffectStorage) => Promise<T>): Promise<T> {
+    const guard = captureVirtualRoomGuard(roomId, options);
+    assertVirtualRoomDeadline(guard, this.identityNow());
+    return roomFenceTransaction(this.pool, guard, async (client, checkAlive) => {
+      // Every mode acquires rooms before policy, matching schema init's order.
+      // Write and issuance-pin modes take SHARE, excluding INSERTs in every tenant
+      // until release/COMMIT; keep these broad locks short. Ordinary read takes
+      // ACCESS SHARE and may expose only separate virtual state: it admits writes
+      // and does not pin absence. Policy FOR SHARE pins the floor in every mode.
+      await client.query(guard.roomWrite || guard.pinAbsence ? "lock table rooms in share mode" : "lock table rooms in access share mode");
+      const policy = (await client.query("select minimum_protocol from room_identity_protocol_policy where singleton=true for share")).rows[0];
+      if (!policy || !Number.isSafeInteger(policy.minimum_protocol) || policy.minimum_protocol < 1) {
+        throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+      }
+      if (policy.minimum_protocol !== 1) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      if ((await client.query("select 1 from rooms where room_id=$1", [guard.roomId])).rowCount) {
+        throw new IdentityBoundaryError(409, "room_state_changed");
+      }
+      if ((await client.query("select 1 from room_identity_authority_v2 where room_id=$1", [guard.roomId])).rowCount) {
+        throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      }
+      const check = () => { checkAlive(); assertVirtualRoomDeadline(guard, this.identityNow()); };
+      check();
+      const scoped = new PostgresStorage(this.pool, this.identityNow, client, guard.roomWrite, "legacy");
+      let serialized: Promise<unknown> | undefined;
+      const serialize = async () => {
+        await (serialized ??= client.query("select pg_advisory_xact_lock(hashtextextended('vrata:virtual-room-telemetry:'||$1,0))", [guard.roomId]));
+        check();
+      };
+      return runVirtualRoomEffect({
+        addDiagnostic: async (target, payload) => { await serialize(); await scoped.addDiagnostic(target, payload); },
+        addXrTelemetry: async (target, participantId, payload) => { await serialize(); await scoped.addXrTelemetry(target, participantId, payload); }
+      }, guard, check, effect);
+    });
+  }
+  async getPersonalRoomState(tenantId: string, roomId: string): Promise<RoomPersonalState | null> {
+    const result = await this.effectDatabase.query("select personal_state from rooms where tenant_id=$1 and room_id=$2 and room_type='personal'",
+      [tenantId, roomId]);
+    return result.rows[0] ? result.rows[0].personal_state ?? {} : null;
+  }
+  async updatePersonalRoomState(tenantId: string, roomId: string, state: RoomPersonalState): Promise<RoomPersonalState | null> {
+    if (this.effectClient && !this.effectRoomWrite) throw new Error("personal_state_requires_room_write_fence");
+    const result = await this.effectDatabase.query("update rooms set personal_state=$3::jsonb where tenant_id=$1 and room_id=$2 and room_type='personal' returning personal_state",
+      [tenantId, roomId, JSON.stringify(state)]);
+    return result.rows[0] ? result.rows[0].personal_state ?? {} : null;
+  }
+  async setRoomSceneBundleUrl(tenantId: string, roomId: string, sceneBundleUrl: string): Promise<RoomRecord | null> {
+    if (this.effectClient && !this.effectRoomWrite) throw new Error("scene_binding_requires_room_write_fence");
+    const room = await this.getRoom(roomId);
+    if (!room || room.tenantId !== tenantId) return null;
+    assertRoomTemplatePatch(room, { sceneBundleUrl });
+    const result = await this.effectDatabase.query(`update rooms set scene_bundle_url=$3,
+      template_snapshot=jsonb_set(coalesce(template_snapshot,$6::jsonb),'{roomConfig,sceneBundleUrl}',to_jsonb($3::text),true)
+      where tenant_id=$1 and room_id=$2 and template_id=$4
+        and coalesce(template_version,(select t.current_version from templates t where t.template_id=rooms.template_id))=$5
+      returning room_id`, [tenantId, roomId, sceneBundleUrl, room.templateId, room.templateVersion, JSON.stringify(room.templateSnapshot)]);
+    if (!result.rowCount) {
+      if (await this.getRoom(roomId)) throw new Error("room_template_binding_changed");
+      return null;
+    }
+    return this.getRoom(roomId);
+  }
+  async hasRoomIdentityAuthority(roomId: string): Promise<boolean> {
+    return (await this.pool.query(`select exists(select 1 from rooms r join room_identity_authority_v2 a using (tenant_id,room_id) where r.room_id=$1) as bound`, [roomId])).rows[0].bound;
   }
 
   async init(): Promise<void> {
     await initializePostgresStorage(this.pool, {
+      installRoomExtensions: async (client) => { await installRoomIdentitySchema(client); await installRoomPluginSchema(client); },
       seed: (client) => this.seed(client),
       validateStoredTemplateVersions: (client) => this.validateStoredTemplateVersions(client),
       synchronizeTemplateCatalog: (client) => this.synchronizeTemplateCatalog(client)
@@ -1005,7 +1569,7 @@ export class PostgresStorage implements Storage {
     return result.rows.map(mapRoomRow);
   }
   async getRoom(roomId: string): Promise<RoomRecord | null> {
-    const result = await this.pool.query(`
+    const result = await this.effectDatabase.query(`
       select r.room_id, r.tenant_id, r.template_id, r.template_version, r.template_snapshot,
              tv.template_id as template_version_template_id, tv.version as template_version_resolved,
              tv.snapshot as template_version_snapshot, tv.content_hash as template_version_content_hash,
@@ -1022,13 +1586,10 @@ export class PostgresStorage implements Storage {
     const row = result.rows[0];
     return row ? mapRoomRow(row) : null;
   }
-  async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
-    return this.insertRoom(this.pool, input);
-  }
-  private async insertRoom(executor: Pick<PoolClient, "query">, input: Partial<RoomRecord>): Promise<RoomRecord> {
+  private async insertRoom(input: Partial<RoomRecord>, executor: Pick<PoolClient, "query">, options?: { allowUnownedPersonal?: boolean }): Promise<RoomRecord> {
     const templateId = input.templateId ?? (input.roomType === "personal" ? "personal-workspace-basic" : "meeting-room-basic");
     const versionSnapshot = await this.requireActiveTemplateVersion(templateId, executor);
-    input = materializeStoredRoomInput(versionSnapshot, input);
+    input = materializeStoredRoomInput(versionSnapshot, input, options);
     const roomType = defaultRoomType(input.roomType);
     const roomWithoutTemplateMetadata: RoomRecordWithoutTemplateMetadata = {
       roomId: input.roomId ?? crypto.randomUUID(),
@@ -1071,10 +1632,75 @@ export class PostgresStorage implements Storage {
     if ((result.rowCount ?? 0) === 0) throw new Error(`template_deprecated:${room.templateId}`);
     return room;
   }
+  async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> { return this.insertRoom(input, this.pool); }
+  async createAdministrativeRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
+    input = structuredClone(input);
+    return this.roomCreationTransaction("admin", async (client, minimumProtocol) => {
+      const floor = assertAdministrativeRoomSeed(minimumProtocol, input);
+      return this.insertRoom(input, client, { allowUnownedPersonal: floor >= 2 });
+    });
+  }
+  private async roomCreationTransaction<T>(version: "legacy" | "v2" | "admin", effect: (client: PoolClient, minimumProtocol: number) => Promise<T>): Promise<T> {
+    return roomFenceTransaction(this.pool, {}, async client => {
+      await client.query("lock table rooms in row exclusive mode");
+      const policy = (await client.query("select minimum_protocol from room_identity_protocol_policy where singleton=true for share")).rows[0];
+      if (!policy || !Number.isSafeInteger(policy.minimum_protocol) || policy.minimum_protocol < 1) throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+      if (version !== "admin" && (version === "legacy" ? policy.minimum_protocol !== 1 : policy.minimum_protocol < 2)) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      return effect(client, policy.minimum_protocol);
+    });
+  }
+  async createLegacyPersonalRoom(input: Parameters<Storage["createLegacyPersonalRoom"]>[0]) {
+    return this.roomCreationTransaction("legacy", async client => {
+      const existing = (await client.query("select room_id from rooms where tenant_id=$1 and room_type='personal' and owner_participant_id=$2 order by room_id limit 1",
+        [input.tenantId, input.ownerParticipantId])).rows[0];
+      const scoped = new PostgresStorage(this.pool, this.identityNow, client, true, "legacy");
+      const reopen = async (roomId: string) => {
+        const room = await scoped.getRoom(roomId);
+        if (!room || room.tenantId !== input.tenantId || room.roomType !== "personal" || room.ownerParticipantId !== input.ownerParticipantId) throw new Error("room_slug_conflict");
+        const bound = await client.query("select 1 from room_identity_authority_v2 where tenant_id=$1 and room_id=$2", [input.tenantId, roomId]);
+        if (bound.rowCount) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+        return { room, created: false };
+      };
+      if (existing) return reopen(existing.room_id);
+      await client.query("savepoint legacy_personal_insert");
+      try { return { room: await this.insertRoom({ ...input, roomType: "personal" }, client), created: true }; }
+      catch (error) {
+        if ((error as { code?: string }).code !== "23505") throw error;
+        await client.query("rollback to savepoint legacy_personal_insert");
+        return reopen(input.roomId);
+      }
+    });
+  }
+  async createPersonalOwnedRoom(input: Parameters<Storage["createPersonalOwnedRoom"]>[0]) {
+    if (typeof input.displayName !== "string" || input.displayName.length > 80) throw new Error("invalid_identity_input");
+    const participantId = crypto.randomUUID();
+    return this.roomCreationTransaction("v2", async client => {
+      const room = await this.insertRoom({ ...input, roomId: crypto.randomUUID(), roomType: "personal",
+        ownerParticipantId: participantId, visibility: "private", guestAllowed: false, sessionControl: { hostParticipantId: participantId } }, client);
+      const identity: import("./identity/contracts.js").RoomIdentityRecord = {
+        tenantId: room.tenantId, roomId: room.roomId, identityId: crypto.randomUUID(), participantId,
+        displayName: input.displayName, baseRole: "member", provenance: { kind: "personal-owner" }, authEpoch: 1,
+        createdAt: new Date().toISOString(), revokedAt: null
+      };
+      await client.query(`insert into room_identities_v2
+        (tenant_id,room_id,identity_id,participant_id,display_name,base_role,provenance,auth_epoch,created_at)
+        values ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9)`, [identity.tenantId, identity.roomId, identity.identityId,
+        identity.participantId, identity.displayName, identity.baseRole, JSON.stringify(identity.provenance), identity.authEpoch, identity.createdAt]);
+      const lifecycle = identityLifecycle(room.sessionControl);
+      await client.query(`insert into room_identity_authority_v2
+        (tenant_id,room_id,revision,host_identity_id,owner_identity_id,presenter_identity_id,lifecycle)
+        values ($1,$2,1,$3,$3,null,$4::jsonb)`, [room.tenantId, room.roomId, identity.identityId, JSON.stringify(lifecycle)]);
+      return { room, identity };
+    });
+  }
   async updateRoom(roomId: string, input: Partial<RoomRecord>, expectedTemplateBinding?: ExpectedRoomTemplateBinding): Promise<RoomRecord | null> {
     const existing = await this.getRoom(roomId);
     if (!existing) {
       return null;
+    }
+    if (input.tenantId !== undefined && input.tenantId !== existing.tenantId) {
+      const bindings = await this.pool.query(`select 1 from room_identity_authority_v2 where tenant_id=$1 and room_id=$2`, [existing.tenantId, roomId]);
+      if (bindings.rowCount) throw new Error(IDENTITY_LIFECYCLE_REQUIRES_V2);
     }
     assertRoomTemplatePatch(existing, input);
     if (
@@ -1118,25 +1744,38 @@ export class PostgresStorage implements Storage {
     if (!versionSnapshot) throw new Error(`template_version_not_found:${existing.templateId}`);
     const updated = bindRoomTemplateMetadata(updatedWithoutTemplateMetadata, versionSnapshot);
     const result = await this.pool.query(
-      `update rooms set name = $2, room_type = $3, owner_participant_id = $4, status = $5, disabled_at = $6, disabled_by = $7, visibility = $8, scene_bundle_url = $9, features = $10::jsonb, asset_ids = $11::jsonb, theme = $12::jsonb, guest_allowed = $13, avatar_config = $14::jsonb, session_control = $15::jsonb, personal_state = $16::jsonb, template_version = $17, template_snapshot = $18::jsonb where room_id = $1 and template_id = $19 and coalesce(template_version, (select t.current_version from templates t where t.template_id = rooms.template_id)) = $20`,
-      [roomId, updated.name, updated.roomType, updated.ownerParticipantId ?? null, updated.status, updated.disabledAt ?? null, updated.disabledBy ?? null, updated.visibility, updated.sceneBundleUrl ?? null, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed, JSON.stringify(updated.avatarConfig), JSON.stringify(updated.sessionControl), JSON.stringify(updated.personalState), updated.templateVersion, JSON.stringify(updated.templateSnapshot), existing.templateId, existing.templateVersion]
+      `update rooms set name = $2, room_type = case when $22::boolean then $3 else room_type end, owner_participant_id = case when $23::boolean then $4 else owner_participant_id end, status = $5, disabled_at = $6, disabled_by = $7, visibility = $8, scene_bundle_url = $9, features = $10::jsonb, asset_ids = $11::jsonb, theme = $12::jsonb, guest_allowed = $13, avatar_config = $14::jsonb, session_control = case when $24::boolean then $15::jsonb else session_control end, personal_state = case when $21::boolean then $16::jsonb else personal_state end, template_version = $17, template_snapshot = $18::jsonb where room_id = $1 and template_id = $19 and coalesce(template_version, (select t.current_version from templates t where t.template_id = rooms.template_id)) = $20 and (case when room_type = 'personal' then 'personal' else 'standard' end) = $25 returning room_type, owner_participant_id, session_control, personal_state`,
+      [roomId, updated.name, updated.roomType, updated.ownerParticipantId ?? null, updated.status, updated.disabledAt ?? null, updated.disabledBy ?? null, updated.visibility, updated.sceneBundleUrl ?? null, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed, JSON.stringify(updated.avatarConfig), JSON.stringify(updated.sessionControl), JSON.stringify(updated.personalState), updated.templateVersion, JSON.stringify(updated.templateSnapshot), existing.templateId, existing.templateVersion, input.personalState != null, input.roomType != null, input.ownerParticipantId !== undefined, input.sessionControl != null, defaultRoomType(existing.roomType)]
     );
     if ((result.rowCount ?? 0) === 0) {
       if (await this.getRoom(roomId)) throw new Error("room_template_binding_changed");
       return null;
     }
+    const row = result.rows[0];
+    updated.roomType = defaultRoomType(row.room_type ?? undefined);
+    updated.ownerParticipantId = row.owner_participant_id ?? null;
+    updated.sessionControl = defaultSessionControl(row.session_control);
+    updated.personalState = defaultPersonalState(row.personal_state ?? updated.personalState);
     return updated;
   }
-  async deleteRoom(roomId: string): Promise<boolean> {
-    const result = await this.pool.query(`delete from rooms where room_id = $1`, [roomId]);
-    return (result.rowCount ?? 0) > 0;
+  async deleteRoom(roomId: string, pluginDeletion?: { tenantId: string; deletionId: string }): Promise<boolean> {
+    return roomFenceTransaction(this.pool, {}, async client => {
+      const room = (await client.query("select tenant_id from rooms where room_id=$1 for update", [roomId])).rows[0];
+      if (!room) return false;
+      if (pluginDeletion && room.tenant_id !== pluginDeletion.tenantId) return false;
+      await preparePostgresRoomPluginRemoval(client, { tenantId: room.tenant_id, roomId }, pluginDeletion?.deletionId);
+      const result = await client.query("delete from rooms where room_id=$1", [roomId]);
+      return (result.rowCount ?? 0) > 0;
+    });
   }
   async createRoomInvite(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy"> & { inviteId?: string; createdAt?: string }): Promise<RoomInviteRecord> {
+    if (input.protocolVersion === 2) throw new IdentityStorageError("identity_forbidden");
     const invite: RoomInviteRecord = {
       inviteId: input.inviteId ?? crypto.randomUUID(),
       roomId: input.roomId,
       tokenHash: input.tokenHash,
       role: input.role,
+      protocolVersion: input.protocolVersion ?? 1,
       waitingRoomEnabled: input.waitingRoomEnabled,
       createdAt: input.createdAt ?? new Date().toISOString(),
       expiresAt: input.expiresAt,
@@ -1145,26 +1784,68 @@ export class PostgresStorage implements Storage {
       revokedBy: null
     };
     await this.pool.query(
-      `insert into room_invites (invite_id, room_id, token_hash, role, waiting_room_enabled, created_at, expires_at, created_by) values ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [invite.inviteId, invite.roomId, invite.tokenHash, invite.role, invite.waitingRoomEnabled, invite.createdAt, invite.expiresAt, invite.createdBy]
+      `insert into room_invites (invite_id, room_id, token_hash, role, protocol_version, waiting_room_enabled, created_at, expires_at, created_by) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [invite.inviteId, invite.roomId, invite.tokenHash, invite.role, invite.protocolVersion, invite.waitingRoomEnabled, invite.createdAt, invite.expiresAt, invite.createdBy]
     );
     return invite;
   }
+  async createRoomInviteV2(input: Parameters<Storage["createRoomInviteV2"]>[0]): Promise<RoomInviteRecord> {
+    assertV2InviteInput(input, this.identityNow);
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const room = (await client.query(`select tenant_id,room_id,status,disabled_at from rooms where room_id=$1 for update`, [input.roomId])).rows[0];
+      if (!room || room.status === "disabled" || room.disabled_at) throw new IdentityStorageError("room_blocked");
+      const floor = (await client.query("select minimum_protocol from room_identity_protocol_policy where singleton=true for share")).rows[0];
+      if (!floor || floor.minimum_protocol < 2) throw new IdentityStorageError("identity_forbidden");
+      const authority = (await client.query(`select host_identity_id,owner_identity_id,lifecycle from room_identity_authority_v2
+        where tenant_id=$1 and room_id=$2`, [room.tenant_id, input.roomId])).rows[0];
+      if (authority?.lifecycle?.endedAt) throw new IdentityStorageError("room_blocked");
+      let authorized = input.actor.actorType === "admin-token" && input.actor.role === "admin" && Boolean(input.actor.actorId);
+      if (input.actor.actorType === "room-session") {
+        const proof = input.actor.proof;
+        const identity = (await client.query(`select identity_id,participant_id,auth_epoch,revoked_at from room_identities_v2
+          where tenant_id=$1 and room_id=$2 and identity_id=$3`, [room.tenant_id, input.roomId, proof.identityId])).rows[0];
+        authorized = proof.tenantId === room.tenant_id && proof.roomId === room.room_id && Boolean(identity) && !identity.revoked_at
+          && identity.participant_id === proof.participantId && identity.auth_epoch === proof.authEpoch
+          && [authority?.host_identity_id, authority?.owner_identity_id].includes(proof.identityId);
+      }
+      // All waits and authority reads precede the one mutation-time clock sample.
+      const at = this.identityNow();
+      assertActorSession(input.actor, at);
+      if (!authorized) throw new IdentityStorageError("identity_forbidden");
+      assertV2InviteInput(input, () => at);
+      const invite: RoomInviteRecord = {
+        inviteId: crypto.randomUUID(), roomId: input.roomId, tokenHash: input.tokenHash, role: input.role,
+        protocolVersion: 2, waitingRoomEnabled: input.waitingRoomEnabled, expiresAt: input.expiresAt,
+        createdAt: new Date(at).toISOString(), createdBy: input.actor.actorType === "admin-token" ? input.actor.actorId : input.actor.proof.participantId,
+        revokedAt: null, revokedBy: null
+      };
+      await client.query(`insert into room_invites
+        (invite_id,room_id,token_hash,role,protocol_version,waiting_room_enabled,created_at,expires_at,created_by)
+        values ($1,$2,$3,$4,2,$5,$6,$7,$8)`, [invite.inviteId, invite.roomId, invite.tokenHash,
+        invite.role, invite.waitingRoomEnabled, invite.createdAt, invite.expiresAt, invite.createdBy]);
+      await client.query("commit");
+      return invite;
+    } catch (error) { await client.query("rollback"); throw error; }
+    finally { client.release(); }
+  }
   async listRoomInvites(roomId: string): Promise<RoomInviteRecord[]> {
-    const result = await this.pool.query(`select invite_id, room_id, token_hash, role, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites where room_id = $1 order by created_at desc`, [roomId]);
+    const result = await this.effectDatabase.query(`select invite_id, room_id, token_hash, role, protocol_version, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites where room_id = $1 order by created_at desc`, [roomId]);
     return result.rows.map(mapRoomInviteRow);
   }
   async getRoomInvite(inviteId: string): Promise<RoomInviteRecord | null> {
-    const result = await this.pool.query(`select invite_id, room_id, token_hash, role, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites where invite_id = $1`, [inviteId]);
+    const result = await this.pool.query(`select invite_id, room_id, token_hash, role, protocol_version, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites where invite_id = $1`, [inviteId]);
     return result.rows[0] ? mapRoomInviteRow(result.rows[0]) : null;
   }
   async getRoomInviteByTokenHash(tokenHash: string): Promise<RoomInviteRecord | null> {
-    const result = await this.pool.query(`select invite_id, room_id, token_hash, role, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites where token_hash = $1`, [tokenHash]);
+    const result = await this.pool.query(`select invite_id, room_id, token_hash, role, protocol_version, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites where token_hash = $1`, [tokenHash]);
     return result.rows[0] ? mapRoomInviteRow(result.rows[0]) : null;
   }
   async revokeRoomInvite(roomId: string, inviteId: string, revokedAt: string, revokedBy?: string | null): Promise<RoomInviteRecord | null> {
-    const result = await this.pool.query(
-      `update room_invites set revoked_at = $3, revoked_by = $4 where room_id = $1 and invite_id = $2 returning invite_id, room_id, token_hash, role, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by`,
+    const result = await this.effectDatabase.query(
+      `update room_invites set revoked_by = case when revoked_at is null then $4 else revoked_by end,
+        revoked_at = coalesce(revoked_at,$3) where room_id = $1 and invite_id = $2 returning invite_id, room_id, token_hash, role, protocol_version, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by`,
       [roomId, inviteId, revokedAt, revokedBy ?? null]
     );
     return result.rows[0] ? mapRoomInviteRow(result.rows[0]) : null;
@@ -1190,11 +1871,11 @@ export class PostgresStorage implements Storage {
     return mapWaitingRoomRequestRow(result.rows[0]);
   }
   async listWaitingRoomRequests(roomId: string): Promise<WaitingRoomRequestRecord[]> {
-    const result = await this.pool.query(`select request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by from room_waiting_requests where room_id = $1 order by created_at desc`, [roomId]);
+    const result = await this.effectDatabase.query(`select request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by from room_waiting_requests where room_id = $1 order by created_at desc`, [roomId]);
     return result.rows.map(mapWaitingRoomRequestRow);
   }
   async getWaitingRoomRequest(requestId: string): Promise<WaitingRoomRequestRecord | null> {
-    const result = await this.pool.query(`select request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by from room_waiting_requests where request_id = $1`, [requestId]);
+    const result = await this.effectDatabase.query(`select request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by from room_waiting_requests where request_id = $1`, [requestId]);
     return result.rows[0] ? mapWaitingRoomRequestRow(result.rows[0]) : null;
   }
   async getWaitingRoomRequestForInviteParticipant(inviteId: string, participantId: string): Promise<WaitingRoomRequestRecord | null> {
@@ -1202,10 +1883,18 @@ export class PostgresStorage implements Storage {
     return result.rows[0] ? mapWaitingRoomRequestRow(result.rows[0]) : null;
   }
   async updateWaitingRoomRequest(roomId: string, requestId: string, input: Partial<Pick<WaitingRoomRequestRecord, "status" | "decidedAt" | "decidedBy">>): Promise<WaitingRoomRequestRecord | null> {
-    const result = await this.pool.query(
-      `update room_waiting_requests set status = coalesce($3, status), decided_at = coalesce($4, decided_at), decided_by = coalesce($5, decided_by) where room_id = $1 and request_id = $2 returning request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by`,
+    const v2 = this.effectClient ? this.effectMode === "v2" : await this.identityProtocol.minimum() >= 2;
+    const result = await this.effectDatabase.query(
+      `update room_waiting_requests set status = coalesce($3, status), decided_at = coalesce($4, decided_at), decided_by = coalesce($5, decided_by) where room_id = $1 and request_id = $2 ${v2 ? "and status='pending'" : ""} returning request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by`,
       [roomId, requestId, input.status ?? null, input.decidedAt ?? null, input.decidedBy ?? null]
     );
+    if (v2 && !result.rows[0]) {
+      const current = await this.getWaitingRoomRequest(requestId);
+      if (current?.roomId === roomId && current.status !== "pending") {
+        if (input.status === current.status) return current;
+        throw new Error("waiting_decision_finalized");
+      }
+    }
     return result.rows[0] ? mapWaitingRoomRequestRow(result.rows[0]) : null;
   }
   async getRoomNote(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null): Promise<RoomNoteRecord | null> {
@@ -1218,9 +1907,9 @@ export class PostgresStorage implements Storage {
   async upsertRoomNote(input: Pick<RoomNoteRecord, "roomId" | "scope" | "content"> & { ownerParticipantId?: string | null; updatedBy?: string | null }): Promise<RoomNoteRecord> {
     const noteId = roomNoteId(input.roomId, input.scope, input.ownerParticipantId);
     const versionId = crypto.randomUUID();
-    const client = await this.pool.connect();
+    const client = this.effectClient ?? await this.pool.connect();
     try {
-      await client.query("begin");
+      if (!this.effectClient) await client.query("begin");
       const result = await client.query(
         `insert into room_notes (note_id, room_id, scope, owner_participant_id, content, updated_at, updated_by, deleted_at, deleted_by)
          values ($1,$2,$3,$4,$5,now(),$6,null,null)
@@ -1233,21 +1922,21 @@ export class PostgresStorage implements Storage {
          values ($1,$2,$3,$4,$5,$6,'save',null,now(),$7)`,
         [versionId, noteId, input.roomId, input.scope, input.scope === "private" ? input.ownerParticipantId ?? null : null, input.content, input.updatedBy ?? null]
       );
-      await client.query("commit");
+      if (!this.effectClient) await client.query("commit");
       return mapRoomNoteRow(result.rows[0]);
     } catch (error) {
-      await client.query("rollback").catch(() => undefined);
+      if (!this.effectClient) await client.query("rollback").catch(() => undefined);
       throw error;
     } finally {
-      client.release();
+      if (!this.effectClient) client.release();
     }
   }
   async deleteRoomNote(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null, deletedBy?: string | null): Promise<RoomNoteRecord | null> {
     const noteId = roomNoteId(roomId, scope, ownerParticipantId);
     const versionId = crypto.randomUUID();
-    const client = await this.pool.connect();
+    const client = this.effectClient ?? await this.pool.connect();
     try {
-      await client.query("begin");
+      if (!this.effectClient) await client.query("begin");
       const result = await client.query(
         `update room_notes set updated_at = now(), updated_by = $4, deleted_at = now(), deleted_by = $4
          where note_id = $1 and room_id = $2 and scope = $3 and deleted_at is null
@@ -1255,7 +1944,7 @@ export class PostgresStorage implements Storage {
         [noteId, roomId, scope, deletedBy ?? null]
       );
       if (!result.rows[0]) {
-        await client.query("rollback");
+        if (!this.effectClient) await client.query("rollback");
         return null;
       }
       const note = mapRoomNoteRow(result.rows[0]);
@@ -1264,13 +1953,13 @@ export class PostgresStorage implements Storage {
          values ($1,$2,$3,$4,$5,$6,'delete',null,now(),$7)`,
         [versionId, note.noteId, note.roomId, note.scope, note.ownerParticipantId ?? null, note.content, deletedBy ?? null]
       );
-      await client.query("commit");
+      if (!this.effectClient) await client.query("commit");
       return note;
     } catch (error) {
-      await client.query("rollback").catch(() => undefined);
+      if (!this.effectClient) await client.query("rollback").catch(() => undefined);
       throw error;
     } finally {
-      client.release();
+      if (!this.effectClient) client.release();
     }
   }
   async listRoomNotes(roomId: string, includeDeleted = false): Promise<RoomNoteRecord[]> {
@@ -1298,9 +1987,9 @@ export class PostgresStorage implements Storage {
   async restoreRoomNoteVersion(roomId: string, scope: RoomNoteScope, ownerParticipantId: string | null | undefined, versionId: string, updatedBy?: string | null): Promise<{ note: RoomNoteRecord; version: RoomNoteVersionRecord } | null> {
     const noteId = roomNoteId(roomId, scope, ownerParticipantId);
     const restoreVersionId = crypto.randomUUID();
-    const client = await this.pool.connect();
+    const client = this.effectClient ?? await this.pool.connect();
     try {
-      await client.query("begin");
+      if (!this.effectClient) await client.query("begin");
       const versionResult = await client.query(
         `select version_id, note_id, room_id, scope, owner_participant_id, content, action, restored_from_version_id, created_at, created_by
          from room_note_versions
@@ -1310,7 +1999,7 @@ export class PostgresStorage implements Storage {
       );
       const source = versionResult.rows[0] ? mapRoomNoteVersionRow(versionResult.rows[0]) : null;
       if (!source) {
-        await client.query("rollback");
+        if (!this.effectClient) await client.query("rollback");
         return null;
       }
       const noteResult = await client.query(
@@ -1326,13 +2015,13 @@ export class PostgresStorage implements Storage {
          returning version_id, note_id, room_id, scope, owner_participant_id, content, action, restored_from_version_id, created_at, created_by`,
         [restoreVersionId, noteId, roomId, scope, scope === "private" ? ownerParticipantId ?? null : null, source.content, source.versionId, updatedBy ?? null]
       );
-      await client.query("commit");
+      if (!this.effectClient) await client.query("commit");
       return { note: mapRoomNoteRow(noteResult.rows[0]), version: mapRoomNoteVersionRow(restoreResult.rows[0]) };
     } catch (error) {
-      await client.query("rollback").catch(() => undefined);
+      if (!this.effectClient) await client.query("rollback").catch(() => undefined);
       throw error;
     } finally {
-      client.release();
+      if (!this.effectClient) client.release();
     }
   }
   async listRoomDocuments(roomId: string, includeDeleted = false): Promise<RoomDocumentRecord[]> {
@@ -1343,30 +2032,36 @@ export class PostgresStorage implements Storage {
     return result.rows.map(mapRoomDocumentRow);
   }
   async getRoomDocument(roomId: string, documentId: string): Promise<RoomDocumentRecord | null> {
-    const result = await this.pool.query(
+    const result = await this.effectDatabase.query(
       `select document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id, metadata from room_documents where room_id = $1 and document_id = $2 limit 1`,
       [roomId, documentId]
     );
     return result.rows[0] ? mapRoomDocumentRow(result.rows[0]) : null;
   }
   async createRoomDocument(input: Omit<RoomDocumentRecord, "uploadedAt" | "deletedAt" | "deletedBy" | "linkedSurfaceId"> & { uploadedAt?: string; linkedSurfaceId?: string | null }): Promise<RoomDocumentRecord> {
-    const result = await this.pool.query(
+    let result;
+    try { result = await this.effectDatabase.query(
       `insert into room_documents (document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, linked_surface_id, metadata)
        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,coalesce($10::timestamptz, now()),$11,$12)
        returning document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id, metadata`,
       [input.documentId, input.roomId, input.tenantId, input.filename, input.contentType, input.sizeBytes, input.storageKey, input.checksum, input.uploadedBy ?? null, input.uploadedAt ?? null, input.linkedSurfaceId ?? null, input.metadata ?? {}]
-    );
+    ); } catch (error) {
+      // Root/admin calls use implicit autocommit. An unknown write result may
+      // already have published the row, just like a lost explicit COMMIT ack.
+      if (!this.effectClient && !confirmedRoomWriteRejection(error)) throw new RoomFenceCommitUncertain(error);
+      throw error;
+    }
     return mapRoomDocumentRow(result.rows[0]);
   }
   async markRoomDocumentDeleted(roomId: string, documentId: string, deletedAt: string, deletedBy?: string | null): Promise<RoomDocumentRecord | null> {
-    const result = await this.pool.query(
+    const result = await this.effectDatabase.query(
       `update room_documents set deleted_at = $3, deleted_by = $4, linked_surface_id = null where room_id = $1 and document_id = $2 and deleted_at is null returning document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id, metadata`,
       [roomId, documentId, deletedAt, deletedBy ?? null]
     );
     return result.rows[0] ? mapRoomDocumentRow(result.rows[0]) : null;
   }
   async updateRoomDocumentSurface(roomId: string, documentId: string, linkedSurfaceId: string | null): Promise<RoomDocumentRecord | null> {
-    const result = await this.pool.query(
+    const result = await this.effectDatabase.query(
       `with cleared as (
          update room_documents set linked_surface_id = null where room_id = $1 and document_id <> $2 and linked_surface_id = $3 and $3 is not null
        )
@@ -1409,16 +2104,16 @@ export class PostgresStorage implements Storage {
     return (result.rowCount ?? 0) > 0;
   }
   async addDiagnostic(roomId: string, payload: RuntimeDiagnosticRecord): Promise<void> {
-    await this.pool.query(`insert into runtime_diagnostics (room_id, payload) values ($1,$2::jsonb)`, [roomId, JSON.stringify(payload)]);
-    await this.pool.query(`delete from runtime_diagnostics where id in (select id from runtime_diagnostics where room_id = $1 order by id desc offset 200)`, [roomId]);
+    await this.effectDatabase.query(`insert into runtime_diagnostics (room_id, payload) values ($1,$2::jsonb)`, [roomId, JSON.stringify(payload)]);
+    await this.effectDatabase.query(`delete from runtime_diagnostics where id in (select id from runtime_diagnostics where room_id = $1 order by id desc offset 200)`, [roomId]);
   }
   async getDiagnostics(roomId: string): Promise<RuntimeDiagnosticRecord[]> {
     const result = await this.pool.query(`select payload from runtime_diagnostics where room_id = $1 order by id asc`, [roomId]);
     return result.rows.map((row: { payload: RuntimeDiagnosticRecord }) => row.payload);
   }
   async addXrTelemetry(roomId: string, participantId: string, payload: Record<string, unknown>): Promise<void> {
-    await this.pool.query(`insert into xr_telemetry (room_id, participant_id, payload) values ($1,$2,$3::jsonb)`, [roomId, participantId, JSON.stringify(payload)]);
-    await this.pool.query(`delete from xr_telemetry where id in (select id from xr_telemetry where room_id = $1 order by id desc offset ${XR_TELEMETRY_EVENT_LIMIT})`, [roomId]);
+    await this.effectDatabase.query(`insert into xr_telemetry (room_id, participant_id, payload) values ($1,$2,$3::jsonb)`, [roomId, participantId, JSON.stringify(payload)]);
+    await this.effectDatabase.query(`delete from xr_telemetry where id in (select id from xr_telemetry where room_id = $1 order by id desc offset ${XR_TELEMETRY_EVENT_LIMIT})`, [roomId]);
   }
   async getXrTelemetry(roomId: string): Promise<XrTelemetryEventRecord[]> {
     const result = await this.pool.query(`select participant_id, payload, created_at from xr_telemetry where room_id = $1 order by id asc`, [roomId]);
@@ -1594,7 +2289,7 @@ export class PostgresStorage implements Storage {
     let roomId: string;
     try {
       await client.query("begin");
-      const room = await this.insertRoom(client, input);
+      const room = await this.insertRoom(input, client);
       roomId = room.roomId;
       await client.query(
         `insert into integration_rooms (room_id, tenant_id, managed_by, kind, status, access_until, grace_seconds, revision, owner_subject, last_operation_id)

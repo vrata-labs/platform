@@ -26,7 +26,7 @@ with tempfile.TemporaryDirectory() as directory:
     assert env["VRATA_STAGING_SCENE_ROOT"]=="/srv/staging-state/active/public"
     assert env["REMOTE_BROWSER_ALLOWED_ORIGINS"].find("localhost")==-1
     assert env["REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS"]=="false"
-    values=[env[k] for k in ["CONTROL_PLANE_ADMIN_TOKEN","STATE_TOKEN_SECRET","REMOTE_BROWSER_TOKEN_SECRET","VRATA_INTERNAL_SERVICE_TOKEN","REMOTE_BROWSER_INTERNAL_TOKEN","POSTGRES_PASSWORD","MINIO_ROOT_PASSWORD","LIVEKIT_API_SECRET"]]
+    values=[env[k] for k in ["CONTROL_PLANE_ADMIN_TOKEN","STATE_TOKEN_SECRET","VRATA_IDENTITY_PROXY_TOKEN","REMOTE_BROWSER_TOKEN_SECRET","VRATA_INTERNAL_SERVICE_TOKEN","REMOTE_BROWSER_INTERNAL_TOKEN","POSTGRES_PASSWORD","MINIO_ROOT_PASSWORD","LIVEKIT_API_SECRET"]]
     assert len(set(values))==len(values) and all(len(v)>=40 for v in values)
     assert "postgres:"+env["POSTGRES_PASSWORD"]+"@postgres" in env["POSTGRES_URL"]
     assert m.bootstrap_env(root,"203.0.113.10","b"*40)=={"created":False}

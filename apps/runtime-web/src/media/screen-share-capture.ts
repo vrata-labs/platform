@@ -31,14 +31,37 @@ export function createMockShareStream(): MediaStream {
 export async function captureAndPublishScreenShareStream(room: Room, input: {
   objectId: string;
   mediaAudioEnabled: boolean;
+  stream?: MediaStream;
+  assertActive?: () => void;
 }): Promise<{ stream: MediaStream; publishedTracks: MediaStreamTrack[]; mediaTrackSid: string }> {
+  const stream = input.stream ?? await captureScreenShareStream(input.mediaAudioEnabled);
+  return publishScreenShareStream(room, stream, input);
+}
+
+/** Called during the user's activation, before a promotion's network reconnect. No media is published yet. */
+export async function captureScreenShareStream(mediaAudioEnabled: boolean): Promise<MediaStream> {
   if (!navigator.mediaDevices?.getDisplayMedia) {
     throw createFaultError("NotSupportedError", "screen_share_unsupported:getDisplayMedia missing");
   }
   const stream = await navigator.mediaDevices.getDisplayMedia({
     video: true,
-    audio: input.mediaAudioEnabled
+    audio: mediaAudioEnabled
   });
+  return stream;
+}
+
+export async function withScreenCaptureBeforeUpgrade<T>(mediaAudioEnabled: boolean,
+  start: (stream: MediaStream) => Promise<T>): Promise<T> {
+  const stream = await captureScreenShareStream(mediaAudioEnabled);
+  try { return await start(stream); }
+  catch (error) { stream.getTracks().forEach(track => track.stop()); throw error; }
+}
+
+export async function publishScreenShareStream(room: Room, stream: MediaStream, input: {
+  objectId: string;
+  mediaAudioEnabled: boolean;
+  assertActive?: () => void;
+}): Promise<{ stream: MediaStream; publishedTracks: MediaStreamTrack[]; mediaTrackSid: string }> {
   const videoTrack = stream.getVideoTracks().find((track) => track.readyState === "live");
   if (!videoTrack) {
     stream.getTracks().forEach((track) => track.stop());
@@ -46,21 +69,28 @@ export async function captureAndPublishScreenShareStream(room: Room, input: {
   }
   const localParticipant = room.localParticipant as {
     publishTrack: (track: MediaStreamTrack, options?: { name?: string; source?: Track.Source | string }) => Promise<{ trackSid?: string; sid?: string }>;
+    unpublishTrack?: (track: MediaStreamTrack) => Promise<unknown>;
   };
   const publishedTracks: MediaStreamTrack[] = [];
+  const attemptedTracks: MediaStreamTrack[] = [];
   try {
+    input.assertActive?.();
+    attemptedTracks.push(videoTrack);
     const videoPublication = await localParticipant.publishTrack(videoTrack, {
       name: `screen-share:${input.objectId}:video`,
       source: Track.Source.ScreenShare
     });
     publishedTracks.push(videoTrack);
+    input.assertActive?.();
     const audioTrack = stream.getAudioTracks().find((track) => track.readyState === "live");
     if (input.mediaAudioEnabled && audioTrack) {
+      attemptedTracks.push(audioTrack);
       await localParticipant.publishTrack(audioTrack, {
         name: `screen-share:${input.objectId}:audio`,
         source: (Track.Source as Record<string, Track.Source | string>).ScreenShareAudio ?? "screen_share_audio"
       });
       publishedTracks.push(audioTrack);
+      input.assertActive?.();
     }
     return {
       stream,
@@ -68,6 +98,9 @@ export async function captureAndPublishScreenShareStream(room: Room, input: {
       mediaTrackSid: videoPublication.trackSid ?? videoPublication.sid ?? videoTrack.id
     };
   } catch (error) {
+    for (const track of attemptedTracks) {
+      try { await localParticipant.unpublishTrack?.(track); } catch { /* Stop all acquired tracks even after a native cleanup failure. */ }
+    }
     stream.getTracks().forEach((track) => track.stop());
     throw error;
   }

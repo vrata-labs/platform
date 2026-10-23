@@ -12,8 +12,8 @@ import { fileURLToPath } from "node:url";
 import { AccessToken } from "livekit-server-sdk";
 import { PDFDocument } from "pdf-lib";
 import { extractSceneBundleZipToTemp, normalizeSceneBundleRelativePath, validateSceneBundlePath, validateSceneBundleReference } from "@vrata/asset-pipeline";
-import { createRoomAccessDebugState, getRoomPermissions, hasRoomPermission, parseRoomRole, type RoomPermission, type RoomRole } from "@vrata/shared-types";
-import { signRoomSessionToken, verifyRoomSessionToken, type RoomSessionRoleSource, type RoomSessionTokenPayload, type RoomSessionTokenVerificationResult } from "@vrata/shared-types/session-token";
+import { createRoomAccessDebugState, createUserMediaIdentity, userMediaScope, getRoomPermissions, hasRoomPermission, parseRoomRole, type RoomPermission, type RoomRole } from "@vrata/shared-types";
+import { getRoomSessionTokenSecret, isRotatedDevelopmentSession, signRoomSessionToken, verifyRoomSessionToken, type RoomSessionRoleSource, type RoomSessionTokenPayload, type RoomSessionTokenVerificationResult } from "@vrata/shared-types/session-token";
 
 import {
   resolveSceneBundlePublicUrl,
@@ -29,7 +29,6 @@ import {
   type RoomDocumentMetadata,
   type RoomInviteRecord,
   type RoomRecord,
-  type RoomSessionControlState,
   type RuntimeDiagnosticRecord,
   type TenantRecord,
   type WaitingRoomRequestRecord
@@ -49,6 +48,39 @@ import {
   isPortalManagedDeployment,
   isAdhocRoomsAllowed
 } from "./feature-flags.js";
+import { createLegacyIdentityBoundary, IdentityBoundaryError, legacyBoundaryApplies, legacyBoundaryAllowsAdministrator } from "./identity/legacy-boundary.js";
+import { assertVirtualRoomId, InvalidVirtualRoomId } from "./identity/virtual-effect-facade.js";
+import { validId } from "./identity/authority.js";
+import { createRoomIdentityService } from "./identity/service.js";
+import { createRoomIdentityCodec } from "@vrata/shared-types/identity-credential";
+import { admitV2RoomSession, type V2AdmissionRequest } from "./identity/http-admission.js";
+import { currentSessionControlV2, resolveRoomRequestV2, untrustedSessionRoom, type VerifiedRoomRequestV2 } from "./identity/http-authority.js";
+import { roomMediaGrantName } from "./identity/media-room.js";
+import { applyRoomLifecycleV2, lifecycleV2Error, roomIdentityActorFromHttp } from "./identity/http-lifecycle.js";
+import { createMediaScreenService } from "./media-screen-service.js";
+import { IdentityStorageError } from "./identity/contracts.js";
+import { PersonalOwnerRoomBlocked } from "./identity/personal-owner-response.js";
+import type { RoomEffectGuard, RoomEffectActor } from "./identity/effect-write-guard.js";
+import type { Storage, RoomIdentityEffectStorage, VirtualRoomEffectStorage, LegacyRoomCredentialSelector, LegacyRoomCredentialSnapshot,
+  LegacyAdmissionWriteInput, LegacyAdmissionWriteReceipt, LegacyRoomControlReceipt } from "./storage-contracts.js";
+import { createRoomEffectFacade } from "./identity/effect-facade.js";
+import { assertParticipantViewDeadline, readParticipantSessionViewV2 } from "./identity/participant-view-v2.js";
+import { identityFenceUnavailable, uncertainRoomCommit } from "./identity/fence-transaction.js";
+import { identityAdmissionOriginHash as hashAdmissionOrigin } from "./identity/admission-origin.js";
+import { adminCurrentOwnerParticipantId, currentRoomOwner } from "./identity/admin-room-projection.js";
+import {
+  classifyLegacyBearer, confirmLegacyAdmission, evaluateLegacyAdmission, normalizeLegacyParticipant,
+  type LegacyAdmissionConfirmation, type LegacyAdmissionContext, type LegacyAdmissionDecision,
+  type LegacyAdmissionOutcome, type LegacyAdmissionRequest, type LegacyAdmissionSnapshot, type LegacyBearerClass
+} from "./identity/legacy-state-admission.js";
+import {
+  decideLegacyAdmissionWrite, LegacyAdmissionDeadlineExpired, LegacyAdmissionWriteInvariant, planLegacyAdmissionWrite,
+  type LegacyAdmissionWritePlan
+} from "./identity/legacy-admission-write.js";
+import {
+  LEGACY_CONTROL_ADMIN_ID, LegacyRoomControlInvariant,
+  type LegacyControlActor, type LegacyRoomControlCommand, type LegacyRoomControlInput, type LegacyRoomPresence
+} from "./identity/legacy-room-control.js";
 
 import { getLivekitCredentials, getMediaTokenConfigError, getLivekitDeploymentDiagnostics } from "./livekit-config.js";
 
@@ -61,12 +93,17 @@ import { normalizeDocumentContentType, normalizeDocumentFilename, safeHeaderFile
 import { parseMultipartBoundary, parseMultipartFormData, textPart, filePart } from "./multipart-form-data.js";
 
 import { parseBody, readRequestBuffer } from "./request-body.js";
+import { DOCUMENT_MULTIPART_OVERHEAD_BYTES, getDocumentUploadPolicy } from "./document-upload-policy.js";
 
 import { serveStatic, json, text } from "./http-responses.js";
 
 import { createApiMetrics, incrementCounter } from "./api-metrics.js";
 
 import { createUploadStorageConfig } from "./upload-storage-config.js";
+import { configuredRoomPluginBlobStorage, deleteRoomWithPluginCleanup, roomPluginDeletionFailure, isRoomDeletionRequest } from "./plugins/index.js";
+import { handleRoomPluginHttp } from "./plugins/http.js";
+import { RoomPluginHttpError } from "./plugins/http-errors.js";
+import type { RoomPluginAuthorActor } from "./plugins/access-contracts.js";
 
 import {
   trimSlashes,
@@ -91,6 +128,7 @@ import {
 import { defaultManifest } from "./default-room-manifest.js";
 import { createRoomManifestBuilder } from "./room-manifest.js";
 import { loadSceneMediaSurfaces } from "./scene-media-surfaces.js";
+import { legacySceneMediaSurfaces } from "./legacy-scene-media-surfaces.js";
 import { normalizeRoomAvatarOverrides } from "./room-input.js";
 import { assertRoomTemplatePatch, listRoomTemplateMetadata, resolveRoomTemplateCreate, roomTemplateSessionContext, templateInputError } from "./room-template-policy.js";
 
@@ -98,7 +136,6 @@ import {
   isRoomDisabled,
   defaultSessionControlState,
   sanitizeSessionControlState,
-  getRemovedParticipant,
   resolveEffectiveRoomRole,
   getSessionControlBlockReason,
   getManagedAccessBlockReason,
@@ -108,7 +145,6 @@ import {
 
 import {
   isPersonalRoom,
-  isPersonalRoomOwner,
   normalizeDisplayName,
   personalRoomName,
   normalizePersonalState
@@ -118,7 +154,8 @@ import { createRoomPresence, type PresenceRecord } from "./room-presence.js";
 
 import { validateRoomAssetIds, validateAssetInput } from "./room-asset-validation.js";
 
-import { createXrTelemetryService } from "./xr-telemetry-service.js";
+import { createXrTelemetryScheduler, createXrTelemetryService, XrTelemetryQueueFull } from "./xr-telemetry-service.js";
+import { IDENTITY_LIFECYCLE_REQUIRES_V2 } from "./identity/lifecycle.js";
 import type { XrTelemetryRecord } from "./xr-telemetry-buffer.js";
 
 import {
@@ -128,6 +165,13 @@ import {
   getConfiguredPublicLivekitUrl,
   getDefaultRemoteBrowserFrameStreamUrl
 } from "./public-endpoints.js";
+import {
+  captureFrameCredentialPlan, captureRemoteBrowserFrameBinding, issueRemoteBrowserFrameCredential, type FrameCredentialPlan
+} from "./remote-browser-frame-credential.js";
+import {
+  captureMediaCredentialPlan, releaseMediaCredential, resolveMediaTokenTtlSeconds, signMediaCredential,
+  type MediaCredentialPlan, type PreparedMediaCredential, type MediaPublishSource
+} from "./media-credential.js";
 
 export {
   isSpatialAudioFeatureEnabled,
@@ -200,6 +244,9 @@ type ControlPlanePermission =
   | "notes.edit"
   | "room.join";
 
+class RoomEffectPermissionDenied extends Error {}
+class RoomEffectNotFound extends Error {}
+
 interface ControlPlaneAuditLogEntry {
   timestamp: string;
   requestId: string;
@@ -242,16 +289,33 @@ const runtimePublicRoot = normalize(join(fileURLToPath(new URL("../../runtime-we
 const controlPlaneStaticRoot = normalize(join(fileURLToPath(new URL("../../control-plane/dist", import.meta.url))));
 const presenceTtlMs = Number.parseInt(process.env.PRESENCE_TTL_MS ?? "15000", 10);
 const storagePromise = createStorage();
+const legacyIdentityBoundary = createLegacyIdentityBoundary(storagePromise);
 const requiredProductionApiEnvVars = ["CONTROL_PLANE_ADMIN_TOKEN", "ROOM_STATE_PUBLIC_URL", "RUNTIME_BASE_URL", "STATE_TOKEN_SECRET", "LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"] as const;
 
 const presenceByRoom = new Map<string, Map<string, PresenceRecord>>();
 const { getPresence, upsertPresence, deletePresence, cleanupAllPresence, activeParticipantCount } = createRoomPresence(presenceByRoom, presenceTtlMs);
-const { upsertXrTelemetry, listXrTelemetry } = createXrTelemetryService(storagePromise);
+// Missing-room (virtual) live state never shares a map with a persisted room's.
+const virtualPresenceByRoom = new Map<string, Map<string, PresenceRecord>>();
+const virtualPresence = createRoomPresence(virtualPresenceByRoom, presenceTtlMs);
+// One scheduler keeps the API-wide commit slots and pending budget across both namespaces.
+const xrTelemetryScheduler = createXrTelemetryScheduler();
+const { upsertXrTelemetryWithFence, listXrTelemetry } = createXrTelemetryService(storagePromise, xrTelemetryScheduler);
+const virtualXrTelemetry = createXrTelemetryService(storagePromise, xrTelemetryScheduler);
 const controlPlaneAuditLog: ControlPlaneAuditLogEntry[] = [];
 const CONTROL_PLANE_AUDIT_LIMIT = 1000;
 const requestIds = new WeakMap<IncomingMessage, string>();
-const { metrics, apiMetricsText } = createApiMetrics(presenceByRoom, cleanupAllPresence, activeParticipantCount);
-const routeRoomNotesRequest = createRoomNotesRoutes({ metrics, resolveControlPlaneActor, getRequestId, logEvent });
+const v2SessionsByRequest = new WeakMap<IncomingMessage, VerifiedRoomRequestV2>();
+// Aggregate gauges still count missing-room presence, as the single map did.
+const activePresenceRooms = { get size() { return new Set([...presenceByRoom.keys(), ...virtualPresenceByRoom.keys()]).size; } };
+const { metrics, apiMetricsText } = createApiMetrics(activePresenceRooms,
+  () => { cleanupAllPresence(); virtualPresence.cleanupAllPresence(); },
+  () => activeParticipantCount() + virtualPresence.activeParticipantCount());
+const mediaScreenService = createMediaScreenService(storagePromise, {
+  event: outcome => incrementCounter(metrics.mediaScreenReconciliationTotal, outcome)
+});
+const routeRoomNotesRequest = createRoomNotesRoutes({ metrics, resolveControlPlaneActor, getRequestId, logEvent, runGuardedRoomEffect,
+  deniedEffectReason: error => error instanceof RoomEffectPermissionDenied ? "permission_denied"
+    : error instanceof IdentityBoundaryError ? error.reason : null });
 const routeIntegrationRequest = createIntegrationRoutes({ getRequestId, logEvent });
 
 function resolveAccessRole(requestedRole: unknown, env: NodeJS.ProcessEnv = process.env): { role: RoomRole; roleSource: RoomSessionRoleSource } {
@@ -261,8 +325,13 @@ function resolveAccessRole(requestedRole: unknown, env: NodeJS.ProcessEnv = proc
   return { role: parseRoomRole(requestedRole, "guest"), roleSource: requestedRole === undefined || requestedRole === null ? "default" : "dev-query" };
 }
 
+async function applyRoomLifecycleWithMedia(input: Parameters<typeof applyRoomLifecycleV2>[0]) {
+  const updated = await applyRoomLifecycleV2(input);
+  return { ...updated, mediaScreenReconciliation: mediaScreenService.committed(input.room, updated.revision, updated.state) };
+}
+
 function getStateTokenSecret(env: NodeJS.ProcessEnv = process.env): string {
-  return env.STATE_TOKEN_SECRET ?? "dev-state-secret";
+  return getRoomSessionTokenSecret(env);
 }
 
 function encodeAccessToken(payload: RoomAccessTokenPayload, env: NodeJS.ProcessEnv = process.env): string {
@@ -274,7 +343,11 @@ function createInviteToken(): string {
 }
 
 function hashInviteToken(token: string, env: NodeJS.ProcessEnv = process.env): string {
-  return createHmac("sha256", getStateTokenSecret(env)).update(token).digest("base64url");
+  return hashInviteTokenWithSecret(token, getStateTokenSecret(env));
+}
+
+function hashInviteTokenWithSecret(token: string, secret: string): string {
+  return createHmac("sha256", secret).update(token).digest("base64url");
 }
 
 const controlPlanePermissions: ControlPlanePermission[] = [
@@ -310,14 +383,6 @@ export function resolveRemoteBrowserTokenTtlSeconds(env: NodeJS.ProcessEnv = pro
   const raw = env.REMOTE_BROWSER_TOKEN_TTL_SECONDS?.trim() ?? "300";
   const parsed = /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : 300;
   return Math.max(30, Math.min(600, Number.isFinite(parsed) ? parsed : 300));
-}
-
-function encodeRemoteBrowserFrameToken(payload: { roomId: string; objectId: string; executorSessionId: string; frameStreamId: string; exp: number }, env: NodeJS.ProcessEnv = process.env): string {
-  const body = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-  const secret = getRemoteBrowserFrameTokenSecret(env);
-  if (!secret) throw new Error("remote_browser_token_config_invalid");
-  const signature = createHmac("sha256", secret).update(body).digest("base64url");
-  return `${body}.${signature}`;
 }
 
 export function isRemoteBrowserIdentityBinding(input: { objectId: string; executorSessionId: string; executorInstanceId: string; mediaParticipantId?: string; frameStreamId?: string }): boolean {
@@ -429,8 +494,7 @@ function normalizeReportId(value: unknown): string | null {
   return /^rpt_[A-Za-z0-9_-]{8,80}$/.test(trimmed) ? trimmed : null;
 }
 
-function createDiagnosticRecord(roomId: string, payload: RuntimeDiagnosticRecord, request: IncomingMessage): RuntimeDiagnosticRecord {
-  const requestId = getRequestId(request);
+function createDiagnosticRecord(payload: RuntimeDiagnosticRecord, requestId: string): RuntimeDiagnosticRecord {
   const reportId = normalizeReportId(payload.reportId) ?? createReportId();
   const sanitized = redactSecrets({
     ...payload,
@@ -443,18 +507,27 @@ function createDiagnosticRecord(roomId: string, payload: RuntimeDiagnosticRecord
     delete screenshot.dataUrl;
     sanitized.sceneDebug = { ...sanitized.sceneDebug, screenshot };
   }
+  return sanitized;
+}
+
+/** Post-commit only: metrics, screen-share map and log describe a persisted report. */
+function publishDiagnosticRecord(roomId: string, diagnostic: RuntimeDiagnosticRecord): void {
   logEvent({
     service: "api",
     event: "runtime_diagnostic_report",
     roomId,
-    participantId: sanitized.participantId,
-    reportId,
-    requestId,
-    issueCode: sanitized.issueCode ?? null,
-    note: sanitized.note ?? null,
-    timestamp: sanitized.createdAt
+    participantId: diagnostic.participantId,
+    reportId: diagnostic.reportId,
+    requestId: diagnostic.requestId,
+    issueCode: diagnostic.issueCode ?? null,
+    note: diagnostic.note ?? null,
+    timestamp: diagnostic.createdAt
   });
-  return sanitized;
+  metrics.diagnosticsReportsCreatedTotal += 1;
+  observeScreenShareDiagnostic(roomId, diagnostic);
+  if (diagnostic.issueCode) {
+    incrementCounter(metrics.roomJoinFailuresTotal, diagnostic.issueCode);
+  }
 }
 
 function screenShareSessionKey(roomId: string, diagnostic: RuntimeDiagnosticRecord): string | null {
@@ -572,6 +645,14 @@ function getBearerToken(request: IncomingMessage): string | null {
   return token;
 }
 
+/** Caddy authenticates its client-IP override. Raw forwarded headers never
+ * override the transport peer on the publicly reachable direct API port. */
+function identityAdmissionOriginHash(request: IncomingMessage): string {
+  return hashAdmissionOrigin({ peerAddress: request.socket.remoteAddress,
+    proxyAddress: request.headers["x-vrata-client-ip"], proxyToken: request.headers["x-vrata-proxy-auth"],
+    proxySecret: process.env.VRATA_IDENTITY_PROXY_TOKEN ?? null, signingSecret: getStateTokenSecret() });
+}
+
 function resolveControlPlaneActor(request: IncomingMessage):
   | { ok: true; actor: ControlPlaneActor }
   | { ok: false; statusCode: 401; reason: string } {
@@ -594,8 +675,21 @@ function resolveControlPlaneActor(request: IncomingMessage):
 
   const bearerToken = getBearerToken(request);
   if (bearerToken) {
+    const verifiedV2 = v2SessionsByRequest.get(request);
+    if (verifiedV2) {
+      return { ok: true, actor: {
+        actorType: "room-session", actorId: verifiedV2.identity.participantId,
+        role: verifiedV2.role, roleSource: "trusted", tenantId: verifiedV2.room.tenantId,
+        roomId: verifiedV2.room.roomId, participantId: verifiedV2.identity.participantId,
+        sessionId: verifiedV2.sessionId, permissions: verifiedV2.permissions,
+        identityProtocolVersion: 2, identityId: verifiedV2.identity.identityId,
+        authEpoch: verifiedV2.identity.authEpoch, isOwner: verifiedV2.isOwner,
+        expiresAtSeconds: verifiedV2.expiresAtSeconds
+      } };
+    }
     const session = verifyRoomSessionToken(bearerToken, getStateTokenSecret());
     if (!session.ok) {
+      if (isRotatedDevelopmentSession(bearerToken, getStateTokenSecret())) throw new IdentityBoundaryError(409, "identity_upgrade_required");
       return { ok: false, statusCode: 401, reason: session.code };
     }
     return {
@@ -609,7 +703,8 @@ function resolveControlPlaneActor(request: IncomingMessage):
         roomId: session.payload.roomId,
         participantId: session.payload.participantId,
         sessionId: session.payload.sessionId,
-        permissions: session.payload.permissions
+        permissions: session.payload.permissions,
+        expiresAtSeconds: session.payload.exp
       }
     };
   }
@@ -621,10 +716,12 @@ function isControlPlaneActorAllowed(actor: ControlPlaneActor, options: ControlPl
   if (actor.actorType === "admin-token") {
     return true;
   }
+  if (options.allowHostOwnRoom && actor.identityProtocolVersion === 2 && actor.isOwner === true
+    && actor.roleSource === "trusted" && actor.roomId === options.targetRoomId) return true;
   if (!options.allowHostOwnRoom || actor.role !== "host" || actor.roleSource !== "trusted" || !options.targetRoomId || actor.roomId !== options.targetRoomId) {
     return false;
   }
-  return !options.currentHostParticipantId || actor.participantId === options.currentHostParticipantId;
+  return actor.identityProtocolVersion === 2 || !options.currentHostParticipantId || actor.participantId === options.currentHostParticipantId;
 }
 
 async function requireControlPlanePermission(
@@ -681,6 +778,36 @@ function sessionTokenStatusCode(result: RoomSessionTokenVerificationResult): 401
   return result.code.endsWith("_mismatch") ? 403 : 401;
 }
 
+/** Plugin HTTP grants originate only from the explicit administrator secret or
+ * MAC-verified RS2 possession. The repository resolves current authority again. */
+async function resolveRoomPluginActor(request: IncomingMessage, roomId: string): Promise<RoomPluginAuthorActor> {
+  const storage = await storagePromise;
+  const provided = getHeaderString(request, "x-vrata-admin-token");
+  if (provided !== null) {
+    const configured = getControlPlaneAdminToken();
+    if (!configured || !safeEqual(provided, configured)) throw new RoomPluginHttpError(401, "identity_required");
+    const room = await storage.getRoom(roomId);
+    if (!room) throw new RoomPluginHttpError(404, "room_not_found");
+    return { actorType: "administrator", scope: { tenantId: room.tenantId, roomId: room.roomId } };
+  }
+  const token = getBearerToken(request);
+  if (!token?.startsWith("rs2.")) throw new RoomPluginHttpError(401, "identity_required");
+  const foreignRoom = untrustedSessionRoom(token) !== roomId;
+  let verified: VerifiedRoomRequestV2 | null;
+  try { verified = await resolveRoomRequestV2({ storage, secret: getStateTokenSecret(), token }); }
+  catch (error) {
+    if (foreignRoom && error instanceof IdentityBoundaryError && error.reason === "identity_session_expired") {
+      throw new IdentityBoundaryError(409, "identity_recovery_required");
+    }
+    throw error;
+  }
+  if (!verified) throw new IdentityBoundaryError(409, "identity_recovery_required");
+  if (verified.room.roomId !== roomId) throw new RoomPluginHttpError(403, "room_mismatch");
+  const { identityId, participantId, authEpoch } = verified.identity;
+  return { actorType: "room-session", proof: { tenantId: verified.room.tenantId, roomId: verified.room.roomId,
+    identityId, participantId, authEpoch }, expiresAtSeconds: verified.expiresAtSeconds };
+}
+
 function writeSessionTokenError(response: ServerResponse, result: RoomSessionTokenVerificationResult): void {
   if (result.ok) {
     return;
@@ -689,6 +816,16 @@ function writeSessionTokenError(response: ServerResponse, result: RoomSessionTok
     error: result.code === "missing_token" ? "session_token_required" : "session_token_invalid",
     reason: result.code
   });
+}
+
+/** Floor-1 tenant scope of an unpersisted (virtual) room id. */
+const LEGACY_VIRTUAL_TENANT_ID = "demo-tenant";
+
+async function readPluginBindingsRevisionHint(storage: Storage, scope: { tenantId: string; roomId: string }): Promise<number | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const read = Promise.resolve().then(() => storage.roomPlugins.readRevision(scope)).catch(() => undefined);
+  const late = new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), 150); });
+  try { return await Promise.race([read, late]); } finally { clearTimeout(timer); }
 }
 
 function writeManagedResourceDenied(request: IncomingMessage, response: ServerResponse, objectType: "tenant" | "room", objectId: string): void {
@@ -703,18 +840,482 @@ async function isManagedTenant(storage: Awaited<typeof storagePromise>, tenantId
 async function resolveRoomTenantId(roomId: string): Promise<string> {
   const storage = await storagePromise;
   const room = await storage.getRoom(roomId);
-  return room?.tenantId ?? "demo-tenant";
+  return room?.tenantId ?? LEGACY_VIRTUAL_TENANT_ID;
 }
+
+class InvalidSessionTokenInput extends Error {}
 
 async function verifyRoomSessionRequest(
   request: IncomingMessage,
-  input: { roomId: string; participantId?: string; sessionToken?: string | null }
+  input: { roomId: string; participantId?: string; sessionToken?: unknown }
 ): Promise<RoomSessionTokenVerificationResult> {
+  const suppliedToken = input.sessionToken ?? getBearerToken(request);
+  if (suppliedToken != null && typeof suppliedToken !== "string") throw new InvalidSessionTokenInput();
+  const token = typeof suppliedToken === "string" ? suppliedToken : null;
+  if (await legacyIdentityBoundary.minimum() >= 2) {
+    // Entry-time metadata may precede a client-controlled body wait. Drop it
+    // and resolve MAC, expiry, scope and current epoch/role again before use.
+    v2SessionsByRequest.delete(request);
+    if (!token) throw new IdentityBoundaryError(426, "identity_upgrade_required");
+    if (!token.startsWith("rs2.")) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+    const current = await resolveRoomRequestV2({ storage: await storagePromise, secret: getStateTokenSecret(), token,
+      expectedRoomId: input.roomId, participantId: input.participantId });
+    if (!current || (input.participantId !== undefined && current.identity.participantId !== input.participantId)) {
+      throw new IdentityBoundaryError(409, "identity_recovery_required");
+    }
+    if (token === getBearerToken(request)) v2SessionsByRequest.set(request, current);
+    return { ok: true, payload: {
+      tenantId: current.room.tenantId, roomId: current.room.roomId, participantId: current.identity.participantId,
+      displayName: current.identity.displayName, role: current.role, roleSource: "trusted", permissions: current.permissions,
+      sessionId: current.sessionId, iat: 0, exp: current.expiresAtSeconds, jti: current.sessionId,
+      identityProtocolVersion: 2, identityId: current.identity.identityId,
+      authEpoch: current.identity.authEpoch, isOwner: current.isOwner
+    } };
+  }
+  await legacyIdentityBoundary.assertCompatible(input.roomId);
   const tenantId = await resolveRoomTenantId(input.roomId);
-  return verifyRoomSessionToken(input.sessionToken ?? getBearerToken(request), getStateTokenSecret(), {
+  const secret = getStateTokenSecret();
+  const result = verifyRoomSessionToken(token, secret, {
     tenantId,
     roomId: input.roomId,
     participantId: input.participantId
+  });
+  if (!result.ok && isRotatedDevelopmentSession(token, secret)) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+  return result;
+}
+
+async function runGuardedRoomEffect<T>(storage: Storage, actor: ControlPlaneActor, room: RoomRecord,
+  permission: RoomPermission, effect: (scoped: RoomIdentityEffectStorage, current: RoomEffectActor | null) => Promise<T>,
+  options: { ownerOnly?: boolean; hostOrOwner?: boolean; roomWrite?: boolean } = {}): Promise<T> {
+  if (actor.actorType === "admin-token") {
+    let active = true;
+    const scoped = createRoomEffectFacade(storage, { roomWrite: true,
+      check: () => { if (!active) throw new Error("room_effect_scope_closed"); } });
+    try { return await effect(scoped, null); }
+    finally { active = false; }
+  }
+  if (actor.identityProtocolVersion !== 2) return runLegacyRoomEffect(storage, room, options,
+    scoped => effect(scoped, null));
+  if (!actor.identityId || !actor.participantId || !actor.authEpoch || !actor.expiresAtSeconds) {
+    throw new IdentityBoundaryError(409, "identity_recovery_required");
+  }
+  const guard: RoomEffectGuard = { tenantId: room.tenantId, roomId: room.roomId,
+    identityId: actor.identityId, participantId: actor.participantId, authEpoch: actor.authEpoch,
+    expiresAtSeconds: actor.expiresAtSeconds, permission, ...options };
+  try {
+    return await storage.withRoomIdentityEffect(guard, effect);
+  } catch (error) {
+    throw guardedEffectError(error);
+  }
+}
+
+/** Public mapping of the guarded identity fence; any other IdentityStorageError, a pinned role or ownership drift
+ * included, is recovery. */
+function guardedEffectError(error: unknown): unknown {
+  if (identityFenceUnavailable(error)) return new IdentityBoundaryError(503, "identity_authority_unavailable", error);
+  if (error instanceof IdentityStorageError) {
+    if (error.code === "identity_session_expired") return new IdentityBoundaryError(401, "identity_session_expired");
+    if (error.code === "identity_forbidden") return new RoomEffectPermissionDenied("permission_denied");
+    return new IdentityBoundaryError(409, "identity_recovery_required");
+  }
+  return error;
+}
+
+async function runLegacyRoomEffect<T>(storage: Storage, room: RoomRecord, options: { roomWrite?: boolean },
+  effect: (scoped: RoomIdentityEffectStorage) => Promise<T>): Promise<T> {
+  try {
+    return await storage.withLegacyRoomEffect({ tenantId: room.tenantId, roomId: room.roomId }, options, effect);
+  } catch (error) {
+    if (identityFenceUnavailable(error)) throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
+    if (error instanceof IdentityStorageError && error.code === "room_not_found") throw new RoomEffectNotFound("room_not_found");
+    throw error;
+  }
+}
+
+/** Floor-1 effect for an unpersisted room id: telemetry writes or a synchronous
+ * release. Credential release additionally pins absence against room creation. */
+async function runLegacyVirtualRoomEffect<T>(storage: Storage, roomId: string, options: { roomWrite?: boolean; expiresAtSeconds?: number; pinAbsence?: boolean },
+  effect: (scoped: VirtualRoomEffectStorage) => Promise<T>): Promise<T> {
+  try {
+    return await storage.withLegacyVirtualRoomEffect(roomId, options, effect);
+  } catch (error) {
+    if (identityFenceUnavailable(error)) throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
+    throw error;
+  }
+}
+
+/** The five virtual-data path groups fall back to a virtual room. Their segments are
+ * decoded and the room id bounded before any session, boundary or room lookup; an id
+ * that namespace can never hold is the same public 404 as an absent room. */
+const virtualDataPath = /^\/api\/rooms\/([^/]+)\/(?:manifest|diagnostics|(?:presence|xr-telemetry)(?:\/([^/]+))?)$/;
+function assertVirtualDataPath(pathname: string): void {
+  const match = virtualDataPath.exec(pathname);
+  if (!match) return;
+  let roomId: string;
+  try {
+    roomId = decodeURIComponent(match[1]);
+    if (match[2] !== undefined) decodeURIComponent(match[2]);
+  } catch { throw new InvalidVirtualRoomId(); }
+  assertVirtualRoomId(roomId);
+}
+
+async function releaseRoomRead(request: IncomingMessage, storage: Storage, roomId: string, room: RoomRecord | null, send: () => void): Promise<void> {
+  const actor = resolveControlPlaneActor(request);
+  // A missing-room fallback contains no persisted room data. Only the administrator bypasses its fence.
+  if (!room) {
+    if (actor.ok && actor.actor.actorType === "admin-token") { send(); return; }
+    if (actor.ok && actor.actor.identityProtocolVersion === 2) throw new RoomEffectNotFound("room_not_found");
+    // Floor 1 and absence are observed before the one synchronous release.
+    await runLegacyVirtualRoomEffect(storage, roomId, {}, async scoped => { scoped.releaseResponse(send); });
+    return;
+  }
+  if (actor.ok) await runGuardedRoomEffect(storage, actor.actor, room, "room.join", async scoped => { scoped.releaseResponse(send); });
+  else await runLegacyRoomEffect(storage, room, {}, async scoped => { scoped.releaseResponse(send); });
+}
+
+/** Virtual issuance pins absence through the one synchronous sign-and-release.
+ * The pin is read-only, so a COMMIT or connection failure after a successful send
+ * cannot revoke the released token: count it and let the queued reply finish.
+ * Anything before or during send keeps its original error. */
+async function releaseVirtualStateToken(storage: Storage, roomId: string, send: () => void): Promise<void> {
+  let released = false;
+  try {
+    await runLegacyVirtualRoomEffect(storage, roomId, { pinAbsence: true }, async scoped => {
+      scoped.releaseResponse(() => { send(); released = true; });
+    });
+  } catch (error) {
+    if (!released) throw error;
+    metrics.virtualStateReleaseCompletionFailuresTotal += 1;
+  }
+}
+
+/** Every persisted-room floor-1 credential reply: one read-only fenced snapshot, one synchronous
+ * send. As with virtual issuance, a COMMIT or connection failure after a successful send cannot
+ * revoke the released reply: count it and let the queued reply finish. Anything before or during
+ * send keeps its mapped error. */
+async function releaseLegacyStateToken(storage: Storage, selector: LegacyRoomCredentialSelector,
+  send: (fresh: LegacyRoomCredentialSnapshot) => undefined): Promise<void> {
+  const captured: LegacyRoomCredentialSelector = Object.freeze({ tenantId: selector.tenantId, roomId: selector.roomId,
+    participantId: selector.participantId, inviteTokenHash: selector.inviteTokenHash });
+  let released = false;
+  try {
+    await storage.releaseLegacyRoomCredential(captured, {}, fresh => { send(fresh); released = true; return undefined; });
+  } catch (error) {
+    if (released) { metrics.legacyStateReleaseCompletionFailuresTotal += 1; return; }
+    if (identityFenceUnavailable(error)) throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
+    if (error instanceof IdentityStorageError && error.code === "room_not_found") throw new RoomEffectNotFound("room_not_found");
+    throw error;
+  }
+}
+
+type FrameCredentialRelease = () => Promise<void>;
+
+function writeFrameNotAllowed(response: ServerResponse): void {
+  json(response, 403, { error: "forbidden", reason: "remote_browser_frame_not_allowed" });
+}
+
+/** Frame credentials are signed and sent synchronously inside the final read-only room fence. A COMMIT or connection
+ * failure after the reply was queued cannot revoke it: count it and let the reply finish. A failure before or during
+ * send, the signer's included, keeps its mapped error. A user media release counts on its own counter. */
+async function releaseFrameCredential(fence: (send: (write: () => void) => void) => Promise<void>,
+  countCompletionFailure: () => void = () => { metrics.frameCredentialReleaseCompletionFailuresTotal += 1; }): Promise<void> {
+  let released = false;
+  try {
+    await fence(write => { write(); released = true; });
+  } catch (error) {
+    if (!released) throw error;
+    countCompletionFailure();
+  }
+}
+
+/** One clock reading signs and reports; a lapsed original deadline signs nothing. */
+function writeFrameCredential(response: ServerResponse, plan: FrameCredentialPlan, nowMs: number, lapsed: () => void): void {
+  const issued = issueRemoteBrowserFrameCredential(plan, nowMs);
+  if (!issued) return lapsed();
+  json(response, 200, issued);
+}
+
+/** RS2: the original proof's scope, epoch, deadline, role and ownership pin one read-only identity fence; no token is
+ * prepared outside it. Drift is recovery, a lost permission keeps the frame denial, a lapse is session expiry. */
+function captureV2FrameRelease(response: ServerResponse, storage: Storage, proof: RoomSessionTokenPayload,
+  plan: FrameCredentialPlan): FrameCredentialRelease {
+  if (!proof.identityId || typeof proof.authEpoch !== "number" || !Number.isSafeInteger(proof.authEpoch) || proof.authEpoch < 1
+    || typeof proof.isOwner !== "boolean") throw new IdentityBoundaryError(409, "identity_recovery_required");
+  const guard: RoomEffectGuard = Object.freeze({ tenantId: proof.tenantId, roomId: proof.roomId, identityId: proof.identityId,
+    participantId: proof.participantId, authEpoch: proof.authEpoch, expiresAtSeconds: proof.exp, permission: "surface.view" as const,
+    expectedRole: proof.role, expectedIsOwner: proof.isOwner });
+  const lapsed = () => { throw new IdentityBoundaryError(401, "identity_session_expired"); };
+  return async () => {
+    try {
+      await releaseFrameCredential(async send => {
+        try {
+          await storage.withRoomIdentityEffect(guard, async scoped => {
+            scoped.releaseResponse(() => send(() => writeFrameCredential(response, plan, Date.now(), lapsed)));
+          });
+        } catch (error) { throw guardedEffectError(error); }
+      });
+    } catch (error) {
+      if (!(error instanceof RoomEffectPermissionDenied)) throw error;
+      writeFrameNotAllowed(response);
+    }
+  };
+}
+
+/** Floor 1: the captured MAC-verified bearer and the one initial room read decide the release. A persisted room is
+ * re-admitted in renew mode on the locked snapshot; a virtual room pins absence. Neither refreshes a token, writes
+ * admission state or falls back to the other namespace. */
+function captureLegacyFrameRelease(response: ServerResponse, storage: Storage, initialRoom: RoomRecord | null,
+  proof: RoomSessionTokenPayload, plan: FrameCredentialPlan,
+  bearer: Pick<LegacyAdmissionContext, "rawBearer" | "secret"> & { requestId: string }): FrameCredentialRelease | null {
+  const scope = Object.freeze({ tenantId: initialRoom?.tenantId ?? LEGACY_VIRTUAL_TENANT_ID, roomId: plan.binding.roomId });
+  // The proof was scoped by its own room read: a room created, deleted or moved between the two is refused.
+  if (proof.tenantId !== scope.tenantId || proof.roomId !== scope.roomId) { writeRoomStateChanged(response); return null; }
+  const ctx: LegacyAdmissionContext = Object.freeze({ rawBearer: bearer.rawBearer, secret: bearer.secret, nowMs: Date.now(),
+    accessPolicyEnabled: isRoomAccessPolicyEnabled(), hostControlsEnabled: isHostControlsEnabled() });
+  const { participantId } = proof;
+  // MAC, original expiry, original scope and subject first, on the release's one clock reading.
+  const reverify = (nowMs: number): RoomSessionTokenPayload | null => {
+    const current = classifyLegacyBearer({ ...ctx, nowMs }, scope, participantId);
+    if (current.kind === "valid") return current.payload;
+    writeLegacyBearerError(response, current);
+    return null;
+  };
+  const expired = () => writeSessionTokenError(response, { ok: false, code: "expired_token" });
+  if (!initialRoom) return async () => {
+    try {
+      await releaseFrameCredential(send => runLegacyVirtualRoomEffect(storage, scope.roomId, { pinAbsence: true, expiresAtSeconds: proof.exp },
+        async scoped => {
+          scoped.releaseResponse(() => send(() => {
+            const nowMs = Date.now();
+            const current = reverify(nowMs);
+            if (!current) return;
+            if (!hasRoomPermission(current.permissions, "surface.view")) return writeFrameNotAllowed(response);
+            writeFrameCredential(response, plan, nowMs, expired);
+          }));
+        }));
+    } catch (error) {
+      // The original deadline lapsing at the fence is the legacy codec's expiry, as at verification.
+      if (!(error instanceof IdentityBoundaryError && error.status === 401 && error.reason === "identity_session_expired")) throw error;
+      expired();
+    }
+  };
+  const admission: LegacyAdmissionRequest = Object.freeze({ mode: "renew", requestId: bearer.requestId, explicitParticipantId: null,
+    participantId, displayName: proof.displayName,
+    requested: Object.freeze({ role: proof.role, roleSource: proof.roleSource ?? "trusted" }), inviteTokenHash: null });
+  const initial = evaluateLegacyAdmission(admission, { room: initialRoom, invite: null, waiting: null }, ctx);
+  if (initial.kind === "session") { writeSessionTokenError(response, initial.result); return null; }
+  if (initial.kind === "upgrade_required") throw new IdentityBoundaryError(409, "identity_upgrade_required");
+  if (initial.kind === "deny") { json(response, 403, { error: "room_access_denied", reason: initial.reason }); return null; }
+  if (initial.kind !== "admit") { writeRoomStateChanged(response); return null; }
+  const { role, roleSource } = initial.decision;
+  if (!hasRoomPermission(getRoomPermissions(role), "surface.view")) { writeFrameNotAllowed(response); return null; }
+  const selector: LegacyRoomCredentialSelector = Object.freeze({ tenantId: scope.tenantId, roomId: scope.roomId,
+    participantId, inviteTokenHash: null });
+  return async () => {
+    try {
+      await releaseFrameCredential(send => storage.releaseLegacyRoomCredential(selector, {}, fresh => {
+        send(() => {
+          const nowMs = Date.now();
+          if (!reverify(nowMs)) return;
+          // Current role, lifecycle and private-room provenance on the locked snapshot; any role drift is a retry.
+          const next = evaluateLegacyAdmission(admission, fresh, Object.freeze({ ...ctx, nowMs }));
+          if (next.kind === "session") writeSessionTokenError(response, next.result);
+          else if (next.kind === "deny") json(response, 403, { error: "room_access_denied", reason: next.reason });
+          else if (next.kind !== "admit" || next.decision.role !== role || next.decision.roleSource !== roleSource) writeRoomStateChanged(response);
+          else writeFrameCredential(response, plan, nowMs, expired);
+        });
+        return undefined;
+      }));
+    } catch (error) {
+      if (identityFenceUnavailable(error)) throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
+      if (error instanceof IdentityStorageError && error.code === "room_not_found") throw new RoomEffectNotFound("room_not_found");
+      throw error;
+    }
+  };
+}
+
+/** User media: the initial role decides the exact grant. The JWT is signed outside every fence; `release` sends it
+ * synchronously inside the final read-only one, which may only refuse, never change the grant or re-sign. */
+interface MediaCredentialCapture {
+  readonly role: RoomRole;
+  /** The original proof had lapsed at signing: nothing was signed. */
+  readonly lapsed: () => void;
+  readonly release: (plan: MediaCredentialPlan, prepared: PreparedMediaCredential, permissions: readonly RoomPermission[]) => Promise<void>;
+}
+
+function countMediaCredentialCompletionFailure(): void {
+  metrics.mediaCredentialReleaseCompletionFailuresTotal += 1;
+}
+
+// Written session, access and publish refusals keep their media join failure labels; thrown boundary errors add none.
+function writeMediaSessionError(response: ServerResponse, result: Extract<RoomSessionTokenVerificationResult, { ok: false }>): void {
+  incrementCounter(metrics.mediaJoinFailuresTotal, result.code);
+  writeSessionTokenError(response, result);
+}
+
+function writeLegacyMediaBearerError(response: ServerResponse, bearer: Exclude<LegacyBearerClass, { kind: "valid" }>): void {
+  if (bearer.kind === "rotated_dev") return writeLegacyBearerError(response, bearer);
+  writeMediaSessionError(response, bearer.kind === "absent" ? { ok: false, code: "missing_token" } : bearer.result);
+}
+
+function writeMediaAccessDenied(response: ServerResponse, reason: string): void {
+  incrementCounter(metrics.mediaJoinFailuresTotal, reason);
+  json(response, sessionBlockStatusCode(reason), { error: "room_access_denied", reason });
+}
+
+function writeMediaPublishNotAllowed(response: ServerResponse): void {
+  incrementCounter(metrics.mediaJoinFailuresTotal, "media_publish_not_allowed");
+  json(response, 403, { error: "forbidden", reason: "media_publish_not_allowed" });
+}
+
+/** One final clock reading. A lapsed original proof keeps its session expiry; a live proof whose prepared JWT has lapsed (a short
+ * configured lifetime, a slow signer or a fence wait) is a fixed retryable 503, never a session expiry and never re-signed. */
+function writeMediaCredential(response: ServerResponse, plan: MediaCredentialPlan, prepared: PreparedMediaCredential,
+  nowMs: number, lapsed: () => void): void {
+  const outcome = releaseMediaCredential(plan, prepared, nowMs);
+  if (outcome.kind === "proof_expired") return lapsed();
+  if (outcome.kind === "preparation_expired") {
+    return json(response, 503, { error: "media_credential_preparation_expired", reason: "media_credential_preparation_expired" });
+  }
+  json(response, 200, outcome.reply);
+}
+
+/** RS2, as for frames: the original proof's scope, epoch, deadline, role and ownership (false included) pin one read-only identity
+ * fence entered only after signing. Drift is recovery, a lost permission is the publish denial, a lapse is session expiry. */
+function captureV2MediaRelease(response: ServerResponse, storage: Storage, initialRoom: RoomRecord | null,
+  proof: RoomSessionTokenPayload): MediaCredentialCapture | null {
+  if (!proof.identityId || typeof proof.authEpoch !== "number" || !Number.isSafeInteger(proof.authEpoch) || proof.authEpoch < 1
+    || typeof proof.isOwner !== "boolean") throw new IdentityBoundaryError(409, "identity_recovery_required");
+  // The proof was scoped by its own room read: a room created, deleted or moved between the two is refused.
+  if (!initialRoom || initialRoom.tenantId !== proof.tenantId || initialRoom.roomId !== proof.roomId) { writeRoomStateChanged(response); return null; }
+  const blockReason = getSessionControlBlockReason(initialRoom, proof.participantId, proof.role, true);
+  if (blockReason) { writeMediaAccessDenied(response, blockReason); return null; }
+  const pinned = Object.freeze({ tenantId: proof.tenantId, roomId: proof.roomId, identityId: proof.identityId,
+    participantId: proof.participantId, authEpoch: proof.authEpoch, expiresAtSeconds: proof.exp,
+    expectedRole: proof.role, expectedIsOwner: proof.isOwner });
+  const lapsed = () => { throw new IdentityBoundaryError(401, "identity_session_expired"); };
+  return { role: proof.role, lapsed, release: async (plan, prepared, permissions) => {
+    const guard: RoomEffectGuard = Object.freeze({ ...pinned, permission: permissions[0], alsoRequired: Object.freeze(permissions.slice(1)) });
+    try {
+      await releaseFrameCredential(async send => {
+        try {
+          await storage.withRoomIdentityEffect(guard, async scoped => {
+            scoped.releaseResponse(() => send(() => writeMediaCredential(response, plan, prepared, Date.now(), lapsed)));
+          });
+        } catch (error) { throw guardedEffectError(error); }
+      }, countMediaCredentialCompletionFailure);
+    } catch (error) {
+      if (!(error instanceof RoomEffectPermissionDenied)) throw error;
+      writeMediaPublishNotAllowed(response);
+    }
+  } };
+}
+
+/** Floor 1, as for frames: the captured MAC-verified bearer and the one initial room read decide the release. A persisted room is
+ * re-admitted in renew mode on the locked snapshot with the captured role and source; a virtual room pins absence through the
+ * original deadline. Neither refreshes a token, writes admission state or falls back to the other namespace. */
+function captureLegacyMediaRelease(response: ServerResponse, storage: Storage, roomId: string, initialRoom: RoomRecord | null,
+  proof: RoomSessionTokenPayload, bearer: Pick<LegacyAdmissionContext, "rawBearer" | "secret"> & { requestId: string }): MediaCredentialCapture | null {
+  const scope = Object.freeze({ tenantId: initialRoom?.tenantId ?? LEGACY_VIRTUAL_TENANT_ID, roomId });
+  if (proof.tenantId !== scope.tenantId || proof.roomId !== scope.roomId) { writeRoomStateChanged(response); return null; }
+  const ctx: LegacyAdmissionContext = Object.freeze({ rawBearer: bearer.rawBearer, secret: bearer.secret, nowMs: Date.now(),
+    accessPolicyEnabled: isRoomAccessPolicyEnabled(), hostControlsEnabled: isHostControlsEnabled() });
+  const { participantId, exp: originalExpiry } = proof;
+  const reverify = (nowMs: number): RoomSessionTokenPayload | null => {
+    const current = classifyLegacyBearer({ ...ctx, nowMs }, scope, participantId);
+    if (current.kind === "valid") return current.payload;
+    writeLegacyMediaBearerError(response, current);
+    return null;
+  };
+  const expired = () => writeMediaSessionError(response, { ok: false, code: "expired_token" });
+  if (!initialRoom) return { role: resolveEffectiveRoomRole(null, participantId, proof.role), lapsed: expired,
+    release: async (plan, prepared, permissions) => {
+      try {
+        await releaseFrameCredential(send => runLegacyVirtualRoomEffect(storage, scope.roomId, { pinAbsence: true, expiresAtSeconds: originalExpiry },
+          async scoped => {
+            scoped.releaseResponse(() => send(() => {
+              const nowMs = Date.now();
+              const current = reverify(nowMs);
+              if (!current) return;
+              const role = resolveEffectiveRoomRole(null, current.participantId, current.role);
+              if (permissions.some(permission => !hasRoomPermission(getRoomPermissions(role), permission))) return writeMediaPublishNotAllowed(response);
+              writeMediaCredential(response, plan, prepared, nowMs, expired);
+            }));
+          }), countMediaCredentialCompletionFailure);
+      } catch (error) {
+        if (!(error instanceof IdentityBoundaryError && error.status === 401 && error.reason === "identity_session_expired")) throw error;
+        expired();
+      }
+    } };
+  const admission: LegacyAdmissionRequest = Object.freeze({ mode: "renew", requestId: bearer.requestId, explicitParticipantId: null,
+    participantId, displayName: proof.displayName,
+    requested: Object.freeze({ role: proof.role, roleSource: proof.roleSource ?? "trusted" }), inviteTokenHash: null });
+  const initial = evaluateLegacyAdmission(admission, { room: initialRoom, invite: null, waiting: null }, ctx);
+  if (initial.kind === "session") { writeMediaSessionError(response, initial.result); return null; }
+  if (initial.kind === "upgrade_required") throw new IdentityBoundaryError(409, "identity_upgrade_required");
+  if (initial.kind === "deny") { writeMediaAccessDenied(response, initial.reason); return null; }
+  if (initial.kind !== "admit") { writeRoomStateChanged(response); return null; }
+  const { role, roleSource } = initial.decision;
+  const selector: LegacyRoomCredentialSelector = Object.freeze({ tenantId: scope.tenantId, roomId: scope.roomId,
+    participantId, inviteTokenHash: null });
+  return { role, lapsed: expired, release: async (plan, prepared, permissions) => {
+    try {
+      await releaseFrameCredential(send => storage.releaseLegacyRoomCredential(selector, {}, fresh => {
+        send(() => {
+          const nowMs = Date.now();
+          if (!reverify(nowMs)) return;
+          const next = evaluateLegacyAdmission(admission, fresh, Object.freeze({ ...ctx, nowMs }));
+          if (next.kind === "session") writeMediaSessionError(response, next.result);
+          else if (next.kind === "deny") writeMediaAccessDenied(response, next.reason);
+          else if (next.kind !== "admit" || next.decision.role !== role || next.decision.roleSource !== roleSource) writeRoomStateChanged(response);
+          else if (permissions.some(permission => !hasRoomPermission(getRoomPermissions(next.decision.role), permission))) writeMediaPublishNotAllowed(response);
+          else writeMediaCredential(response, plan, prepared, nowMs, expired);
+        });
+        return undefined;
+      }), countMediaCredentialCompletionFailure);
+    } catch (error) {
+      if (identityFenceUnavailable(error)) throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
+      if (error instanceof IdentityStorageError && error.code === "room_not_found") throw new RoomEffectNotFound("room_not_found");
+      throw error;
+    }
+  } };
+}
+
+async function releaseLegacyPersonalRoom(request: IncomingMessage, response: ServerResponse, storage: Storage,
+  room: RoomRecord, participantId: string, created: boolean): Promise<void> {
+  const prepared = { created, room: roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request),
+    manifest: await buildManifest(room.roomId, request, room) };
+  await runLegacyRoomEffect(storage, room, {}, async scoped => {
+    const current = await scoped.getRoom(room.roomId);
+    if (!current || current.tenantId !== room.tenantId || current.roomType !== "personal" || current.ownerParticipantId !== participantId) {
+      scoped.releaseResponse(() => { json(response, 404, { error: "room_not_found" }); });
+      return;
+    }
+    if (isRoomDisabled(current)) {
+      scoped.releaseResponse(() => {
+        incrementCounter(metrics.personalRoomOpensTotal, "disabled");
+        json(response, 403, { error: "room_access_denied", reason: "room_disabled", roomId: room.roomId });
+      });
+      return;
+    }
+    scoped.releaseResponse(() => {
+      incrementCounter(metrics.personalRoomOpensTotal, created ? "created" : "existing");
+      json(response, created ? 201 : 200, prepared);
+    });
+  });
+}
+
+async function releaseDocumentBytes(storage: Storage, actor: ControlPlaneActor, room: RoomRecord,
+  document: RoomDocumentRecord, permission: RoomPermission, activeSurfaceRequired: boolean, send: () => void): Promise<boolean> {
+  return runGuardedRoomEffect(storage, actor, room, permission, async scoped => {
+    if (actor.identityProtocolVersion === 2) {
+      const current = await scoped.getRoomDocument(room.roomId, document.documentId);
+      if (!current || current.deletedAt || current.storageKey !== document.storageKey
+        || activeSurfaceRequired && (!current.linkedSurfaceId || current.linkedSurfaceId !== document.linkedSurfaceId
+          || current.metadata?.kind !== document.metadata?.kind)) return false;
+    }
+    scoped.releaseResponse(send);
+    return true;
   });
 }
 
@@ -740,6 +1341,17 @@ function canReadPrivateRoomWithControlPlaneActor(request: IncomingMessage, roomI
 function canManageDisabledRoom(request: IncomingMessage): boolean {
   const actorResult = resolveControlPlaneActor(request);
   return actorResult.ok && actorResult.actor.actorType === "admin-token";
+}
+
+/** Room metadata is visible to invitees; owner-only state has a separate
+ * authority-fenced endpoint and must never hitchhike in a generic room DTO. */
+function roomResponseRecord(request: IncomingMessage, room: RoomRecord): RoomRecord | Omit<RoomRecord, "personalState"> {
+  const actor = resolveControlPlaneActor(request);
+  const record = { ...room };
+  Reflect.deleteProperty(record, "currentOwnerParticipantId");
+  if (actor.ok && actor.actor.actorType === "admin-token") return record;
+  const { personalState: _privateState, ...metadata } = record;
+  return metadata;
 }
 
 function writeRoomDocumentsAudit(input: {
@@ -801,7 +1413,8 @@ function resolveRoomDocumentsActor(
     return deny("room_disabled");
   }
   const effectiveRole = actor.actorType === "room-session"
-    ? resolveEffectiveRoomRole(input.room, actor.participantId ?? actor.actorId, actor.role)
+    ? actor.identityProtocolVersion === 2 ? actor.role
+      : resolveEffectiveRoomRole(input.room, actor.participantId ?? actor.actorId, actor.role)
     : actor.role;
   if (!hasRoomPermission(getRoomPermissions(effectiveRole), input.permission)) {
     return deny("permission_denied");
@@ -811,7 +1424,7 @@ function resolveRoomDocumentsActor(
   return actor;
 }
 
-async function inspectPdfDocument(data: Buffer): Promise<RoomDocumentMetadata> {
+async function inspectPdfDocument(data: Buffer, maxPages: number): Promise<RoomDocumentMetadata> {
   if (!data.subarray(0, 1024).includes(Buffer.from("%PDF-"))) {
     throw new Error("corrupt_pdf");
   }
@@ -821,7 +1434,6 @@ async function inspectPdfDocument(data: Buffer): Promise<RoomDocumentMetadata> {
       throw new Error("encrypted_pdf_unsupported");
     }
     const pageCount = pdf.getPageCount();
-    const maxPages = Number.parseInt(process.env.PDF_PRESENTATION_MAX_PAGES ?? "250", 10);
     if (pageCount < 1) {
       throw new Error("corrupt_pdf");
     }
@@ -900,15 +1512,87 @@ function sanitizeWaitingRoomRequest(request: WaitingRoomRequestRecord): WaitingR
   return { ...request };
 }
 
-async function updateRoomSessionControl(
-  storage: Awaited<typeof storagePromise>,
-  room: RoomRecord,
-  nextControl: RoomSessionControlState
-): Promise<RoomRecord> {
-  const updated = await storage.updateRoom(room.roomId, {
-    sessionControl: sanitizeSessionControlState(nextControl)
-  });
-  return updated ?? { ...room, sessionControl: sanitizeSessionControlState(nextControl) };
+/** The store's exact actor, never the DTO: the administrator token, or a floor-1 MAC's verified claims under its own
+ * signed expiry. Null when a claim or that expiry is absent or not a positive safe instant. */
+function legacyControlActor(actor: ControlPlaneActor): LegacyControlActor | null {
+  if (actor.actorType === "admin-token") return { kind: "admin", actorId: LEGACY_CONTROL_ADMIN_ID };
+  // A v2 Bearer is refused at entry below floor 2; reaching here is a wiring fault.
+  if (actor.identityProtocolVersion === 2) throw new LegacyRoomControlInvariant();
+  const { tenantId, roomId, participantId, role, roleSource, expiresAtSeconds } = actor;
+  const expiresAtMs = typeof expiresAtSeconds === "number" ? expiresAtSeconds * 1000 : Number.NaN;
+  if (!Number.isSafeInteger(expiresAtSeconds) || !Number.isSafeInteger(expiresAtMs) || expiresAtMs <= 0
+    || typeof tenantId !== "string" || !validId(roomId) || !validId(participantId) || roleSource === undefined) return null;
+  return { kind: "session", tenantId, roomId, participantId, role, roleSource, lease: { kind: "bearer", expiresAtMs } };
+}
+
+/** Live persisted-room presence, sampled by the store after its locks; never a precomputed boolean. */
+const legacyRoomPresence: LegacyRoomPresence = (roomId, participantId) =>
+  getPresence(roomId).some(item => item.participantId === participantId);
+
+/** One guarded floor-1 session-control command. A receipt exists only after a known COMMIT ACK. A bearer lapse, a wiring
+ * fault, a missing room and a floor/binding refusal keep their meaning. Anything else, an unknown ACK or a rejected COMMIT
+ * included, is one fixed 503 with no cause, never retried and never answered from a fabricated state. */
+async function applyLegacyRoomControlReceipt(storage: Storage, input: LegacyRoomControlInput): Promise<LegacyRoomControlReceipt> {
+  try {
+    return await storage.applyLegacyRoomControl(input, {});
+  } catch (error) {
+    if (error instanceof LegacyAdmissionDeadlineExpired || error instanceof LegacyRoomControlInvariant
+      || error instanceof LegacyAdmissionWriteInvariant) throw error;
+    if (error instanceof IdentityStorageError && error.code === "room_not_found") throw new RoomEffectNotFound("room_not_found");
+    if (error instanceof IdentityBoundaryError && error.status === 409) throw error;
+    throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+  }
+}
+
+/** Captured once per floor-1 session-control request: the entry check's audit target and the route's denied counter. */
+interface LegacyControlReply {
+  readonly request: IncomingMessage;
+  readonly response: ServerResponse;
+  readonly requestId: string;
+  readonly audit: ControlPlaneAuthorizationOptions;
+  readonly actor: ControlPlaneActor;
+  readonly denied: () => void;
+}
+
+/** Floor-1 session control through the guarded store command: scope from the initial persisted room, the exact actor,
+ * the route's captured flag and, for grant/transfer only, live presence. Answers every confirmed refusal, lapse and
+ * drift itself (null); only an applied receipt returns, and its sinks and effects belong to the caller. An unknown
+ * outcome throws with no sink at all. */
+async function runLegacyRoomControl(storage: Storage, reply: LegacyControlReply, room: RoomRecord,
+  command: LegacyRoomControlCommand, hostControlsEnabled: boolean): Promise<Extract<LegacyRoomControlReceipt, { kind: "applied" }> | null> {
+  const { response, requestId, audit, denied } = reply;
+  const actor = legacyControlActor(reply.actor);
+  if (!actor) {
+    denied();
+    json(response, 401, { error: "unauthorized", reason: "invalid_payload", requestId });
+    return null;
+  }
+  const sampled = command.type === "grant-presenter" || command.type === "transfer-host";
+  const input: LegacyRoomControlInput = { scope: { tenantId: room.tenantId, roomId: room.roomId }, actor, command, hostControlsEnabled,
+    ...(sampled ? { presence: legacyRoomPresence } : {}) };
+  let receipt: LegacyRoomControlReceipt;
+  try {
+    receipt = await applyLegacyRoomControlReceipt(storage, input);
+  } catch (error) {
+    if ((error instanceof IdentityBoundaryError && error.status === 503) || error instanceof LegacyRoomControlInvariant
+      || error instanceof LegacyAdmissionWriteInvariant) throw error;
+    denied();
+    if (!(error instanceof LegacyAdmissionDeadlineExpired)) throw error;
+    json(response, 401, { error: "unauthorized", reason: "expired_token", requestId });
+    return null;
+  }
+  if (receipt.kind === "applied") return receipt;
+  denied();
+  if (receipt.kind === "changed") {
+    writeRoomStateChanged(response);
+  } else if (receipt.error === "forbidden") {
+    writeControlPlaneAudit({ timestamp: new Date().toISOString(), requestId, action: audit.action, permission: audit.permission,
+      object: { type: audit.objectType, id: audit.objectId }, result: "denied", reason: "permission_denied", actor: reply.actor });
+    json(response, 403, { error: "forbidden", reason: "permission_denied", permission: audit.permission, requestId });
+  } else if (receipt.reason !== undefined) {
+    json(response, receipt.status, { error: receipt.error, reason: receipt.reason, requestId });
+  } else json(response, receipt.status, { error: receipt.error });
+  return null;
 }
 
 function incrementHostActionMetric(action: string, result: "allowed" | "denied"): void {
@@ -930,6 +1614,8 @@ function createRoomAccessTokenResponse(input: {
   ttlSeconds: number;
   nowSeconds?: number;
   sceneMediaSurfaces?: RoomSessionTokenPayload["sceneMediaSurfaces"];
+  /** The request's captured signing secret; when omitted the current one is read. */
+  secret?: string;
 }): {
   token: string;
   expiresInSeconds: number;
@@ -958,7 +1644,7 @@ function createRoomAccessTokenResponse(input: {
     jti: randomUUID()
   };
   return {
-    token: encodeAccessToken(payload),
+    token: input.secret === undefined ? encodeAccessToken(payload) : signRoomSessionToken(payload, input.secret),
     expiresInSeconds: ttlSeconds,
     sessionId: payload.sessionId,
     access: createRoomAccessDebugState(input.role),
@@ -1003,120 +1689,285 @@ function writeInviteUseAudit(input: {
   });
 }
 
-type StateTokenAccessResult =
-  | { ok: true; role: RoomRole; roleSource: RoomSessionRoleSource; invite?: RoomInviteRecord }
-  | { ok: false; statusCode: 202 | 403; reason: string; accessRequestId?: string };
+interface LegacyStateTokenClaims {
+  roomId: string;
+  explicitParticipantId: string | null;
+  displayName: string | null;
+  inviteToken: string | null;
+  requestedRole: unknown;
+}
 
-async function resolveStateTokenAccess(
-  storage: Awaited<typeof storagePromise>,
-  request: IncomingMessage,
-  room: RoomRecord | null,
-  requestPayload: StateTokenRequest | null,
-  requested: { role: RoomRole; roleSource: RoomSessionRoleSource }
-): Promise<StateTokenAccessResult> {
-  const participantId = requestPayload?.participantId ?? randomUUID();
-  if (!room) {
-    return { ok: true, ...requested };
-  }
-  if (isRoomDisabled(room)) {
-    return { ok: false, statusCode: 403, reason: "room_disabled" };
-  }
+/** Validate floor-1 input before room/binding lookups. Identity stays null until the virtual
+ * path mints it or the persisted path normalizes it against the captured bearer. */
+function parseLegacyStateTokenRequest(payload: unknown): LegacyStateTokenClaims | null {
+  const body = payload ?? {};
+  if (typeof body !== "object" || Array.isArray(body)) return null;
+  const input = body as StateTokenRequest;
+  const roomId = input.roomId ?? "demo-room";
+  assertVirtualRoomId(roomId);
+  const explicitParticipantId = input.participantId ?? null;
+  if (explicitParticipantId !== null && !validId(explicitParticipantId)) return null;
+  const displayName = input.displayName ?? null;
+  if (displayName !== null && typeof displayName !== "string") return null;
+  return { roomId, explicitParticipantId, displayName, inviteToken: parseInviteToken(input.inviteToken),
+    requestedRole: input.requestedRole ?? input.role };
+}
 
-  const existingSession = await verifyRoomSessionRequest(request, { roomId: room.roomId, participantId: requestPayload?.participantId });
-  if (existingSession.ok) {
-    const role = resolveEffectiveRoomRole(room, existingSession.payload.participantId, existingSession.payload.role);
-    const blockReason = getSessionControlBlockReason(room, existingSession.payload.participantId, role, true);
-    if (blockReason) {
-      return { ok: false, statusCode: 403, reason: blockReason };
+/** Initial pool snapshot outside any fence: the stored room, this room's exact-hash invite
+ * only, and that invite's waiting record for this participant. */
+async function loadLegacyAdmissionSnapshot(storage: Storage, room: RoomRecord, participantId: string,
+  inviteTokenHash: string | null): Promise<LegacyAdmissionSnapshot> {
+  const found = inviteTokenHash === null ? null : await storage.getRoomInviteByTokenHash(inviteTokenHash);
+  const invite = found && found.roomId === room.roomId && found.tokenHash === inviteTokenHash ? found : null;
+  const waiting = invite ? await storage.getWaitingRoomRequestForInviteParticipant(invite.inviteId, participantId) : null;
+  return { room, invite, waiting: waiting && waiting.roomId === room.roomId ? waiting : null };
+}
+
+/** The original bounded denial sinks, keyed by stable reason; never a bearer, invite token or hash. */
+function recordLegacyStateDenial(request: IncomingMessage, room: RoomRecord, invite: RoomInviteRecord | null,
+  participantId: string, reason: string, inviteId: string | undefined, proofSubject: boolean): void {
+  incrementCounter(metrics.roomAccessDeniedTotal, reason);
+  if (reason === "room_disabled" || reason === "waiting_room_pending") return;
+  const personal = isPersonalRoom(room);
+  if (inviteId !== undefined || reason === "invite_required") {
+    const audited = inviteId !== undefined && invite && invite.inviteId === inviteId ? invite : undefined;
+    writeInviteUseAudit({ request, roomId: room.roomId, invite: audited, result: "denied", reason, participantId });
+    if (personal) incrementCounter(metrics.personalRoomAccessDeniedTotal, reason);
+  } else if (personal && !proofSubject) {
+    // A lifecycle block outside the invite path: only the personal-owner path counted it.
+    incrementCounter(metrics.personalRoomAccessDeniedTotal, reason);
+  }
+}
+
+function recordLegacyStateAdmission(request: IncomingMessage, room: RoomRecord, invite: RoomInviteRecord | null,
+  decision: LegacyAdmissionDecision): void {
+  const { source } = decision;
+  if (source.kind === "invite" || source.kind === "waiting_approved") {
+    writeInviteUseAudit({ request, roomId: room.roomId, invite: invite && invite.inviteId === source.inviteId ? invite : undefined,
+      result: "allowed", participantId: decision.participantId });
+    if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomOpensTotal, "invite");
+  } else if (source.kind === "personal_owner") incrementCounter(metrics.personalRoomOpensTotal, "owner");
+}
+
+/** Same body the request handler writes for IdentityBoundaryError(409, "room_state_changed"). */
+function writeRoomStateChanged(response: ServerResponse): void {
+  json(response, 409, { error: "room_state_changed", reason: "room_state_changed" });
+}
+
+function writeLegacyBearerError(response: ServerResponse, bearer: Exclude<LegacyBearerClass, { kind: "valid" }>): void {
+  if (bearer.kind === "rotated_dev") return json(response, 409, { error: "identity_required", reason: "identity_upgrade_required" });
+  writeSessionTokenError(response, bearer.kind === "absent" ? { ok: false, code: "missing_token" } : bearer.result);
+}
+
+function legacySessionControlBody(room: RoomRecord, participantId: string, role: RoomRole, reason: string | null) {
+  return {
+    state: sanitizeSessionControlState(room.sessionControl),
+    participant: { participantId, role, permissions: getRoomPermissions(role), status: reason ? "blocked" : "active", reason }
+  };
+}
+
+/** The invite the initial admission selected, if any: the only one a lapse or a refused write is audited under. */
+function legacySelectedInviteId(initial: LegacyAdmissionOutcome): string | undefined {
+  if (initial.kind === "waiting") return initial.inviteId;
+  if (initial.kind !== "admit") return undefined;
+  const { source } = initial.decision;
+  return source.kind === "invite" || source.kind === "waiting_approved" ? source.inviteId : undefined;
+}
+
+/** Captured once per admission for every write-path reply; the invite ID is audit-internal, never echoed. */
+interface LegacyAdmissionReply {
+  readonly request: IncomingMessage;
+  readonly response: ServerResponse;
+  readonly requestId: string;
+  readonly participantId: string;
+  readonly inviteId: string | undefined;
+  readonly proofSubject: boolean;
+}
+
+/** The guarded write input: the exact selector, the plan's two frozen leases and a pure decide that re-runs the plan
+ * decision at the store's own instant under the captured bearer, secret and flags. No role, proof or lease widens. */
+function legacyAdmissionWriteInput(plan: LegacyAdmissionWritePlan, admission: LegacyAdmissionRequest, ctx: LegacyAdmissionContext,
+  selector: LegacyRoomCredentialSelector): LegacyAdmissionWriteInput {
+  return Object.freeze({ selector, mode: plan.mode, deadline: plan.deadline, presentedBearerDeadline: plan.presentedBearerDeadline,
+    displayName: plan.mode === "pending" ? plan.displayName : null,
+    decide: (fresh: LegacyRoomCredentialSnapshot, storeNow: number) =>
+      decideLegacyAdmissionWrite(plan, admission, fresh, Object.freeze({ ...ctx, nowMs: storeNow })) });
+}
+
+/** One guarded floor-1 admission write. A receipt exists only after a known COMMIT ACK; nothing is sent or signed
+ * inside. A lapse, a wiring fault, a missing room and a floor/binding refusal keep their meaning. Anything else, an
+ * unknown ACK or a rejected COMMIT included, is one fixed 503 with no cause and is never retried: a committed claim
+ * or row may remain without a receipt. A fresh request for the same normalized subject reconciles with it, from an
+ * explicit ID or a valid scoped bearer. Only omitting both creates a new subject per request with no reconciliation. */
+async function writeLegacyAdmissionReceipt(storage: Storage, input: LegacyAdmissionWriteInput): Promise<LegacyAdmissionWriteReceipt> {
+  try {
+    return await storage.writeLegacyAdmission(input, {});
+  } catch (error) {
+    if (error instanceof LegacyAdmissionDeadlineExpired || error instanceof LegacyAdmissionWriteInvariant) throw error;
+    if (error instanceof IdentityStorageError && error.code === "room_not_found") throw new RoomEffectNotFound("room_not_found");
+    if (error instanceof IdentityBoundaryError && error.status === 409) throw error;
+    throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+  }
+}
+
+/** A lapsed original lease at planning or at any write moment; nothing was written. A bearer lapse is the codec's
+ * expired_token, an invite lapse the evaluator's invite_expired denial on the initial snapshot. */
+function writeLegacyAdmissionLapse(reply: LegacyAdmissionReply, snapshot: LegacyAdmissionSnapshot, lapse: LegacyAdmissionDeadlineExpired): void {
+  if (lapse.kind === "bearer") return writeSessionTokenError(reply.response, { ok: false, code: "expired_token" });
+  json(reply.response, 403, { error: "room_access_denied", reason: "invite_expired", requestId: reply.requestId });
+  recordLegacyStateDenial(reply.request, snapshot.room, snapshot.invite, reply.participantId, "invite_expired", reply.inviteId, reply.proofSubject);
+}
+
+/** Answers a known-COMMIT receipt; false only for a ready host seat, whose token still comes from the fresh read-only
+ * release. Sinks follow the reply: the pending count only for a pending receipt, a denial only for a refusal. */
+function finishLegacyAdmissionWrite(reply: LegacyAdmissionReply, mode: LegacyAdmissionWritePlan["mode"], receipt: LegacyAdmissionWriteReceipt): boolean {
+  const { request, response, requestId, participantId } = reply;
+  if (receipt.kind === "host_ready") {
+    if (mode !== "claim_host") throw new LegacyAdmissionWriteInvariant("invalid_legacy_admission_plan");
+    return false;
+  }
+  if (receipt.kind === "pending") {
+    if (mode !== "pending") throw new LegacyAdmissionWriteInvariant("invalid_legacy_admission_plan");
+    json(response, 202, { error: "room_access_denied", reason: "waiting_room_pending", accessRequestId: receipt.accessRequestId, requestId });
+    incrementCounter(metrics.roomAccessDeniedTotal, "waiting_room_pending");
+  } else if (receipt.kind === "refused") {
+    json(response, 403, { error: "room_access_denied", reason: receipt.reason, accessRequestId: receipt.accessRequestId, requestId });
+    recordLegacyStateDenial(request, receipt.fresh.room, receipt.fresh.invite, participantId, receipt.reason, reply.inviteId, reply.proofSubject);
+  } else writeRoomStateChanged(response);
+  return true;
+}
+
+/** Floor-1 persisted-room state token. Flags, secret and bearer are captured once; the pure evaluator admits on a pool
+ * snapshot. The deferred host claim and pending request, formerly unfenced writes, are planned from that snapshot before
+ * any wait and written only through the guarded store write; every token still comes from the read-only release after
+ * its COMMIT, which re-admits on a fresh snapshot. Frame, media, bootstrap and retirement are unchanged here. */
+async function admitLegacyStateToken(request: IncomingMessage, response: ServerResponse, storage: Storage, room: RoomRecord,
+  claims: LegacyStateTokenClaims, requested: { role: RoomRole; roleSource: RoomSessionRoleSource }, ttlSeconds: number,
+  requestId: string): Promise<void> {
+  const ctx: LegacyAdmissionContext = Object.freeze({ rawBearer: getBearerToken(request), secret: getStateTokenSecret(),
+    nowMs: Date.now(), accessPolicyEnabled: isRoomAccessPolicyEnabled(), hostControlsEnabled: isHostControlsEnabled() });
+  const bearer = classifyLegacyBearer(ctx, room, claims.explicitParticipantId);
+  const participantId = normalizeLegacyParticipant(claims.explicitParticipantId, bearer, randomUUID);
+  const displayName = claims.displayName ?? participantId;
+  const admission: LegacyAdmissionRequest = Object.freeze({ mode: "admit", requestId,
+    explicitParticipantId: claims.explicitParticipantId, participantId, displayName, requested: Object.freeze({ ...requested }),
+    inviteTokenHash: claims.inviteToken === null ? null : hashInviteTokenWithSecret(claims.inviteToken, ctx.secret) });
+  // A valid scoped proof is always the subject's own; only it skips the owner-path counter.
+  const proofSubject = bearer.kind === "valid";
+  const snapshot = await loadLegacyAdmissionSnapshot(storage, room, participantId, admission.inviteTokenHash);
+  const initial = evaluateLegacyAdmission(admission, snapshot, ctx);
+  if (initial.kind === "session") return writeSessionTokenError(response, initial.result);
+  if (initial.kind === "upgrade_required") throw new IdentityBoundaryError(409, "identity_upgrade_required");
+  if (initial.kind === "deny") {
+    recordLegacyStateDenial(request, room, snapshot.invite, participantId, initial.reason, initial.inviteId, proofSubject);
+    return json(response, sessionBlockStatusCode(initial.reason), { error: "room_access_denied", reason: initial.reason, accessRequestId: initial.accessRequestId, requestId });
+  }
+  const selector: LegacyRoomCredentialSelector = Object.freeze({ tenantId: room.tenantId, roomId: room.roomId, participantId,
+    inviteTokenHash: admission.inviteTokenHash });
+  const reply: LegacyAdmissionReply = Object.freeze({ request, response, requestId, participantId,
+    inviteId: legacySelectedInviteId(initial), proofSubject });
+  let plan: LegacyAdmissionWritePlan | null = null;
+  let receipt: LegacyAdmissionWriteReceipt | null = null;
+  try {
+    // Copied and frozen from the pool snapshot before any wait. Null writes nothing: a non-host or already seated
+    // admission, including this subject's own seat after a lost ACK, which the release below re-admits.
+    plan = planLegacyAdmissionWrite(initial, admission, snapshot, ctx);
+    if (plan) receipt = await writeLegacyAdmissionReceipt(storage, legacyAdmissionWriteInput(plan, admission, ctx, selector));
+  } catch (error) {
+    if (!(error instanceof LegacyAdmissionDeadlineExpired)) throw error;
+    return writeLegacyAdmissionLapse(reply, snapshot, error);
+  }
+  if (plan && receipt && finishLegacyAdmissionWrite(reply, plan.mode, receipt)) return;
+  // A pending plan always finishes above; only an admission reaches the release.
+  if (initial.kind !== "admit") throw new LegacyAdmissionWriteInvariant("invalid_legacy_admission_plan");
+  const { decision } = initial;
+  // Prepared from the frozen binding through the shared cache outside the fence; confirmation rejects any binding drift.
+  const prepared = decision.binding.contentHash === null ? await legacySceneMediaSurfaces.resolve(decision.binding.sceneBundleUrl,
+    `http://127.0.0.1:${request.socket.localPort ?? process.env.API_PORT ?? "4000"}`) : undefined;
+  const preparedSurfaces = prepared?.kind === "loaded" ? prepared.surfaces : undefined;
+  // A cold admission keeps the no-surface fallback; a bearer renewal never signs over an unproven manifest.
+  const unavailable = prepared?.kind === "failed" && decision.source.kind === "bearer";
+  let verdict = undefined as { confirmation: LegacyAdmissionConfirmation; fresh: LegacyRoomCredentialSnapshot } | undefined;
+  await releaseLegacyStateToken(storage, selector, fresh => {
+    const finalCtx: LegacyAdmissionContext = Object.freeze({ ...ctx, nowMs: Date.now() });
+    const confirmation = confirmLegacyAdmission(decision, admission, fresh, finalCtx);
+    // Only after a confirmed admission: no token and no sinks; the caller keeps its credential and retries.
+    if (confirmation.ok && unavailable) { json(response, 503, { error: "scene_media_surfaces_unavailable" }); return undefined; }
+    if (confirmation.ok) {
+      json(response, 200, createRoomAccessTokenResponse({ room: confirmation.room, roomId: room.roomId, participantId, displayName,
+        role: confirmation.role, roleSource: confirmation.roleSource, sceneMediaSurfaces: confirmation.templateContext?.surfaces ?? preparedSurfaces,
+        ttlSeconds, nowSeconds: Math.floor(finalCtx.nowMs / 1000), secret: ctx.secret }));
+    } else if (confirmation.kind === "deny") {
+      json(response, confirmation.status, { error: "room_access_denied", reason: confirmation.reason,
+        accessRequestId: confirmation.accessRequestId, requestId });
+    } else if (confirmation.kind === "session") writeSessionTokenError(response, confirmation.result);
+    else writeRoomStateChanged(response);
+    verdict = { confirmation, fresh };
+    return undefined;
+  });
+  // Sinks follow the settled release and reflect only what was actually sent.
+  if (!verdict) return;
+  const { confirmation, fresh } = verdict;
+  if (confirmation.ok) recordLegacyStateAdmission(request, fresh.room, fresh.invite, decision);
+  else if (confirmation.kind === "deny") {
+    recordLegacyStateDenial(request, fresh.room, fresh.invite, participantId, confirmation.reason, confirmation.inviteId, proofSubject);
+  }
+}
+
+/** Floor-1 room-session read. Every reply for a valid scoped proof, with or without a renewed token, is
+ * released from a read-only fenced snapshot; only a positive initial admission prepares surfaces, outside it.
+ * Claims come from the captured MAC-verified bearer, never the request; any other bearer is its codec
+ * refusal before any snapshot or fence. */
+async function releaseLegacySessionControl(request: IncomingMessage, response: ServerResponse, storage: Storage,
+  room: RoomRecord, requestId: string): Promise<void> {
+  const ctx: LegacyAdmissionContext = Object.freeze({ rawBearer: getBearerToken(request), secret: getStateTokenSecret(),
+    nowMs: Date.now(), accessPolicyEnabled: isRoomAccessPolicyEnabled(), hostControlsEnabled: isHostControlsEnabled() });
+  const bearer = classifyLegacyBearer(ctx, room, null);
+  if (bearer.kind !== "valid") return writeLegacyBearerError(response, bearer);
+  const subject = bearer.payload;
+  const { participantId } = subject;
+  const admission: LegacyAdmissionRequest = Object.freeze({ mode: "renew", requestId, explicitParticipantId: null, participantId,
+    displayName: subject.displayName,
+    requested: Object.freeze({ role: subject.role, roleSource: subject.roleSource ?? "trusted" }), inviteTokenHash: null });
+  const initial = evaluateLegacyAdmission(admission, { room, invite: null, waiting: null }, ctx);
+  const ttlSeconds = Number.parseInt(process.env.STATE_TOKEN_TTL_SECONDS ?? "900", 10);
+  const prepared = initial.kind === "admit" && initial.decision.binding.contentHash === null
+    ? await legacySceneMediaSurfaces.resolve(initial.decision.binding.sceneBundleUrl,
+      `http://127.0.0.1:${request.socket.localPort ?? process.env.API_PORT ?? "4000"}`) : undefined;
+  const preparedSurfaces = prepared?.kind === "loaded" ? prepared.surfaces : undefined;
+  await releaseLegacyStateToken(storage, { tenantId: room.tenantId, roomId: room.roomId, participantId, inviteTokenHash: null }, fresh => {
+    const finalCtx: LegacyAdmissionContext = Object.freeze({ ...ctx, nowMs: Date.now() });
+    // Expiry, MAC and scope first: a stale proof never observes fresh state.
+    const current = classifyLegacyBearer(finalCtx, fresh.room, null);
+    if (current.kind !== "valid") { writeLegacyBearerError(response, current); return undefined; }
+    const blocked = (reason: string) => json(response, 200, legacySessionControlBody(fresh.room, participantId,
+      resolveEffectiveRoomRole(fresh.room, participantId, current.payload.role), reason));
+    if (initial.kind === "admit") {
+      const confirmation = confirmLegacyAdmission(initial.decision, admission, fresh, finalCtx);
+      // Renew admits only the bearer source, so a failed load is strict: no token, the old credential stays.
+      if (confirmation.ok && prepared?.kind === "failed") json(response, 503, { error: "scene_media_surfaces_unavailable" });
+      else if (confirmation.ok) {
+        const { source } = initial.decision;
+        const renewed = createRoomAccessTokenResponse({ room: confirmation.room, roomId: room.roomId, participantId,
+          displayName: initial.decision.displayName, role: confirmation.role, roleSource: confirmation.roleSource,
+          sessionId: source.kind === "bearer" ? source.sessionId : undefined,
+          sceneMediaSurfaces: confirmation.templateContext?.surfaces ?? preparedSurfaces, ttlSeconds,
+          nowSeconds: Math.floor(finalCtx.nowMs / 1000), secret: ctx.secret });
+        json(response, 200, { ...legacySessionControlBody(confirmation.room, participantId, confirmation.role, null),
+          token: renewed.token, expiresInSeconds: renewed.expiresInSeconds, access: renewed.access,
+          role: renewed.role, permissions: renewed.permissions });
+      } else if (confirmation.kind === "deny") blocked(confirmation.reason);
+      else if (confirmation.kind === "session") writeSessionTokenError(response, confirmation.result);
+      else writeRoomStateChanged(response);
+      return undefined;
     }
-    return { ok: true, role, roleSource: existingSession.payload.roleSource ?? "trusted" };
-  }
-
-  const inviteToken = parseInviteToken(requestPayload?.inviteToken);
-  if (!inviteToken) {
-    if (isPersonalRoom(room)) {
-      if (isPersonalRoomOwner(room, participantId)) {
-        const role = resolveEffectiveRoomRole(room, participantId, "host");
-        const blockReason = getSessionControlBlockReason(room, participantId, role, false);
-        if (blockReason) {
-          incrementCounter(metrics.personalRoomAccessDeniedTotal, blockReason);
-          return { ok: false, statusCode: 403, reason: blockReason };
-        }
-        incrementCounter(metrics.personalRoomOpensTotal, "owner");
-        return { ok: true, role, roleSource: "trusted" };
-      }
-      incrementCounter(metrics.personalRoomAccessDeniedTotal, "invite_required");
-      writeInviteUseAudit({ request, roomId: room.roomId, result: "denied", reason: "invite_required", participantId });
-      return { ok: false, statusCode: 403, reason: "invite_required" };
-    }
-    const visibility = isRoomAccessPolicyEnabled() ? sanitizeRoomVisibility(room.visibility) : "public";
-    if (visibility !== "private") {
-      const role = resolveEffectiveRoomRole(room, participantId, requested.role);
-      const blockReason = getSessionControlBlockReason(room, participantId, role, false);
-      if (blockReason) {
-        return { ok: false, statusCode: 403, reason: blockReason };
-      }
-      return { ok: true, role, roleSource: requested.roleSource };
-    }
-    writeInviteUseAudit({ request, roomId: room.roomId, result: "denied", reason: "invite_required", participantId });
-    return { ok: false, statusCode: 403, reason: "invite_required" };
-  }
-
-  const invite = await storage.getRoomInviteByTokenHash(hashInviteToken(inviteToken));
-  if (!invite || invite.roomId !== room.roomId) {
-    writeInviteUseAudit({ request, roomId: room.roomId, result: "denied", reason: "invite_required", participantId });
-    if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomAccessDeniedTotal, "invite_required");
-    return { ok: false, statusCode: 403, reason: "invite_required" };
-  }
-  if (invite.revokedAt) {
-    writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "denied", reason: "invite_revoked", participantId });
-    if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomAccessDeniedTotal, "invite_revoked");
-    return { ok: false, statusCode: 403, reason: "invite_revoked" };
-  }
-  if (Date.parse(invite.expiresAt) <= Date.now()) {
-    writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "denied", reason: "invite_expired", participantId });
-    if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomAccessDeniedTotal, "invite_expired");
-    return { ok: false, statusCode: 403, reason: "invite_expired" };
-  }
-
-  if (invite.waitingRoomEnabled) {
-    const existingRequest = await storage.getWaitingRoomRequestForInviteParticipant(invite.inviteId, participantId);
-    if (existingRequest?.status === "approved") {
-      const role = resolveEffectiveRoomRole(room, participantId, invite.role);
-      const blockReason = getSessionControlBlockReason(room, participantId, role, false);
-      if (blockReason) {
-        writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "denied", reason: blockReason, participantId });
-        if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomAccessDeniedTotal, blockReason);
-        return { ok: false, statusCode: 403, reason: blockReason };
-      }
-      writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "allowed", participantId });
-      if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomOpensTotal, "invite");
-      return { ok: true, role, roleSource: "trusted", invite };
-    }
-    if (existingRequest?.status === "rejected") {
-      writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "denied", reason: "waiting_room_rejected", participantId });
-      if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomAccessDeniedTotal, "waiting_room_rejected");
-      return { ok: false, statusCode: 403, reason: "waiting_room_rejected", accessRequestId: existingRequest.requestId };
-    }
-    const waitingRequest = existingRequest ?? await storage.createWaitingRoomRequest({
-      roomId: room.roomId,
-      inviteId: invite.inviteId,
-      participantId,
-      displayName: requestPayload?.displayName ?? participantId
-    });
-    return { ok: false, statusCode: 202, reason: "waiting_room_pending", accessRequestId: waitingRequest.requestId };
-  }
-
-  const role = resolveEffectiveRoomRole(room, participantId, invite.role);
-  const blockReason = getSessionControlBlockReason(room, participantId, role, false);
-  if (blockReason) {
-    writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "denied", reason: blockReason, participantId });
-    if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomAccessDeniedTotal, blockReason);
-    return { ok: false, statusCode: 403, reason: blockReason };
-  }
-  writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "allowed", participantId });
-  if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomOpensTotal, "invite");
-  return { ok: true, role, roleSource: "trusted", invite };
+    const next = evaluateLegacyAdmission(admission, fresh, finalCtx);
+    if (next.kind === "deny") blocked(next.reason);
+    else if (next.kind === "session") writeSessionTokenError(response, next.result);
+    // A fresh admission after an initial denial is never widened to a token: the client retries.
+    else writeRoomStateChanged(response);
+    return undefined;
+  });
 }
 
 function sanitizeSceneBundleId(value: string | undefined, fallback: string): string | null {
@@ -1324,7 +2175,67 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   metrics.requestsTotal += 1;
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `localhost:${apiPort}`}`);
+  // Before storage, plugin, session, boundary or room lookups; preflight keeps its CORS response.
+  if (method !== "OPTIONS") assertVirtualDataPath(url.pathname);
   const storage = await storagePromise;
+
+  // This optional protocol family owns its admission/response boundary. At
+  // floor 1 it denies before legacy actors, artifact buffering or blob IO.
+  if (method !== "OPTIONS" && await handleRoomPluginHttp(request, response, url, {
+    storage, getBlobs: () => configuredRoomPluginBlobStorage(runtimePublicRoot, request, publicBaseUrlFromRequest),
+    resolveActor: resolveRoomPluginActor
+  })) return;
+
+  // Only v2 Bearers defer classification to handlers with body-bound identity.
+  // Legacy Bearers still hit the activation boundary before payload validation.
+  const bodyTokenRoute = method === "POST" && ["/api/tokens/media", "/api/tokens/remote-browser-frame"].includes(url.pathname);
+  const bearer = getBearerToken(request);
+  const diagnosticRoom = method === "POST" ? /^\/api\/rooms\/([^/]+)\/diagnostics$/.exec(url.pathname)?.[1] : undefined;
+  // For a foreign URL room, retain valid-session 403 / expired-session 409 at
+  // entry. This decoded lookup hint never supplies authentication metadata.
+  const deferV2Body = !!bearer?.startsWith("rs2.") && (bodyTokenRoute
+    || !!diagnosticRoom && decodeURIComponent(diagnosticRoom) === untrustedSessionRoom(bearer));
+  const bodySessionRoute = bodyTokenRoute && !bearer || deferV2Body;
+  if (bearer?.startsWith("rs2.")) {
+    if (await legacyIdentityBoundary.minimum() < 2) throw new IdentityBoundaryError(426, "identity_upgrade_required");
+    if (!deferV2Body) {
+      const pathRoom = /^\/api\/rooms\/([^/]+)/.exec(url.pathname)?.[1];
+      const pathParticipant = method === "PUT"
+        ? /^\/api\/rooms\/[^/]+\/(?:presence|xr-telemetry)\/([^/]+)$/.exec(url.pathname)?.[1]
+        : method === "DELETE" ? /^\/api\/rooms\/[^/]+\/presence\/([^/]+)$/.exec(url.pathname)?.[1] : undefined;
+      const foreignRoom = !!pathRoom && decodeURIComponent(pathRoom) !== untrustedSessionRoom(bearer);
+      let verified: VerifiedRoomRequestV2 | null;
+      try {
+        verified = await resolveRoomRequestV2({ storage, secret: getStateTokenSecret(), token: bearer,
+          participantId: !foreignRoom && pathParticipant ? decodeURIComponent(pathParticipant) : undefined });
+      } catch (error) {
+        // The decoded room is only a denial hint. Preserve valid-session 403,
+        // but never suggest renewable expiry for a foreign-room request.
+        if (error instanceof IdentityBoundaryError && error.reason === "identity_session_expired" && foreignRoom) {
+          throw new IdentityBoundaryError(409, "identity_recovery_required");
+        }
+        throw error;
+      }
+      if (!verified) throw new IdentityBoundaryError(409, "identity_recovery_required");
+      if (pathRoom && decodeURIComponent(pathRoom) !== verified.room.roomId) {
+        return json(response, 403, { error: "forbidden", reason: "room_mismatch" });
+      }
+      v2SessionsByRequest.set(request, verified);
+    }
+  }
+
+  if (legacyBoundaryApplies(method, url.pathname)) {
+    const actor = resolveControlPlaneActor(request);
+    const administrator = actor.ok && actor.actor.actorType === "admin-token";
+    const verifiedV2 = v2SessionsByRequest.has(request);
+    const publicListing = method === "GET" && url.pathname === "/api/rooms";
+    if (!publicListing && !bodySessionRoute && !verifiedV2 && (!administrator || !legacyBoundaryAllowsAdministrator(url.pathname))) {
+      const scopedRoom = /^\/api\/rooms\/([^/]+)/.exec(url.pathname)?.[1];
+      const roomId = scopedRoom ? decodeURIComponent(scopedRoom)
+        : actor.ok && actor.actor.actorType === "room-session" ? actor.actor.roomId : undefined;
+      await legacyIdentityBoundary.assertCompatible(roomId);
+    }
+  }
 
   if (method === "OPTIONS") {
     response.writeHead(204, {
@@ -1371,6 +2282,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (method === "GET" && url.pathname === "/health") {
+    const identityProtocolVersion = await legacyIdentityBoundary.minimum() >= 2 ? 2 : null;
     json(response, 200, {
       status: "ok",
       service: "api",
@@ -1378,6 +2290,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       port: apiPort,
       timestamp: new Date().toISOString(),
       features: {
+        ...(identityProtocolVersion ? { identityProtocolVersion } : {}),
         xrEnabled: isXrFeatureEnabled(),
         voiceEnabled: process.env.FEATURE_VOICE !== "false",
         screenShareEnabled: process.env.FEATURE_SCREEN_SHARE !== "false",
@@ -1436,6 +2349,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  if (method === "GET" && url.pathname === "/plugin-sandbox-probe.html") {
+    const served = await serveStatic(response, join(runtimeStaticRoot, "plugin-sandbox-probe.html"));
+    if (!served) json(response, 503, { error: "plugin_sandbox_probe_build_missing" });
+    return;
+  }
+
   if (method === "GET" && url.pathname === "/remote-browser-demo.html") {
     const served = await serveStatic(response, join(runtimePublicRoot, "remote-browser-demo.html"));
     if (!served) json(response, 404, { error: "remote_browser_demo_missing" });
@@ -1465,6 +2384,44 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  if (method === "GET" && url.pathname === "/api/internal/identity-policy") {
+    if (!isAuthorizedInternalRequest(request)) return json(response, 403, { error: "forbidden" });
+    const minimumProtocolVersion = await legacyIdentityBoundary.minimum();
+    const roomId = url.searchParams.get("roomId");
+    const roomRequiresV2 = roomId ? await storage.hasRoomIdentityAuthority(roomId) : false;
+    return json(response, 200, { minimumProtocolVersion, roomRequiresV2 });
+  }
+
+  if (method === "POST" && url.pathname === "/api/internal/identity-session/verify") {
+    if (!isAuthorizedInternalRequest(request)) return json(response, 403, { error: "forbidden" });
+    const payload = await parseBody<{ roomId?: unknown; participantId?: unknown; sessionToken?: unknown; includeSceneContext?: unknown }>(request);
+    if (typeof payload?.roomId !== "string" || typeof payload?.participantId !== "string"
+      || typeof payload?.sessionToken !== "string" || payload.sessionToken.length > 4096) {
+      return json(response, 400, { error: "invalid_identity_session_request" });
+    }
+    if (await legacyIdentityBoundary.minimum() < 2) return json(response, 409, { error: "identity_required", reason: "identity_upgrade_required" });
+    const room = await storage.getRoom(payload.roomId);
+    if (!room) return json(response, 401, { error: "identity_required", reason: "identity_recovery_required" });
+    const session = await resolveRoomRequestV2({ storage, secret: getStateTokenSecret(), token: payload.sessionToken,
+      expectedRoomId: payload.roomId, participantId: payload.participantId });
+    if (!session || session.identity.participantId !== payload.participantId) {
+      return json(response, 401, { error: "identity_required", reason: "identity_recovery_required" });
+    }
+    const context = payload.includeSceneContext === true ? roomTemplateSessionContext(room) : null;
+    return json(response, 200, {
+      tenantId: room.tenantId, roomId: room.roomId, identityId: session.identity.identityId,
+      participantId: session.identity.participantId, displayName: session.identity.displayName,
+      authEpoch: session.identity.authEpoch, sessionId: session.sessionId,
+      expiresAtSeconds: session.expiresAtSeconds, authorityRevision: session.authority.revision,
+      role: session.role, permissions: session.permissions,
+      ...(payload.includeSceneContext === true ? {
+        sceneMediaSurfaces: context?.surfaces
+          ?? await loadSceneMediaSurfaces(room.sceneBundleUrl, `http://127.0.0.1:${request.socket.localPort ?? process.env.API_PORT ?? "4000"}`),
+        ...(context ? { roomTemplate: context } : {})
+      } : {})
+    });
+  }
+
   // A portal-managed deployment answers room-scoped routes only for rooms that exist.
   const roomScopedMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)(?:\/|$)/);
   if (roomScopedMatch && !isAdhocRoomsAllowed() && !(await storage.getRoom(decodeURIComponent(roomScopedMatch[1])))) {
@@ -1490,13 +2447,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const actorResult = resolveControlPlaneActor(request);
     const canListPrivate = actorResult.ok && actorResult.actor.actorType === "admin-token";
     const rooms = (await storage.listRooms()).filter((room) => canListPrivate || (!isRoomDisabled(room) && (!isRoomAccessPolicyEnabled() || sanitizeRoomVisibility(room.visibility) === "public")));
-    json(response, 200, { items: rooms.map((room) => ({ ...room, roomLink: createRoomLink(room.roomId, request) })) });
+    json(response, 200, { items: rooms.map((room) => ({ ...roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request) })) });
     return;
   }
 
   if (method === "GET" && url.pathname === "/api/control-plane/session") {
     const actor = await requireControlPlanePermission(request, response, { permission: "dashboard.read", action: "admin.dashboard.view", objectType: "dashboard", objectId: "control-plane" });
     if (!actor) return;
+    const minimumIdentityProtocol = await legacyIdentityBoundary.minimum();
+    if (minimumIdentityProtocol !== 1 && minimumIdentityProtocol !== 2) throw new IdentityBoundaryError(503, "identity_authority_unavailable");
     metrics.adminDashboardViewsTotal += 1;
     json(response, 200, {
       actor: {
@@ -1506,7 +2465,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         tenantId: actor.tenantId,
         roomId: actor.roomId
       },
-      permissions: controlPlanePermissions
+      permissions: controlPlanePermissions,
+      minimumIdentityProtocol
     });
     return;
   }
@@ -1730,9 +2690,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!actor) return;
     const rawPayload = normalizeRoomAvatarOverrides((await parseBody<RoomPayloadInput>(request)) ?? {});
     if (await isManagedTenant(storage, rawPayload.tenantId)) return writeManagedResourceDenied(request, response, "tenant", String(rawPayload.tenantId));
+    const allowUnownedPersonal = await legacyIdentityBoundary.minimum() >= 2;
     let payload: Partial<RoomRecord>;
     try {
-      const resolved = await resolveRoomTemplateCreate(storage, rawPayload);
+      const resolved = await resolveRoomTemplateCreate(storage, rawPayload, { allowUnownedPersonal });
       payload = { ...normalizeRoomPayload(resolved.input, "create"), templateVersion: resolved.version.version };
     } catch (error) {
       const failure = templateInputError(error);
@@ -1742,7 +2703,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
     const tenantIds = new Set((await storage.listTenants()).map((tenant) => tenant.tenantId));
     const templateIds = new Set((await storage.listTemplates()).map((template) => template.templateId));
-    const validationError = validateRoomInput(payload, templateIds, tenantIds);
+    const validationError = validateRoomInput(payload, templateIds, tenantIds, { allowUnownedPersonal });
     if (validationError) {
       incrementCounter(metrics.roomCreationFailuresTotal, validationError);
       return json(response, 400, { error: validationError });
@@ -1758,15 +2719,17 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
     let room: RoomRecord;
     try {
-      room = await storage.createRoom(payload);
+      room = await storage.createAdministrativeRoom(payload);
     } catch (error) {
+      if (error instanceof IdentityBoundaryError) throw error;
+      if (identityFenceUnavailable(error)) throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
       const templateFailure = templateInputError(error);
       if (templateFailure) {
         incrementCounter(metrics.roomCreationFailuresTotal, templateFailure.code);
         return json(response, templateFailure.status, { error: templateFailure.code });
       }
       const message = error instanceof Error ? error.message : "room_create_failed";
-      const reason = /duplicate key|unique constraint|already exists/i.test(message)
+      const reason = message === "room_slug_conflict" || /duplicate key|unique constraint|already exists/i.test(message)
         ? "room_slug_conflict"
         : /^(template_deprecated|template_version_not_found):/.test(message)
           ? "invalid_template"
@@ -1775,12 +2738,76 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       return json(response, reason === "room_slug_conflict" ? 409 : 400, { error: reason });
     }
     incrementCounter(metrics.roomsCreatedTotal, `control-plane:${sanitizeRoomVisibility(room.visibility)}`);
-    json(response, 201, { ...room, roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request) });
+    json(response, 201, { ...room, roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request, room) });
     return;
   }
 
   if (method === "POST" && url.pathname === "/api/personal-room") {
     if (!isPersonalRoomsFeatureEnabled()) return json(response, 404, { error: "personal_rooms_disabled" });
+    if (await legacyIdentityBoundary.minimum() >= 2) {
+      const personalBearer = getBearerToken(request);
+      if (personalBearer && !personalBearer.startsWith("rs2.")) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      const payload = (await parseBody<{ identityProtocolVersion?: unknown; participantId?: unknown; displayName?: unknown;
+        tenantId?: unknown; roomId?: unknown; identityCredential?: unknown }>(request)) ?? {};
+      if (payload.identityProtocolVersion !== 2) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      if (personalBearer) return json(response, 426, { error: "identity_required", reason: "identity_upgrade_required" });
+      const tenantId = typeof payload.tenantId === "string" && payload.tenantId.trim() ? payload.tenantId.trim() : "demo-tenant";
+      if (!(await storage.listTenants()).some(item => item.tenantId === tenantId)) return json(response, 400, { error: "invalid_tenant" });
+      if (payload.identityCredential !== undefined) {
+        if (typeof payload.roomId !== "string") return json(response, 409, { error: "identity_required", reason: "identity_recovery_required" });
+        const existing = await storage.getRoom(payload.roomId);
+        if (!existing || existing.roomType !== "personal" || existing.tenantId !== tenantId) {
+          return json(response, 409, { error: "identity_required", reason: "identity_recovery_required" });
+        }
+        const scope = { tenantId, roomId: existing.roomId };
+        // Prepare unsigned response metadata before locking. Only the original
+        // possession proof can authorize release; signing cannot widen its deadline.
+        const codec = createRoomIdentityCodec(getStateTokenSecret());
+        const proof = codec.verify(payload.identityCredential, scope);
+        if (!proof) throw new IdentityBoundaryError(409, "identity_recovery_required");
+        try {
+          const roomLink = createRoomLink(existing.roomId, request);
+          await storage.releasePersonalRoomOwnerResponse(proof, (room, identity) => {
+            const identityCredential = codec.sign(identity, { nowSeconds: Math.floor(Date.now() / 1000), lifetimeSeconds: 86_400 });
+            json(response, 200, { created: false, room: roomResponseRecord(request, room), roomLink,
+              identityProtocolVersion: 2, participantId: identity.participantId, identityCredential });
+          });
+          return;
+        } catch (error) {
+          if (identityFenceUnavailable(error)) throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
+          if (error instanceof PersonalOwnerRoomBlocked) return json(response, 403, { error: "room_access_denied", reason: error.reason });
+          if (error instanceof IdentityStorageError) {
+            throw new IdentityBoundaryError(409, "identity_recovery_required");
+          }
+          throw error;
+        }
+      }
+      if (payload.roomId !== undefined) return json(response, 409, { error: "identity_required", reason: "identity_recovery_required" });
+      // A remembered public legacy ID is only a lookup hint. It cannot claim a
+      // former personal room or trigger a silent new-room replacement.
+      if (typeof payload.participantId === "string" && (await storage.listRooms()).some(room =>
+        room.tenantId === tenantId && room.roomType === "personal" && room.ownerParticipantId === payload.participantId)) {
+        return json(response, 409, { error: "identity_required", reason: "identity_recovery_required" });
+      }
+      if (!await storage.reserveIdentityAdmission({ originHash: identityAdmissionOriginHash(request), kind: "personal" })) {
+        return json(response, 429, { error: "room_access_denied", reason: "identity_rate_limited" });
+      }
+      const displayName = normalizeDisplayName(payload.displayName, "Owner");
+      const templates = await storage.listTemplates();
+      const templateId = templates.some(template => template.templateId === "personal-room-basic" && template.status === "active")
+        ? "personal-room-basic" : "personal-workspace-basic";
+      let owned: Awaited<ReturnType<typeof storage.createPersonalOwnedRoom>>;
+      try {
+        owned = await storage.createPersonalOwnedRoom({ tenantId, templateId, displayName, name: personalRoomName(displayName) });
+      } catch (error) {
+        if (identityFenceUnavailable(error)) throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
+        throw error;
+      }
+      const { room, identity } = owned;
+      const identityCredential = createRoomIdentityCodec(getStateTokenSecret()).sign(identity, { lifetimeSeconds: 86_400 });
+      return json(response, 201, { created: true, room: roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request),
+        identityProtocolVersion: 2, participantId: identity.participantId, identityCredential });
+    }
     const payload = (await parseBody<{ participantId?: unknown; displayName?: unknown; tenantId?: unknown }>(request)) ?? {};
     const participantId = normalizeParticipantId(payload.participantId);
     if (!participantId) {
@@ -1800,21 +2827,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
     const existing = (await storage.listRooms()).find((room) => room.roomType === "personal" && room.ownerParticipantId === participantId && room.tenantId === tenantId) ?? null;
     if (existing) {
-      if (isRoomDisabled(existing)) {
-        incrementCounter(metrics.personalRoomOpensTotal, "disabled");
-        return json(response, 403, { error: "room_access_denied", reason: "room_disabled", roomId: existing.roomId });
-      }
-      incrementCounter(metrics.personalRoomOpensTotal, "existing");
-      return json(response, 200, { created: false, room: existing, roomLink: createRoomLink(existing.roomId, request), manifest: await buildManifest(existing.roomId, request) });
+      await releaseLegacyPersonalRoom(request, response, storage, existing, participantId, false);
+      return;
     }
 
     const displayName = normalizeDisplayName(payload.displayName, participantId);
     const roomId = createPersonalRoomId(`${tenantId}:${participantId}`);
-    if (await storage.getRoom(roomId)) {
-      incrementCounter(metrics.personalRoomOpensTotal, "slug_conflict");
-      return json(response, 409, { error: "room_slug_conflict" });
-    }
     let room: RoomRecord;
+    let created = false;
     try {
       const activeTemplates = await storage.listTemplates();
       const templateId = activeTemplates.some(template => template.templateId === "personal-room-basic") ? "personal-room-basic" : "personal-workspace-basic";
@@ -1830,17 +2850,32 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         ...(templateId === "personal-workspace-basic" ? { features: { voice: true, spatialAudio: true, screenShare: true }, theme: { primaryColor: "#7dd3fc", accentColor: "#312e81" } } : {}),
         sessionControl: { hostParticipantId: participantId }
       });
-      room = await storage.createRoom(resolved.input);
+      let result: Awaited<ReturnType<typeof storage.createLegacyPersonalRoom>>;
+      try {
+        result = await storage.createLegacyPersonalRoom({ ...resolved.input, roomId, tenantId, ownerParticipantId: participantId });
+      } catch (error) {
+        if (identityFenceUnavailable(error)) throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
+        throw error;
+      }
+      room = result.room;
+      created = result.created;
     } catch (error) {
+      if (error instanceof Error && error.message === "room_slug_conflict") {
+        incrementCounter(metrics.personalRoomOpensTotal, "slug_conflict");
+        return json(response, 409, { error: "room_slug_conflict" });
+      }
       if (error instanceof Error && (/^(template_deprecated|template_version_not_found):/.test(error.message) || error.message === "deprecated_template")) {
         incrementCounter(metrics.personalRoomOpensTotal, "template_unavailable");
         return json(response, 503, { error: "personal_room_template_unavailable" });
       }
       throw error;
     }
+    if (!created) {
+      await releaseLegacyPersonalRoom(request, response, storage, room, participantId, false);
+      return;
+    }
     metrics.personalRoomsCreatedTotal += 1;
     incrementCounter(metrics.roomsCreatedTotal, "self-service:private");
-    incrementCounter(metrics.personalRoomOpensTotal, "created");
     logEvent({
       service: "api",
       event: "personal_room_created",
@@ -1850,8 +2885,38 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       ownerParticipantId: participantId,
       timestamp: new Date().toISOString()
     });
-    json(response, 201, { created: true, room, roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request) });
+    await releaseLegacyPersonalRoom(request, response, storage, room, participantId, true);
     return;
+  }
+
+  const identityRecoveryMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/identity-recovery$/);
+  if (method === "POST" && identityRecoveryMatch) {
+    const roomId = decodeURIComponent(identityRecoveryMatch[1]);
+    const actor = await requireControlPlanePermission(request, response, {
+      permission: "room.session-control", action: "identity.recovery.issue", objectType: "room", objectId: roomId
+    });
+    if (!actor) return;
+    if (actor.actorType !== "admin-token") return json(response, 403, { error: "forbidden" });
+    const room = await storage.getRoom(roomId);
+    if (!room) return json(response, 404, { error: "room_not_found" });
+    const payload = (await parseBody<{ participantId?: unknown; role?: unknown }>(request)) ?? {};
+    const participantId = normalizeParticipantId(payload.participantId);
+    if (!participantId || (payload.role !== "host" && payload.role !== "owner")) {
+      return json(response, 400, { error: "invalid_identity_recovery_target" });
+    }
+    try {
+      const service = createRoomIdentityService(storage.roomIdentities, getStateTokenSecret(), Date.now,
+        { identityLifetimeSeconds: 86_400 });
+      const issued = await service.issueRecovery({ tenantId: room.tenantId, roomId,
+        targetParticipantId: participantId, targetRole: payload.role,
+        expiresAt: new Date(Date.now() + 600_000).toISOString(),
+        issuer: { actorType: "admin-token", actorId: actor.actorId, role: "admin" } });
+      return json(response, 201, { recoveryCredential: issued.credential, expiresAt: issued.expiresAt });
+    } catch (error) {
+      const failure = lifecycleV2Error(error);
+      if (failure) return json(response, failure.status, { error: failure.error });
+      throw error;
+    }
   }
 
   const roomPersonalStateMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/personal-state$/);
@@ -1867,14 +2932,19 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       return json(response, actorResult.statusCode, { error: "unauthorized", reason: actorResult.reason, requestId });
     }
     const actor = actorResult.actor;
-    const canAccessPersonalState = actor.actorType === "admin-token" || (actor.actorType === "room-session" && actor.roomId === roomId && actor.participantId === room.ownerParticipantId);
+    const canAccessPersonalState = actor.actorType === "admin-token" || (actor.actorType === "room-session" && actor.roomId === roomId
+      && (actor.identityProtocolVersion === 2 ? actor.isOwner === true : actor.participantId === room.ownerParticipantId));
     if (!canAccessPersonalState) {
       if (method === "PUT") incrementCounter(metrics.personalStateSaveFailuresTotal, "owner_required");
       return json(response, 403, { error: "forbidden", reason: "owner_required", requestId });
     }
 
     if (method === "GET") {
-      json(response, 200, { state: room.personalState ?? {} });
+      await runGuardedRoomEffect(storage, actor, room, "room.join", async scoped => {
+        const state = await scoped.getPersonalRoomState(room.tenantId, roomId);
+        if (state === null) return scoped.releaseResponse(() => { json(response, 404, { error: "room_not_found" }); });
+        scoped.releaseResponse(() => { json(response, 200, { state }); });
+      }, { ownerOnly: true });
       return;
     }
 
@@ -1883,12 +2953,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       incrementCounter(metrics.personalStateSaveFailuresTotal, "invalid_personal_state");
       return json(response, 400, { error: "invalid_personal_state" });
     }
-    const updated = await storage.updateRoom(roomId, { personalState: state });
-    if (!updated) {
+    const updated = await runGuardedRoomEffect(storage, actor, room, "room.join",
+      scoped => scoped.updatePersonalRoomState(room.tenantId, roomId, state), { ownerOnly: true, roomWrite: true });
+    if (updated === null) {
       incrementCounter(metrics.personalStateSaveFailuresTotal, "room_not_found");
       return json(response, 404, { error: "room_not_found" });
     }
-    json(response, 200, { state: updated.personalState ?? state });
+    json(response, 200, { state: updated });
     return;
   }
 
@@ -1902,19 +2973,29 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const actor = resolveRoomDocumentsActor(request, response, { room, permission, action: method === "GET" ? "documents.list" : "documents.upload" });
     if (!actor) return;
 
+    let uploadPolicy: ReturnType<typeof getDocumentUploadPolicy> | undefined;
+    try { uploadPolicy = getDocumentUploadPolicy(); }
+    catch { if (method === "POST") return json(response, 503, { error: "document_upload_limits_unavailable" }); }
     if (method === "GET") {
       const documents = await storage.listRoomDocuments(roomId);
-      json(response, 200, { items: documents.map((document) => serializeRoomDocument(request, document)) });
+      const items = documents.map((document) => serializeRoomDocument(request, document));
+      await runGuardedRoomEffect(storage, actor, room, permission, async scoped => { scoped.releaseResponse(() => { json(response, 200, { items, uploadPolicy }); }); });
       return;
     }
 
-    const maxBytes = Number.parseInt(process.env.DOCUMENT_UPLOAD_MAX_BYTES ?? `${10 * 1024 * 1024}`, 10);
+    if (!uploadPolicy) return json(response, 503, { error: "document_upload_limits_unavailable" });
+    const maxBytes = uploadPolicy.maxFileBytes;
     const boundary = parseMultipartBoundary(request.headers["content-type"]);
     if (!boundary) {
       incrementCounter(metrics.documentsUploadedTotal, "unknown:rejected");
       return json(response, 415, { error: "expected_multipart_document_upload" });
     }
-    const body = await readRequestBuffer(request, maxBytes);
+    const contentLength = request.headers["content-length"];
+    if (contentLength !== undefined && Number(contentLength) > maxBytes + DOCUMENT_MULTIPART_OVERHEAD_BYTES) {
+      response.setHeader("connection", "close");
+      return json(response, 413, { error: "document_too_large" });
+    }
+    const body = await readRequestBuffer(request, maxBytes + DOCUMENT_MULTIPART_OVERHEAD_BYTES);
     const parts = parseMultipartFormData(body, boundary);
     const documentFile = filePart(parts, "document") ?? filePart(parts, "file");
     const filename = normalizeDocumentFilename(documentFile?.filename);
@@ -1935,7 +3016,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     let documentMetadata: RoomDocumentMetadata = {};
     if (contentType === "application/pdf") {
       try {
-        documentMetadata = await inspectPdfDocument(documentFile.data);
+        documentMetadata = await inspectPdfDocument(documentFile.data, uploadPolicy.maxPdfPages);
       } catch (error) {
         const reason = error instanceof Error ? error.message : "corrupt_pdf";
         incrementCounter(metrics.pdfValidationFailuresTotal, reason);
@@ -1956,12 +3037,17 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       }
     }
 
+    let uploadedStorage: ReturnType<typeof getDocumentUploadStorage> | null = null;
+    let uploadedKey: string | null = null;
+    let documentPersisted = false;
     try {
       const documentId = randomUUID();
       const uploadStorage = getDocumentUploadStorage(request);
       const storageKey = documentStorageKey(room.tenantId, roomId, documentId, filename);
       await writeDocumentObject(uploadStorage, storageKey, documentFile.data, contentType);
-      const document = await storage.createRoomDocument({
+      uploadedStorage = uploadStorage;
+      uploadedKey = storageKey;
+      const document = await runGuardedRoomEffect(storage, actor, room, permission, scoped => scoped.createRoomDocument({
         documentId,
         roomId,
         tenantId: room.tenantId,
@@ -1972,14 +3058,27 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         checksum: `sha256:${sha256Hex(documentFile.data)}`,
         uploadedBy: actor.actorId,
         metadata: documentMetadata
-      });
+      }));
+      documentPersisted = true;
       incrementCounter(metrics.documentsUploadedTotal, `${contentType}:success`);
       incrementCounter(metrics.documentStorageBytesTotal, room.tenantId, document.sizeBytes);
       json(response, 201, { document: serializeRoomDocument(request, document) });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "document_upload_failed";
+      // A lost COMMIT acknowledgement is not evidence that publication failed.
+      // Retain the blob for reconciliation rather than breaking a committed row.
+      if (uploadedKey && uploadedStorage && !documentPersisted && !uncertainRoomCommit(error)) {
+        await deleteDocumentObject(uploadedStorage, uploadedKey).catch(() => {
+          incrementCounter(metrics.documentBlobDeletesTotal, "failed");
+        });
+      }
+      if (uncertainRoomCommit(error)) {
+        incrementCounter(metrics.documentsUploadedTotal, `${contentType}:uncertain`);
+        throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
+      }
+      if (error instanceof RoomEffectPermissionDenied || error instanceof IdentityBoundaryError) throw error;
       incrementCounter(metrics.documentsUploadedTotal, `${contentType}:failed`);
-      json(response, message.startsWith("misconfigured_document_upload_storage") ? 503 : 400, { error: message, requestId });
+      const storageFailure = uploadedKey === null;
+      json(response, storageFailure ? 503 : 500, { error: storageFailure ? "document_storage_unavailable" : "document_upload_failed", requestId });
     }
     return;
   }
@@ -1997,23 +3096,29 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const actor = resolveRoomDocumentsActor(request, response, { room, permission, action, documentId });
     if (!actor) return;
     const document = await storage.getRoomDocument(roomId, documentId);
-    if (!document || document.deletedAt) return json(response, 404, { error: "document_not_found" });
+    const deleteItem = method === "DELETE" && actionPath === "item";
+    if (!document || (document.deletedAt && !deleteItem)) return json(response, 404, { error: "document_not_found" });
 
     if (method === "GET" && actionPath === "download") {
+      let bytes: Buffer;
       try {
-        const bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+        bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+      } catch (error) {
+        json(response, 503, { error: "document_storage_unavailable", requestId });
+        return;
+      }
+      const released = await releaseDocumentBytes(storage, actor, room, document, permission, false, () => {
         metrics.documentDownloadsTotal += 1;
         response.writeHead(200, {
           "content-type": document.contentType,
           "content-length": String(bytes.byteLength),
           "content-disposition": `attachment; filename="${safeHeaderFilename(document.filename)}"`,
+          "cache-control": "private, no-store",
           "x-request-id": requestId
         });
         response.end(bytes);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "document_download_failed";
-        json(response, 503, { error: message, requestId });
-      }
+      });
+      if (!released) json(response, 404, { error: "document_not_found" });
       return;
     }
 
@@ -2022,8 +3127,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         incrementCounter(metrics.documentPresentationContentTotal, "not_active");
         return json(response, 404, { error: "presentation_not_active" });
       }
+      let bytes: Buffer;
       try {
-        const bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+        bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+      } catch (error) {
+        incrementCounter(metrics.documentPresentationContentTotal, "failed");
+        json(response, 503, { error: "document_storage_unavailable", requestId });
+        return;
+      }
+      const released = await releaseDocumentBytes(storage, actor, room, document, permission, true, () => {
         incrementCounter(metrics.documentPresentationContentTotal, "success");
         response.writeHead(200, {
           "content-type": "application/pdf",
@@ -2033,11 +3145,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
           "x-request-id": requestId
         });
         response.end(bytes);
-      } catch (error) {
-        incrementCounter(metrics.documentPresentationContentTotal, "failed");
-        const message = error instanceof Error ? error.message : "presentation_content_failed";
-        json(response, 503, { error: message, requestId });
-      }
+      });
+      if (!released) json(response, 404, { error: "presentation_not_active" });
       return;
     }
 
@@ -2047,8 +3156,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         incrementCounter(metrics.documentMediaContentTotal, `${kind === "video" ? "video" : "image"}:not_active`);
         return json(response, 404, { error: "media_content_not_active" });
       }
+      let bytes: Buffer;
       try {
-        const bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+        bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+      } catch (error) {
+        incrementCounter(metrics.documentMediaContentTotal, `${kind}:failed`);
+        json(response, 503, { error: "document_storage_unavailable", requestId });
+        return;
+      }
+      const released = await releaseDocumentBytes(storage, actor, room, document, permission, true, () => {
         incrementCounter(metrics.documentMediaContentTotal, `${kind}:success`);
         response.writeHead(200, {
           "content-type": document.contentType,
@@ -2059,30 +3175,35 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
           "x-request-id": requestId
         });
         response.end(bytes);
-      } catch (error) {
-        incrementCounter(metrics.documentMediaContentTotal, `${kind}:failed`);
-        json(response, 503, { error: error instanceof Error ? error.message : "media_content_failed", requestId });
-      }
+      });
+      if (!released) json(response, 404, { error: "media_content_not_active" });
       return;
     }
 
     if (method === "DELETE" && actionPath === "item") {
+      // A confirmed tombstone is the deletion intent for every protocol.
+      // Retry decisions are read under the fence, not from the pre-fence hint.
+      const result = await runGuardedRoomEffect(storage, actor, room, permission, async scoped => {
+        const marked = await scoped.markRoomDocumentDeleted(roomId, documentId, new Date().toISOString(), actor.actorId);
+        if (marked) return { document: marked, transitioned: true };
+        const current = await scoped.getRoomDocument(roomId, documentId);
+        return current?.deletedAt ? { document: current, transitioned: false } : null;
+      });
+      if (!result) return json(response, 404, { error: "document_not_found" });
+      if (result.transitioned) metrics.documentDeletesTotal += 1;
       try {
         await cleanupDocumentMediaObjects(roomId, documentId);
       } catch (error) {
-        return json(response, 503, { error: error instanceof Error ? error.message : "presentation_cleanup_failed", requestId });
+        return json(response, 503, { error: "document_cleanup_unavailable", requestId });
       }
       try {
-        await deleteDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+        await deleteDocumentObject(getDocumentUploadStorage(request), result.document.storageKey);
         incrementCounter(metrics.documentBlobDeletesTotal, "success");
       } catch (error) {
         incrementCounter(metrics.documentBlobDeletesTotal, "failed");
-        return json(response, 503, { error: error instanceof Error ? error.message : "document_object_delete_failed", requestId });
+        return json(response, 503, { error: "document_cleanup_unavailable", requestId });
       }
-      const deleted = await storage.markRoomDocumentDeleted(roomId, documentId, new Date().toISOString(), actor.actorId);
-      if (!deleted) return json(response, 404, { error: "document_not_found" });
-      metrics.documentDeletesTotal += 1;
-      json(response, 200, { document: serializeRoomDocument(request, deleted) });
+      json(response, 200, { document: serializeRoomDocument(request, result.document) });
       return;
     }
 
@@ -2095,7 +3216,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       const payload = (await parseBody<{ surfaceId?: unknown }>(request)) ?? {};
       const surfaceId = normalizeDocumentSurfaceId(payload.surfaceId);
       if (surfaceId === undefined) return json(response, 400, { error: "invalid_document_surface_id" });
-      const updated = await storage.updateRoomDocumentSurface(roomId, documentId, surfaceId);
+      const updated = await runGuardedRoomEffect(storage, actor, room, permission,
+        scoped => scoped.updateRoomDocumentSurface(roomId, documentId, surfaceId));
       if (!updated) return json(response, 404, { error: "document_not_found" });
       metrics.documentSurfaceSelectionsTotal += 1;
       json(response, 200, { document: serializeRoomDocument(request, updated) });
@@ -2145,7 +3267,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       if (assetValidationError) return json(response, 400, { error: assetValidationError });
     }
     if (Object.keys(payload).length === 0) {
-      json(response, 200, { ...existingRoom, roomLink: createRoomLink(existingRoom.roomId, request), manifest: await buildManifest(existingRoom.roomId, request) });
+      json(response, 200, { ...existingRoom, roomLink: createRoomLink(existingRoom.roomId, request), manifest: await buildManifest(existingRoom.roomId, request, existingRoom) });
       return;
     }
     let updated: RoomRecord | null;
@@ -2163,7 +3285,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       throw error;
     }
     if (!updated) return json(response, 404, { error: "room_not_found" });
-    json(response, 200, { ...updated, roomLink: createRoomLink(updated.roomId, request), manifest: await buildManifest(updated.roomId, request) });
+    json(response, 200, { ...updated, roomLink: createRoomLink(updated.roomId, request), manifest: await buildManifest(updated.roomId, request, updated) });
     return;
   }
 
@@ -2184,7 +3306,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       metrics.roomsDisabledTotal += 1;
       presenceByRoom.delete(roomId);
     }
-    json(response, 200, { ...updated, roomLink: createRoomLink(updated.roomId, request), manifest: await buildManifest(updated.roomId, request) });
+    json(response, 200, { ...updated, roomLink: createRoomLink(updated.roomId, request), manifest: await buildManifest(updated.roomId, request, updated) });
     return;
   }
 
@@ -2203,7 +3325,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const room = await storage.getRoom(roomId);
     if (!room) return json(response, 404, { error: "room_not_found" });
     if (method === "GET") {
-      json(response, 200, { items: (await storage.listRoomInvites(roomId)).map((invite) => sanitizeRoomInvite(invite)) });
+      await runGuardedRoomEffect(storage, actor, room, "room.join", async scoped => {
+        const items = (await scoped.listRoomInvites(roomId)).map((invite) => sanitizeRoomInvite(invite));
+        scoped.releaseResponse(() => { json(response, 200, { items }); });
+      }, { hostOrOwner: true });
       return;
     }
     // Managed rooms admit people through platform grants (T08), not baseline invite links.
@@ -2216,14 +3341,23 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       : nowMs + Math.max(1, Math.min(30 * 24 * 60 * 60, Math.floor(payload.expiresInSeconds ?? 3600))) * 1000;
     if (!Number.isFinite(expiresAtMs)) return json(response, 400, { error: "invalid_invite_expiry" });
     const token = createInviteToken();
-    const invite = await storage.createRoomInvite({
+    const inviteInput = {
       roomId,
       tokenHash: hashInviteToken(token),
       role: parseRoomRole(payload.role, "guest"),
       waitingRoomEnabled: payload.waitingRoomEnabled === true,
       expiresAt: new Date(expiresAtMs).toISOString(),
       createdBy: actor.actorId
-    });
+    };
+    let invite: RoomInviteRecord;
+    if (await legacyIdentityBoundary.minimum() >= 2) {
+      try { invite = await storage.createRoomInviteV2({ ...inviteInput, actor: roomIdentityActorFromHttp(actor, room) }); }
+      catch (error) {
+        const failure = lifecycleV2Error(error);
+        if (failure) return json(response, failure.status, { error: failure.error });
+        throw error;
+      }
+    } else invite = await storage.createRoomInvite(inviteInput);
     json(response, 201, sanitizeRoomInvite(invite, createInviteLink(roomId, token, request)));
     return;
   }
@@ -2241,7 +3375,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       allowHostOwnRoom: true
     });
     if (!actor) return;
-    const invite = await storage.revokeRoomInvite(roomId, inviteId, new Date().toISOString(), actor.actorId);
+    const room = await storage.getRoom(roomId);
+    if (!room) return json(response, 404, { error: "room_not_found" });
+    const invite = await runGuardedRoomEffect(storage, actor, room, "room.join",
+      scoped => scoped.revokeRoomInvite(roomId, inviteId, new Date().toISOString(), actor.actorId), { hostOrOwner: true });
     if (!invite) return json(response, 404, { error: "invite_not_found" });
     metrics.invitesRevokedTotal += 1;
     json(response, 200, sanitizeRoomInvite(invite));
@@ -2260,7 +3397,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       allowHostOwnRoom: true
     });
     if (!actor) return;
-    json(response, 200, { items: (await storage.listWaitingRoomRequests(roomId)).map(sanitizeWaitingRoomRequest) });
+    const room = await storage.getRoom(roomId);
+    if (!room) return json(response, 404, { error: "room_not_found" });
+    await runGuardedRoomEffect(storage, actor, room, "room.join", async scoped => {
+      const items = (await scoped.listWaitingRoomRequests(roomId)).map(sanitizeWaitingRoomRequest);
+      scoped.releaseResponse(() => { json(response, 200, { items }); });
+    }, { hostOrOwner: true });
     return;
   }
 
@@ -2278,11 +3420,21 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       allowHostOwnRoom: true
     });
     if (!actor) return;
-    const waitingRequest = await storage.updateWaitingRoomRequest(roomId, waitingRequestId, {
-      status: decision,
-      decidedAt: new Date().toISOString(),
-      decidedBy: actor.actorId
-    });
+    const room = await storage.getRoom(roomId);
+    if (!room) return json(response, 404, { error: "room_not_found" });
+    let waitingRequest: WaitingRoomRequestRecord | null;
+    try {
+      waitingRequest = await runGuardedRoomEffect(storage, actor, room, "room.join", scoped => scoped.updateWaitingRoomRequest(roomId, waitingRequestId, {
+        status: decision,
+        decidedAt: new Date().toISOString(),
+        decidedBy: actor.actorId
+      }), { hostOrOwner: true });
+    } catch (error) {
+      if (error instanceof Error && error.message === "waiting_decision_finalized") {
+        return json(response, 409, { error: "waiting_decision_finalized" });
+      }
+      throw error;
+    }
     if (!waitingRequest) return json(response, 404, { error: "waiting_room_request_not_found" });
     json(response, 200, sanitizeWaitingRoomRequest(waitingRequest));
     return;
@@ -2300,40 +3452,33 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (actorResult.actor.actorType !== "admin-token" && actorResult.actor.roomId !== roomId) {
       return json(response, 403, { error: "forbidden", reason: "room_mismatch", requestId });
     }
+    // Floor-1 room sessions: every reply is released from a read-only fenced snapshot.
+    if (actorResult.actor.actorType === "room-session" && actorResult.actor.identityProtocolVersion !== 2) {
+      await releaseLegacySessionControl(request, response, storage, room, requestId);
+      return;
+    }
+    if (actorResult.actor.actorType === "room-session") {
+      const verified = v2SessionsByRequest.get(request);
+      if (!verified || verified.room.roomId !== roomId) throw new IdentityBoundaryError(409, "identity_recovery_required");
+      const expiresAtSeconds = verified.expiresAtSeconds;
+      const view = await readParticipantSessionViewV2(storage, verified);
+      const mediaScreenReconciliation = await mediaScreenService.status(roomId, view.authorityRevision);
+      // A change hint for the plugin runtime refresh, not plugin authority: omitted on a plugin storage failure or a slow read.
+      const pluginBindingsRevision = await readPluginBindingsRevisionHint(storage, { tenantId: room.tenantId, roomId });
+      assertParticipantViewDeadline(expiresAtSeconds);
+      return json(response, 200, { ...view, mediaScreenReconciliation, ...(pluginBindingsRevision === undefined ? {} : { pluginBindingsRevision }) });
+    }
 
-    const session = actorResult.actor.actorType === "room-session"
-      ? verifyRoomSessionToken(getBearerToken(request), getStateTokenSecret(), { roomId, participantId: actorResult.actor.participantId })
-      : null;
-    const participantIdForStatus = session?.ok ? session.payload.participantId : actorResult.actor.participantId;
-    const currentRole = session?.ok ? session.payload.role : actorResult.actor.role;
-    const effectiveRole = participantIdForStatus ? resolveEffectiveRoomRole(room, participantIdForStatus, currentRole) : currentRole;
-    const statusReason = participantIdForStatus ? getSessionControlBlockReason(room, participantIdForStatus, effectiveRole, true) : null;
-    const ttlSeconds = Number.parseInt(process.env.STATE_TOKEN_TTL_SECONDS ?? "900", 10);
-    const tokenResponse = session?.ok && !statusReason ? createRoomAccessTokenResponse({
-      room,
-      roomId,
-      participantId: session.payload.participantId,
-      displayName: session.payload.displayName,
-      role: effectiveRole,
-      roleSource: session.payload.roleSource ?? "trusted",
-      sessionId: session.payload.sessionId,
-      sceneMediaSurfaces: session.payload.sceneMediaSurfaces,
-      ttlSeconds
-    }) : null;
+    // Platform administrators have no participant identity. Keep their existing
+    // read projection separate from the self-bound runtime access snapshot.
+    const atFloor2 = await legacyIdentityBoundary.minimum() >= 2;
+    const current = atFloor2 ? await currentRoomOwner(storage, { tenantId: room.tenantId, roomId }) : null;
     json(response, 200, {
-      state: sanitizeSessionControlState(room.sessionControl),
-      participant: participantIdForStatus ? {
-        participantId: participantIdForStatus,
-        role: effectiveRole,
-        permissions: getRoomPermissions(effectiveRole),
-        status: statusReason ? "blocked" : "active",
-        reason: statusReason
-      } : null,
-      token: tokenResponse?.token,
-      expiresInSeconds: tokenResponse?.expiresInSeconds,
-      access: tokenResponse?.access,
-      role: tokenResponse?.role,
-      permissions: tokenResponse?.permissions
+      state: sanitizeSessionControlState(atFloor2
+        ? await currentSessionControlV2(storage, room) : room.sessionControl),
+      ...(current ? { authorityRevision: current.authority.revision, ownerParticipantId: current.ownerParticipantId,
+        mediaScreenReconciliation: await mediaScreenService.status(roomId, current.authority.revision) } : {}),
+      participant: null
     });
     return;
   }
@@ -2342,10 +3487,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "POST" && sessionControlActionMatch) {
     const roomId = decodeURIComponent(sessionControlActionMatch[1]);
     const action = sessionControlActionMatch[2] as "lock" | "unlock" | "end";
-    if (!isHostControlsEnabled()) return json(response, 404, { error: "host_controls_disabled" });
+    const hostControlsEnabled = isHostControlsEnabled();
+    if (!hostControlsEnabled) return json(response, 404, { error: "host_controls_disabled" });
     const room = await storage.getRoom(roomId);
     if (!room) return json(response, 404, { error: "room_not_found" });
-    const actor = await requireControlPlanePermission(request, response, {
+    const control: ControlPlaneAuthorizationOptions = {
       permission: "room.session-control",
       action: `room.session-control.${action}`,
       objectType: "room",
@@ -2353,26 +3499,33 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       targetRoomId: roomId,
       allowHostOwnRoom: true,
       currentHostParticipantId: defaultSessionControlState(room.sessionControl).hostParticipantId
-    });
+    };
+    const actor = await requireControlPlanePermission(request, response, control);
     if (!actor) {
       incrementHostActionMetric(action, "denied");
       return;
     }
-    const now = new Date().toISOString();
-    const current = defaultSessionControlState(room.sessionControl);
-    const next = action === "lock"
-      ? { ...current, lockedAt: now, lockedBy: actor.actorId }
-      : action === "unlock"
-        ? { ...current, lockedAt: null, lockedBy: null }
-        : {
-          ...current,
-          endedAt: now,
-          endedBy: actor.actorId,
-          presenterParticipantId: null,
-          presenterRevokedAt: now,
-          presenterRevokedBy: actor.actorId
-        };
-    const updated = await updateRoomSessionControl(storage, room, next);
+    if (await legacyIdentityBoundary.minimum() >= 2) {
+      const payload = (await parseBody<{ expectedRevision?: number }>(request)) ?? {};
+      try {
+        const updated = await applyRoomLifecycleWithMedia({ storage, room, actor, command: { type: action }, expectedRevision: payload.expectedRevision });
+        if (action === "lock") metrics.roomLockedTotal += 1;
+        if (action === "end") {
+          metrics.sessionsEndedTotal += 1;
+          for (const participant of getPresence(roomId)) deletePresence(roomId, participant.participantId);
+        }
+        incrementHostActionMetric(action, "allowed");
+        return json(response, 200, updated);
+      } catch (error) {
+        incrementHostActionMetric(action, "denied");
+        const failure = lifecycleV2Error(error);
+        if (failure) return json(response, failure.status, { error: failure.error });
+        throw error;
+      }
+    }
+    const applied = await runLegacyRoomControl(storage, { request, response, requestId, audit: control, actor,
+      denied: () => incrementHostActionMetric(action, "denied") }, room, { type: action }, hostControlsEnabled);
+    if (!applied) return;
     if (action === "lock") metrics.roomLockedTotal += 1;
     if (action === "end") {
       metrics.sessionsEndedTotal += 1;
@@ -2381,7 +3534,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       }
     }
     incrementHostActionMetric(action, "allowed");
-    json(response, 200, { state: sanitizeSessionControlState(updated.sessionControl) });
+    json(response, 200, { state: sanitizeSessionControlState(applied.state) });
     return;
   }
 
@@ -2389,10 +3542,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "POST" && participantRemoveMatch) {
     const roomId = decodeURIComponent(participantRemoveMatch[1]);
     const targetParticipantId = decodeURIComponent(participantRemoveMatch[2]);
-    if (!isHostControlsEnabled()) return json(response, 404, { error: "host_controls_disabled" });
+    const hostControlsEnabled = isHostControlsEnabled();
+    if (!hostControlsEnabled) return json(response, 404, { error: "host_controls_disabled" });
     const room = await storage.getRoom(roomId);
     if (!room) return json(response, 404, { error: "room_not_found" });
-    const actor = await requireControlPlanePermission(request, response, {
+    const control: ControlPlaneAuthorizationOptions = {
       permission: "room.session-control",
       action: "room.session-control.participant.remove",
       objectType: "participant",
@@ -2400,40 +3554,46 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       targetRoomId: roomId,
       allowHostOwnRoom: true,
       currentHostParticipantId: defaultSessionControlState(room.sessionControl).hostParticipantId
-    });
+    };
+    const actor = await requireControlPlanePermission(request, response, control);
     if (!actor) {
       incrementHostActionMetric("remove", "denied");
       return;
+    }
+    if (await legacyIdentityBoundary.minimum() >= 2) {
+      const payload = (await parseBody<{ reason?: string; expectedRevision?: number }>(request)) ?? {};
+      try {
+        const updated = await applyRoomLifecycleWithMedia({ storage, room, actor,
+          command: { type: "remove", targetParticipantId,
+            ...(typeof payload.reason === "string" ? { reason: payload.reason } : {}) }, expectedRevision: payload.expectedRevision });
+        deletePresence(roomId, targetParticipantId);
+        metrics.participantsRemovedTotal += 1;
+        incrementHostActionMetric("remove", "allowed");
+        return json(response, 200, { ...updated, removedParticipantId: targetParticipantId });
+      } catch (error) {
+        incrementHostActionMetric("remove", "denied");
+        const failure = lifecycleV2Error(error);
+        if (failure) return json(response, failure.status, { error: failure.error });
+        throw error;
+      }
     }
     if (actor.participantId === targetParticipantId) {
       incrementHostActionMetric("remove", "denied");
       return json(response, 400, { error: "cannot_remove_self" });
     }
-    const current = defaultSessionControlState(room.sessionControl);
-    if (current.hostParticipantId === targetParticipantId && actor.actorType !== "admin-token") {
+    if (!validId(targetParticipantId)) {
       incrementHostActionMetric("remove", "denied");
-      return json(response, 403, { error: "cannot_remove_current_host" });
+      return json(response, 404, { error: "participant_not_found" });
     }
     const payload = (await parseBody<{ reason?: string }>(request)) ?? {};
-    const now = new Date().toISOString();
-    const updated = await updateRoomSessionControl(storage, room, {
-      ...current,
-      presenterParticipantId: current.presenterParticipantId === targetParticipantId ? null : current.presenterParticipantId,
-      presenterRevokedAt: current.presenterParticipantId === targetParticipantId ? now : current.presenterRevokedAt,
-      presenterRevokedBy: current.presenterParticipantId === targetParticipantId ? actor.actorId : current.presenterRevokedBy,
-      removedParticipants: {
-        ...current.removedParticipants,
-        [targetParticipantId]: {
-          removedAt: now,
-          removedBy: actor.actorId,
-          reason: typeof payload.reason === "string" && payload.reason.trim() ? payload.reason.trim().slice(0, 120) : null
-        }
-      }
-    });
+    const reason = typeof payload.reason === "string" && payload.reason.trim() ? payload.reason.trim().slice(0, 120) : null;
+    const applied = await runLegacyRoomControl(storage, { request, response, requestId, audit: control, actor,
+      denied: () => incrementHostActionMetric("remove", "denied") }, room, { type: "remove", targetParticipantId, reason }, hostControlsEnabled);
+    if (!applied) return;
     deletePresence(roomId, targetParticipantId);
     metrics.participantsRemovedTotal += 1;
     incrementHostActionMetric("remove", "allowed");
-    json(response, 200, { state: sanitizeSessionControlState(updated.sessionControl), removedParticipantId: targetParticipantId });
+    json(response, 200, { state: sanitizeSessionControlState(applied.state), removedParticipantId: targetParticipantId });
     return;
   }
 
@@ -2442,10 +3602,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const roomId = decodeURIComponent(presenterActionMatch[1]);
     const targetParticipantId = decodeURIComponent(presenterActionMatch[2]);
     const action = presenterActionMatch[3] as "grant" | "revoke";
-    if (!isHostControlsEnabled()) return json(response, 404, { error: "host_controls_disabled" });
+    const hostControlsEnabled = isHostControlsEnabled();
+    if (!hostControlsEnabled) return json(response, 404, { error: "host_controls_disabled" });
     const room = await storage.getRoom(roomId);
     if (!room) return json(response, 404, { error: "room_not_found" });
-    const actor = await requireControlPlanePermission(request, response, {
+    const control: ControlPlaneAuthorizationOptions = {
       permission: "room.session-control",
       action: `room.session-control.presenter.${action}`,
       objectType: "participant",
@@ -2453,53 +3614,83 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       targetRoomId: roomId,
       allowHostOwnRoom: true,
       currentHostParticipantId: defaultSessionControlState(room.sessionControl).hostParticipantId
-    });
+    };
+    const actor = await requireControlPlanePermission(request, response, control);
     if (!actor) {
       incrementPresenterChangeMetric(action, "denied");
       return;
     }
-    const current = defaultSessionControlState(room.sessionControl);
-    if (getRemovedParticipant(room, targetParticipantId)) {
-      incrementPresenterChangeMetric(action, "denied");
-      return json(response, 404, { error: "participant_not_found" });
-    }
-    const participant = getPresence(roomId).find((item) => item.participantId === targetParticipantId);
-    if (action === "grant" && !participant) {
-      incrementPresenterChangeMetric(action, "denied");
-      return json(response, 404, { error: "participant_not_found" });
-    }
-    if (action === "revoke" && current.presenterParticipantId !== targetParticipantId) {
-      incrementPresenterChangeMetric(action, "denied");
-      return json(response, 404, { error: "presenter_not_found" });
-    }
-    const now = new Date().toISOString();
-    const updated = await updateRoomSessionControl(storage, room, action === "grant"
-      ? {
-        ...current,
-        presenterParticipantId: targetParticipantId,
-        presenterGrantedAt: now,
-        presenterGrantedBy: actor.actorId,
-        presenterRevokedAt: null,
-        presenterRevokedBy: null
+    if (await legacyIdentityBoundary.minimum() >= 2) {
+      if (action === "grant" && !getPresence(roomId).some(item => item.participantId === targetParticipantId)) {
+        incrementPresenterChangeMetric(action, "denied");
+        return json(response, 404, { error: "participant_not_found" });
       }
-      : {
-        ...current,
-        presenterParticipantId: null,
-        presenterRevokedAt: now,
-        presenterRevokedBy: actor.actorId
-      });
+      const payload = (await parseBody<{ expectedRevision?: number }>(request)) ?? {};
+      try {
+        const updated = await applyRoomLifecycleWithMedia({ storage, room, actor,
+          command: { type: action === "grant" ? "grant-presenter" : "revoke-presenter", targetParticipantId }, expectedRevision: payload.expectedRevision });
+        incrementPresenterChangeMetric(action, "allowed");
+        return json(response, 200, { ...updated, presenterParticipantId: action === "grant" ? targetParticipantId : null });
+      } catch (error) {
+        incrementPresenterChangeMetric(action, "denied");
+        const failure = lifecycleV2Error(error);
+        if (failure) return json(response, failure.status, { error: failure.error });
+        throw error;
+      }
+    }
+    if (!validId(targetParticipantId)) {
+      incrementPresenterChangeMetric(action, "denied");
+      return json(response, 404, { error: "participant_not_found" });
+    }
+    const applied = await runLegacyRoomControl(storage, { request, response, requestId, audit: control, actor,
+      denied: () => incrementPresenterChangeMetric(action, "denied") }, room,
+      { type: action === "grant" ? "grant-presenter" : "revoke-presenter", targetParticipantId }, hostControlsEnabled);
+    if (!applied) return;
     incrementPresenterChangeMetric(action, "allowed");
-    json(response, 200, { state: sanitizeSessionControlState(updated.sessionControl), presenterParticipantId: action === "grant" ? targetParticipantId : null });
+    json(response, 200, { state: sanitizeSessionControlState(applied.state), presenterParticipantId: action === "grant" ? targetParticipantId : null });
     return;
+  }
+
+  const ownerTransferMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/owner\/transfer$/);
+  if (method === "POST" && ownerTransferMatch) {
+    const roomId = decodeURIComponent(ownerTransferMatch[1]);
+    if (await legacyIdentityBoundary.minimum() < 2) return json(response, 409, { error: "identity_required", reason: "identity_upgrade_required" });
+    const room = await storage.getRoom(roomId);
+    if (!room) return json(response, 404, { error: "room_not_found" });
+    if (room.roomType !== "personal") return json(response, 400, { error: "personal_room_required" });
+    const actor = await requireControlPlanePermission(request, response, {
+      permission: "room.session-control", action: "room.owner.transfer", objectType: "room", objectId: roomId,
+      targetRoomId: roomId, allowHostOwnRoom: true,
+      currentHostParticipantId: defaultSessionControlState(room.sessionControl).hostParticipantId
+    });
+    if (!actor) return;
+    if (actor.actorType !== "admin-token" && (actor.identityProtocolVersion !== 2 || actor.isOwner !== true)) {
+      return json(response, 403, { error: "identity_forbidden" });
+    }
+    const payload = (await parseBody<{ participantId?: unknown; expectedRevision?: unknown }>(request)) ?? {};
+    const targetParticipantId = normalizeParticipantId(payload.participantId);
+    if (!targetParticipantId || !Number.isSafeInteger(payload.expectedRevision) || (payload.expectedRevision as number) < 0) {
+      return json(response, 400, { error: "invalid_owner_transfer" });
+    }
+    try {
+      const updated = await applyRoomLifecycleWithMedia({ storage, room, actor,
+        command: { type: "transfer-owner", targetParticipantId }, expectedRevision: payload.expectedRevision as number });
+      return json(response, 200, { ...updated, ownerParticipantId: targetParticipantId });
+    } catch (error) {
+      const failure = lifecycleV2Error(error);
+      if (failure) return json(response, failure.status, { error: failure.error });
+      throw error;
+    }
   }
 
   const hostTransferMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/host\/transfer$/);
   if (method === "POST" && hostTransferMatch) {
     const roomId = decodeURIComponent(hostTransferMatch[1]);
-    if (!isHostControlsEnabled()) return json(response, 404, { error: "host_controls_disabled" });
+    const hostControlsEnabled = isHostControlsEnabled();
+    if (!hostControlsEnabled) return json(response, 404, { error: "host_controls_disabled" });
     const room = await storage.getRoom(roomId);
     if (!room) return json(response, 404, { error: "room_not_found" });
-    const actor = await requireControlPlanePermission(request, response, {
+    const control: ControlPlaneAuthorizationOptions = {
       permission: "room.session-control",
       action: "room.session-control.host.transfer",
       objectType: "room",
@@ -2507,32 +3698,44 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       targetRoomId: roomId,
       allowHostOwnRoom: true,
       currentHostParticipantId: defaultSessionControlState(room.sessionControl).hostParticipantId
-    });
+    };
+    const actor = await requireControlPlanePermission(request, response, control);
     if (!actor) {
       incrementHostActionMetric("transfer_host", "denied");
       return;
     }
-    const payload = (await parseBody<{ participantId?: string }>(request)) ?? {};
+    const payload = (await parseBody<{ participantId?: string; expectedRevision?: number }>(request)) ?? {};
     const targetParticipantId = typeof payload.participantId === "string" ? payload.participantId.trim() : "";
     if (!targetParticipantId) {
       incrementHostActionMetric("transfer_host", "denied");
       return json(response, 400, { error: "missing_participant_id" });
     }
-    const participant = getPresence(roomId).find((item) => item.participantId === targetParticipantId);
-    if (!participant || getRemovedParticipant(room, targetParticipantId)) {
+    if (await legacyIdentityBoundary.minimum() >= 2) {
+      if (!getPresence(roomId).some(item => item.participantId === targetParticipantId)) {
+        incrementHostActionMetric("transfer_host", "denied");
+        return json(response, 404, { error: "participant_not_found" });
+      }
+      try {
+        const updated = await applyRoomLifecycleWithMedia({ storage, room, actor,
+          command: { type: "transfer-host", targetParticipantId }, expectedRevision: payload.expectedRevision });
+        incrementHostActionMetric("transfer_host", "allowed");
+        return json(response, 200, { ...updated, hostParticipantId: targetParticipantId });
+      } catch (error) {
+        incrementHostActionMetric("transfer_host", "denied");
+        const failure = lifecycleV2Error(error);
+        if (failure) return json(response, failure.status, { error: failure.error });
+        throw error;
+      }
+    }
+    if (!validId(targetParticipantId)) {
       incrementHostActionMetric("transfer_host", "denied");
       return json(response, 404, { error: "participant_not_found" });
     }
-    const current = defaultSessionControlState(room.sessionControl);
-    const updated = await updateRoomSessionControl(storage, room, {
-      ...current,
-      presenterParticipantId: current.presenterParticipantId === targetParticipantId ? null : current.presenterParticipantId,
-      presenterRevokedAt: current.presenterParticipantId === targetParticipantId ? new Date().toISOString() : current.presenterRevokedAt,
-      presenterRevokedBy: current.presenterParticipantId === targetParticipantId ? actor.actorId : current.presenterRevokedBy,
-      hostParticipantId: targetParticipantId
-    });
+    const applied = await runLegacyRoomControl(storage, { request, response, requestId, audit: control, actor,
+      denied: () => incrementHostActionMetric("transfer_host", "denied") }, room, { type: "transfer-host", targetParticipantId }, hostControlsEnabled);
+    if (!applied) return;
     incrementHostActionMetric("transfer_host", "allowed");
-    json(response, 200, { state: sanitizeSessionControlState(updated.sessionControl), hostParticipantId: targetParticipantId });
+    json(response, 200, { state: sanitizeSessionControlState(applied.state), hostParticipantId: targetParticipantId });
     return;
   }
 
@@ -2548,7 +3751,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       allowHostOwnRoom: true
     });
     if (!actor) return;
-    if ((await storage.getRoom(roomId))?.managed) return writeManagedResourceDenied(request, response, "room", roomId);
+    const existingRoom = await storage.getRoom(roomId);
+    if (!existingRoom) return json(response, 404, { error: "room_not_found" });
+    if (existingRoom.managed) return writeManagedResourceDenied(request, response, "room", roomId);
     const payload = (await parseBody<{ bundleId?: string; version?: string }>(request)) ?? {};
     if (!payload.bundleId) return json(response, 400, { error: "missing_scene_bundle_id" });
     const bundle = payload.version
@@ -2556,13 +3761,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       : await storage.getSceneBundle(payload.bundleId);
     if (!bundle) return json(response, 404, { error: "scene_bundle_not_found" });
     let room: RoomRecord | null;
-    try { room = await storage.updateRoom(roomId, { sceneBundleUrl: bundle.publicUrl }); } catch (error) {
+    try { room = await runGuardedRoomEffect(storage, actor, existingRoom, "room.join",
+      scoped => scoped.setRoomSceneBundleUrl(existingRoom.tenantId, roomId, bundle.publicUrl), { hostOrOwner: true, roomWrite: true }); } catch (error) {
       const failure = templateInputError(error);
       if (!failure) throw error;
       return json(response, failure.status, { error: failure.code });
     }
     if (!room) return json(response, 404, { error: "room_not_found" });
-    json(response, 200, { ...room, roomLink: createRoomLink(room.roomId, request), sceneBundle: bundle, currentVersion: getCurrentSceneBundleVersion(bundle) });
+    json(response, 200, { ...roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request), sceneBundle: bundle, currentVersion: getCurrentSceneBundleVersion(bundle) });
     return;
   }
 
@@ -2570,8 +3776,18 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const roomId = decodeURIComponent(roomItemMatch[1]);
     const actor = await requireControlPlanePermission(request, response, { permission: "room.delete", action: "room.delete", objectType: "room", objectId: roomId });
     if (!actor) return;
-    if ((await storage.getRoom(roomId))?.managed) return writeManagedResourceDenied(request, response, "room", roomId);
-    const deleted = await storage.deleteRoom(roomId);
+    const room = await storage.getRoom(roomId);
+    if (!room) return json(response, 404, { error: "room_not_found" });
+    if (room.managed) return writeManagedResourceDenied(request, response, "room", roomId);
+    let deleted: boolean;
+    try {
+      deleted = await deleteRoomWithPluginCleanup(storage, { tenantId: room.tenantId, roomId },
+        () => configuredRoomPluginBlobStorage(runtimePublicRoot, request, publicBaseUrlFromRequest));
+    } catch (error) {
+      const failure = roomPluginDeletionFailure(error);
+      if (failure) return json(response, failure.status, { error: failure.code });
+      throw error;
+    }
     if (!deleted) return json(response, 404, { error: "room_not_found" });
     json(response, 200, { ok: true, roomId });
     return;
@@ -2583,13 +3799,18 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const room = await storage.getRoom(roomId);
     if (room && isRoomDisabled(room) && !canManageDisabledRoom(request)) return json(response, 403, { error: "room_access_denied", reason: "room_disabled" });
     if (room && !(await canReadRoomDetails(request, room))) return json(response, 404, { error: "room_not_found" });
-    json(response, 200, await buildManifest(roomId, request));
+    const manifest = await buildManifest(roomId, request, room);
+    await releaseRoomRead(request, storage, roomId, room, () => { json(response, 200, manifest); });
     return;
   }
 
   const presenceListMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/presence$/);
   if (method === "GET" && presenceListMatch) {
-    json(response, 200, { items: getPresence(decodeURIComponent(presenceListMatch[1])) });
+    const roomId = decodeURIComponent(presenceListMatch[1]);
+    const room = await storage.getRoom(roomId);
+    // A missing room releases only the separate virtual map.
+    const readPresence = room ? getPresence : virtualPresence.getPresence;
+    await releaseRoomRead(request, storage, roomId, room, () => { json(response, 200, { items: readPresence(roomId) }); });
     return;
   }
 
@@ -2602,17 +3823,38 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const session = await verifyRoomSessionRequest(request, { roomId, participantId });
     if (!session.ok) return writeSessionTokenError(response, session);
     const room = await storage.getRoom(roomId);
-    const effectiveRole = resolveEffectiveRoomRole(room, session.payload.participantId, session.payload.role);
+    const effectiveRole = session.payload.identityProtocolVersion === 2 ? session.payload.role
+      : resolveEffectiveRoomRole(room, session.payload.participantId, session.payload.role);
     const blockReason = getSessionControlBlockReason(room, session.payload.participantId, effectiveRole, true);
     if (blockReason) {
       return json(response, sessionBlockStatusCode(blockReason), { error: "room_access_denied", reason: blockReason });
     }
-    upsertPresence(roomId, participantId, {
-      ...payload,
-      role: effectiveRole,
-      permissions: getRoomPermissions(effectiveRole)
-    });
-    json(response, 200, { ok: true });
+    const publish = (current: RoomEffectActor | null, upsert = upsertPresence) => {
+      upsert(roomId, participantId, {
+        ...payload,
+        participantId,
+        updatedAt: new Date().toISOString(),
+        role: current?.role ?? effectiveRole,
+        permissions: current?.permissions ?? getRoomPermissions(effectiveRole)
+      });
+      json(response, 200, { ok: true });
+    };
+    if (session.payload.identityProtocolVersion === 2) {
+      if (!room) return json(response, 404, { error: "room_not_found" });
+      const actorResult = resolveControlPlaneActor(request);
+      if (!actorResult.ok) return json(response, 403, { error: "forbidden" });
+      // Publish before this callback resolves: remove/end must be ordered after
+      // the map write, not between a returned authority snapshot and the write.
+      await runGuardedRoomEffect(storage, actorResult.actor, room, "room.join", async (scoped, current) => { scoped.releaseResponse(() => { publish(current); }); });
+    } else {
+      if (!room) {
+        // The original session deadline is checked inside the fence; the virtual map write is its sync release.
+        await runLegacyVirtualRoomEffect(storage, roomId, { expiresAtSeconds: session.payload.exp },
+          async scoped => { scoped.releaseResponse(() => { publish(null, virtualPresence.upsertPresence); }); });
+        return;
+      }
+      await runLegacyRoomEffect(storage, room, {}, async scoped => { scoped.releaseResponse(() => { publish(null); }); });
+    }
     return;
   }
 
@@ -2621,8 +3863,20 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const participantId = decodeURIComponent(presenceItemMatch[2]);
     const session = await verifyRoomSessionRequest(request, { roomId, participantId });
     if (!session.ok) return writeSessionTokenError(response, session);
-    deletePresence(roomId, participantId);
-    json(response, 200, { ok: true });
+    const room = await storage.getRoom(roomId);
+    // Map removal happens only in the release of the fence matching the room's namespace.
+    const remove = (target = deletePresence) => { target(roomId, participantId); json(response, 200, { ok: true }); };
+    if (session.payload.identityProtocolVersion === 2) {
+      if (!room) return json(response, 404, { error: "room_not_found" });
+      const actorResult = resolveControlPlaneActor(request);
+      if (!actorResult.ok) return json(response, 403, { error: "forbidden" });
+      await runGuardedRoomEffect(storage, actorResult.actor, room, "room.join", async scoped => { scoped.releaseResponse(() => { remove(); }); });
+    } else if (room) {
+      await runLegacyRoomEffect(storage, room, {}, async scoped => { scoped.releaseResponse(() => { remove(); }); });
+    } else {
+      await runLegacyVirtualRoomEffect(storage, roomId, { expiresAtSeconds: session.payload.exp },
+        async scoped => { scoped.releaseResponse(() => { remove(virtualPresence.deletePresence); }); });
+    }
     return;
   }
 
@@ -2647,13 +3901,23 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const participantId = typeof payload.participantId === "string" ? payload.participantId : undefined;
     const session = await verifyRoomSessionRequest(request, { roomId, participantId });
     if (!session.ok) return writeSessionTokenError(response, session);
-    const diagnostic = createDiagnosticRecord(roomId, payload, request);
-    metrics.diagnosticsReportsCreatedTotal += 1;
-    observeScreenShareDiagnostic(roomId, diagnostic);
-    if (diagnostic.issueCode) {
-      incrementCounter(metrics.roomJoinFailuresTotal, diagnostic.issueCode);
+    const diagnostic = createDiagnosticRecord(payload, getRequestId(request));
+    const room = await storage.getRoom(roomId);
+    if (session.payload.identityProtocolVersion === 2) {
+      if (!room) return json(response, 404, { error: "room_not_found" });
+      const actorResult = resolveControlPlaneActor(request);
+      if (!actorResult.ok || actorResult.actor.actorType !== "room-session"
+        || actorResult.actor.identityProtocolVersion !== 2) return json(response, 403, { error: "forbidden" });
+      // Serialize INSERT and retention across writers under the upfront room lock.
+      await runGuardedRoomEffect(storage, actorResult.actor, room, "room.join",
+        scoped => scoped.addDiagnostic(roomId, diagnostic), { roomWrite: true });
+    } else if (room) {
+      await runLegacyRoomEffect(storage, room, { roomWrite: true }, scoped => scoped.addDiagnostic(roomId, diagnostic));
+    } else {
+      await runLegacyVirtualRoomEffect(storage, roomId, { roomWrite: true, expiresAtSeconds: session.payload.exp },
+        scoped => scoped.addDiagnostic(roomId, diagnostic));
     }
-    await storage.addDiagnostic(roomId, diagnostic);
+    publishDiagnosticRecord(roomId, diagnostic);
     json(response, 201, { ok: true, reportId: diagnostic.reportId, requestId: diagnostic.requestId });
     return;
   }
@@ -2670,7 +3934,18 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       allowHostOwnRoom: true
     });
     if (!actor) return;
-    json(response, 200, { items: await listXrTelemetry(roomId) });
+    // Select the namespace before preparing items. A missing room's DB leftovers
+    // and virtual live state are released only to the verified administrator.
+    const room = await storage.getRoom(roomId);
+    if (!room) {
+      if (actor.actorType !== "admin-token") return json(response, 404, { error: "room_not_found" });
+      json(response, 200, { items: await virtualXrTelemetry.listXrTelemetry(roomId) });
+      return;
+    }
+    // Prepare outside the fence; release only under current room authority.
+    const items = await listXrTelemetry(roomId);
+    const send = () => { json(response, 200, { items }); };
+    await runGuardedRoomEffect(storage, actor, room, "room.join", async scoped => { scoped.releaseResponse(send); }, { hostOrOwner: true });
     return;
   }
 
@@ -2682,7 +3957,34 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!payload) return json(response, 400, { error: "xr_telemetry_payload_required" });
     const session = await verifyRoomSessionRequest(request, { roomId, participantId });
     if (!session.ok) return writeSessionTokenError(response, session);
-    await upsertXrTelemetry(roomId, participantId, payload);
+    const room = await storage.getRoom(roomId);
+    // The fence writes only through scoped storage; idle still releases a no-op
+    // so Memory rechecks authority. The response waits for commit and map apply.
+    // Retention writers serialize up front; idle keeps the shared mode.
+    const effect = async (scoped: VirtualRoomEffectStorage, record: XrTelemetryRecord, persist: boolean) => {
+      if (persist) await scoped.addXrTelemetry(roomId, participantId, record as unknown as Record<string, unknown>);
+      else scoped.releaseResponse(() => {});
+    };
+    let commit: (record: XrTelemetryRecord, persist: boolean) => Promise<void>;
+    let upsert = upsertXrTelemetryWithFence;
+    if (session.payload.identityProtocolVersion === 2) {
+      if (!room) return json(response, 404, { error: "room_not_found" });
+      const actorResult = resolveControlPlaneActor(request);
+      if (!actorResult.ok || actorResult.actor.actorType !== "room-session"
+        || actorResult.actor.identityProtocolVersion !== 2) return json(response, 403, { error: "forbidden" });
+      const actor = actorResult.actor;
+      commit = (record, persist) => runGuardedRoomEffect(storage, actor, room, "room.join",
+        scoped => effect(scoped, record, persist), { roomWrite: persist });
+    } else if (room) {
+      commit = (record, persist) => runLegacyRoomEffect(storage, room, { roomWrite: persist }, scoped => effect(scoped, record, persist));
+    } else {
+      // Same FIFO, caps and commit-first order; only the live namespace differs.
+      const expiresAtSeconds = session.payload.exp;
+      upsert = virtualXrTelemetry.upsertXrTelemetryWithFence;
+      commit = (record, persist) => runLegacyVirtualRoomEffect(storage, roomId, { roomWrite: persist, expiresAtSeconds },
+        scoped => effect(scoped, record, persist));
+    }
+    await upsert(roomId, participantId, payload, commit);
     json(response, 200, { ok: true });
     return;
   }
@@ -2692,105 +3994,132 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!room) return json(response, 404, { error: "room_not_found" });
     if (isRoomDisabled(room) && !canManageDisabledRoom(request)) return json(response, 403, { error: "room_access_denied", reason: "room_disabled" });
     if (!(await canReadRoomDetails(request, room))) return json(response, 404, { error: "room_not_found" });
-    json(response, 200, { ...room, roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request) });
+    const metadata = { ...roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request, room) };
+    const readActor = resolveControlPlaneActor(request);
+    const owner: { currentOwnerParticipantId?: string | null } = readActor.ok && readActor.actor.actorType === "admin-token"
+      ? { currentOwnerParticipantId: await adminCurrentOwnerParticipantId(storage, room, await legacyIdentityBoundary.minimum()) } : {};
+    await releaseRoomRead(request, storage, room.roomId, room, () => { json(response, 200, { ...metadata, ...owner }); });
     return;
   }
 
   if (method === "POST" && url.pathname === "/api/tokens/state") {
     const requestPayload = await parseBody<StateTokenRequest>(request);
+    if (await legacyIdentityBoundary.minimum() >= 2) {
+      const v2Payload = requestPayload as V2AdmissionRequest | null;
+      const roomId = requestPayload?.roomId ?? "demo-room";
+      const room = await storage.getRoom(roomId);
+      if (!room && !isAdhocRoomsAllowed()) {
+        incrementCounter(metrics.roomAccessDeniedTotal, "room_not_found");
+        return json(response, 404, { error: "room_not_found", requestId });
+      }
+      // Managed access windows apply before any identity credential is issued or renewed.
+      const managedBlock = getManagedAccessBlockReason(room);
+      if (managedBlock) {
+        incrementCounter(metrics.roomAccessDeniedTotal, managedBlock);
+        return json(response, sessionBlockStatusCode(managedBlock), { error: "room_access_denied", reason: managedBlock, requestId });
+      }
+      if (room && v2Payload?.identityProtocolVersion === 2 && v2Payload.identityCredential === undefined
+        && v2Payload.waitingCredential === undefined && v2Payload.recoveryCredential === undefined
+        && !await storage.reserveIdentityAdmission({ originHash: identityAdmissionOriginHash(request), kind: "room" })) {
+        return json(response, 429, { error: "room_access_denied", reason: "identity_rate_limited" });
+      }
+      const result = await admitV2RoomSession({ storage, room, payload: v2Payload,
+        bearer: getBearerToken(request), secret: getStateTokenSecret(), hashInvite: token => hashInviteToken(token) });
+      return json(response, result.status, result.body);
+    }
     const ttlSeconds = Number.parseInt(process.env.STATE_TOKEN_TTL_SECONDS ?? "900", 10);
-    const nowSeconds = Math.floor(Date.now() / 1000);
-    const roomId = requestPayload?.roomId ?? "demo-room";
+    const legacyRequest = parseLegacyStateTokenRequest(requestPayload);
+    if (!legacyRequest) return json(response, 400, { error: "invalid_state_token_request" });
+    const { roomId } = legacyRequest;
+    await legacyIdentityBoundary.assertCompatible(roomId);
     const room = await storage.getRoom(roomId);
     if (!room && !isAdhocRoomsAllowed()) {
       incrementCounter(metrics.roomAccessDeniedTotal, "room_not_found");
       return json(response, 404, { error: "room_not_found", requestId });
     }
-    const requested = resolveAccessRole(requestPayload?.requestedRole ?? requestPayload?.role);
-    const accessResult = await resolveStateTokenAccess(storage, request, room, requestPayload, requested);
-    if (!accessResult.ok) {
-      incrementCounter(metrics.roomAccessDeniedTotal, accessResult.reason);
-      return json(response, accessResult.statusCode === 403 ? sessionBlockStatusCode(accessResult.reason) : accessResult.statusCode, {
-        error: "room_access_denied",
-        reason: accessResult.reason,
-        accessRequestId: accessResult.accessRequestId,
-        requestId
-      });
+    // The managed access window is decided before any bearer is classified or renewed.
+    const managedBlock = getManagedAccessBlockReason(room);
+    if (managedBlock) {
+      incrementCounter(metrics.roomAccessDeniedTotal, managedBlock);
+      return json(response, sessionBlockStatusCode(managedBlock), { error: "room_access_denied", reason: managedBlock, requestId });
     }
-    const participantId = requestPayload?.participantId ?? randomUUID();
-    let tokenRoom = room;
-    if (room && accessResult.role === "host" && accessResult.roleSource === "trusted" && !defaultSessionControlState(room.sessionControl).hostParticipantId) {
-      tokenRoom = await updateRoomSessionControl(storage, room, {
-        ...defaultSessionControlState(room.sessionControl),
-        hostParticipantId: participantId
+    const requested = resolveAccessRole(legacyRequest.requestedRole);
+    if (!room) {
+      const { role, roleSource } = requested;
+      const participantId = legacyRequest.explicitParticipantId ?? randomUUID();
+      const displayName = legacyRequest.displayName ?? participantId;
+      await releaseVirtualStateToken(storage, roomId, () => {
+        json(response, 200, createRoomAccessTokenResponse({ room: null, roomId, participantId, displayName, role, roleSource,
+          ttlSeconds, nowSeconds: Math.floor(Date.now() / 1000) }));
       });
+      return;
     }
-    json(response, 200, createRoomAccessTokenResponse({
-      sceneMediaSurfaces: roomTemplateSessionContext(tokenRoom)?.surfaces ?? await loadSceneMediaSurfaces(tokenRoom?.sceneBundleUrl, `http://127.0.0.1:${request.socket.localPort ?? process.env.API_PORT ?? "4000"}`),
-      room: tokenRoom,
-      roomId,
-      participantId,
-      displayName: requestPayload?.displayName ?? participantId,
-      role: accessResult.role,
-      roleSource: accessResult.roleSource,
-      ttlSeconds,
-      nowSeconds
-    }));
+    await admitLegacyStateToken(request, response, storage, room, legacyRequest, requested, ttlSeconds, requestId);
     return;
   }
 
   if (method === "POST" && url.pathname === "/api/tokens/media") {
     const payload = (await parseBody<MediaTokenPayload>(request)) ?? { roomId: "demo-room", participantId: randomUUID(), canPublishAudio: true, canPublishVideo: false };
+    const { roomId, participantId, sessionToken: bodyToken } = payload;
+    const requestedAudio = payload.canPublishAudio !== false, requestedVideo = payload.canPublishVideo === true;
+    const stateSecret = getStateTokenSecret();
+    // Persisted or virtual is decided by this one read, before the proof wait, and never re-decided.
+    const initialRoom = await storage.getRoom(roomId);
     const session = await verifyRoomSessionRequest(request, {
-      roomId: payload.roomId,
-      participantId: payload.participantId,
-      sessionToken: payload.sessionToken
+      roomId, participantId, sessionToken: bodyToken
     });
     if (!session.ok) {
       incrementCounter(metrics.mediaJoinFailuresTotal, session.code);
       return writeSessionTokenError(response, session);
     }
-    const room = await storage.getRoom(payload.roomId);
-    if (!room && !isAdhocRoomsAllowed()) {
+    if (!initialRoom && !isAdhocRoomsAllowed()) {
       incrementCounter(metrics.mediaJoinFailuresTotal, "room_not_found");
       return json(response, 404, { error: "room_not_found", requestId });
     }
-    const effectiveRole = resolveEffectiveRoomRole(room, session.payload.participantId, session.payload.role);
-    const blockReason = getSessionControlBlockReason(room, session.payload.participantId, effectiveRole, true);
-    if (blockReason) {
-      incrementCounter(metrics.mediaJoinFailuresTotal, blockReason);
-      return json(response, sessionBlockStatusCode(blockReason), { error: "room_access_denied", reason: blockReason });
-    }
-    const effectivePermissions = getRoomPermissions(effectiveRole);
-    const canPublishAudio = hasRoomPermission(effectivePermissions, "audio.join") && payload.canPublishAudio !== false;
-    const canPublishVideo = Boolean(payload.canPublishVideo) && hasRoomPermission(effectivePermissions, "screen-share.start");
-    if (!canPublishAudio && !canPublishVideo) {
-      incrementCounter(metrics.mediaJoinFailuresTotal, "media_publish_not_allowed");
-      return json(response, 403, { error: "forbidden", reason: "media_publish_not_allowed" });
-    }
+    const proof = Object.freeze({ ...session.payload });
+    const rawBearer = bodyToken ?? getBearerToken(request);
+    const capture = proof.identityProtocolVersion === 2 ? captureV2MediaRelease(response, storage, initialRoom, proof)
+      : captureLegacyMediaRelease(response, storage, roomId, initialRoom, proof,
+        { rawBearer: typeof rawBearer === "string" ? rawBearer : null, secret: stateSecret, requestId });
+    if (!capture) return;
+    const effectivePermissions = getRoomPermissions(capture.role);
+    const canPublishAudio = hasRoomPermission(effectivePermissions, "audio.join") && requestedAudio;
+    const canPublishVideo = requestedVideo && hasRoomPermission(effectivePermissions, "screen-share.start");
+    if (requestedAudio && !canPublishAudio || requestedVideo && !canPublishVideo || !canPublishAudio && !canPublishVideo) return writeMediaPublishNotAllowed(response);
+    const publishSources: MediaPublishSource[] = [];
+    const publishPermissions: RoomPermission[] = [];
+    if (canPublishAudio) { publishSources.push("microphone"); publishPermissions.push("audio.join"); }
+    if (canPublishVideo) { publishSources.push("screen_share", "screen_share_audio"); publishPermissions.push("screen-share.start"); }
     const configError = getMediaTokenConfigError();
     if (configError) {
       incrementCounter(metrics.mediaJoinFailuresTotal, "livekit_config_invalid");
       return json(response, 503, { error: "livekit_config_invalid", reason: configError });
     }
-    const mediaTtlSeconds = capTokenTtlSeconds(room, Number.parseInt(process.env.MEDIA_TOKEN_TTL_SECONDS ?? "900", 10), Math.floor(Date.now() / 1000));
     const { apiKey, apiSecret } = getLivekitCredentials();
-    const accessToken = new AccessToken(apiKey, apiSecret, {
-      identity: session.payload.participantId,
-      name: session.payload.displayName,
-      ttl: `${mediaTtlSeconds}s`
-    });
-    accessToken.addGrant({
-      room: `${process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-"}${session.payload.roomId}`,
-      roomJoin: true,
-      canPublish: canPublishAudio || canPublishVideo,
-      canSubscribe: true
-    });
-    json(response, 200, {
-      token: await accessToken.toJwt(),
-      expiresInSeconds: mediaTtlSeconds,
-      livekitUrl: getDefaultLivekitUrl(request)
-    });
+    const configuredTtlSeconds = resolveMediaTokenTtlSeconds(process.env.MEDIA_TOKEN_TTL_SECONDS);
+    if (configuredTtlSeconds === null) {
+      incrementCounter(metrics.mediaJoinFailuresTotal, "livekit_config_invalid");
+      return json(response, 503, { error: "livekit_config_invalid", reason: "media_token_ttl_invalid" });
+    }
+    // A managed room's credential never outlives its access cutoff.
+    const ttlSeconds = capTokenTtlSeconds(initialRoom, configuredTtlSeconds, Math.floor(Date.now() / 1000));
+    const livekitUrl = getDefaultLivekitUrl(request), roomPrefix = process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-";
+    const mediaNamespace = proof.identityProtocolVersion === 2
+      ? await storage.identityProtocol.mediaNamespace() : null;
+    if (proof.identityProtocolVersion === 2 && !mediaNamespace) {
+      return json(response, 503, { error: "identity_authority_unavailable" });
+    }
+    const mediaRoom = roomMediaGrantName(proof.roomId, roomPrefix, mediaNamespace);
+    const mediaIdentity = proof.identityProtocolVersion === 2
+      ? await createUserMediaIdentity(mediaRoom, { participantId: proof.participantId, scope: userMediaScope(publishSources)! })
+      : { identity: proof.participantId };
+    const plan = captureMediaCredentialPlan({ apiKey, apiSecret, ...mediaIdentity, name: proof.displayName,
+      grant: { room: mediaRoom, roomJoin: true,
+        canPublish: true, canSubscribe: true, canPublishSources: publishSources },
+      ttlSeconds, proofExpiresAtSeconds: proof.exp, livekitUrl });
+    const prepared = await signMediaCredential(plan, Date.now());
+    if (!prepared) return capture.lapsed();
+    await capture.release(plan, prepared, Object.freeze(publishPermissions));
     return;
   }
 
@@ -2807,6 +4136,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       json(response, 400, { error: "remote_browser_media_token_payload_required" });
       return;
     }
+    const v2Media = await legacyIdentityBoundary.minimum() >= 2;
+    if (!v2Media) await legacyIdentityBoundary.assertCompatible(payload.roomId);
+    else if (!await storage.getRoom(payload.roomId)) return json(response, 404, { error: "room_not_found" });
     if (!isRemoteBrowserIdentityBinding({ objectId: payload.objectId, executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId, mediaParticipantId: payload.mediaParticipantId })) {
       return json(response, 400, { error: "invalid_session_binding" });
     }
@@ -2824,19 +4156,33 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
     const ttlSeconds = capTokenTtlSeconds(remoteBrowserRoom, Number.parseInt(process.env.MEDIA_TOKEN_TTL_SECONDS ?? "900", 10), Math.floor(Date.now() / 1000));
     const { apiKey, apiSecret } = getLivekitCredentials();
+    const mediaNamespace = v2Media ? await storage.identityProtocol.mediaNamespace() : null;
+    if (v2Media && !mediaNamespace) return json(response, 503, { error: "identity_authority_unavailable" });
     const accessToken = new AccessToken(apiKey, apiSecret, {
       identity: payload.mediaParticipantId,
       name: `Remote Browser ${payload.objectId}`,
       ttl: `${ttlSeconds}s`
     });
     accessToken.addGrant({
-      room: `${process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-"}${payload.roomId}`,
+      room: roomMediaGrantName(payload.roomId, process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-", mediaNamespace),
       roomJoin: true,
       canPublish: true,
       canSubscribe: false
     });
+    const executorToken = await accessToken.toJwt();
+    if (v2Media) {
+      const currentRoom = await storage.getRoom(payload.roomId);
+      if (!currentRoom || isRoomDisabled(currentRoom)) return json(response, 403, { error: "room_access_denied", reason: "room_disabled" });
+      const authority = await storage.roomIdentities.authority({ tenantId: currentRoom.tenantId, roomId: payload.roomId });
+      if (!authority || authority.lifecycle.endedAt) return json(response, 409, { error: "remote_browser_session_not_authoritative" });
+      if (!await verifyRemoteBrowserAuthority({ roomId: payload.roomId, objectId: payload.objectId,
+        executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId,
+        mediaParticipantId: payload.mediaParticipantId })) {
+        return json(response, 409, { error: "remote_browser_session_not_authoritative" });
+      }
+    }
     json(response, 200, {
-      token: await accessToken.toJwt(),
+      token: executorToken,
       expiresInSeconds: ttlSeconds,
       livekitUrl: getRemoteBrowserLivekitUrl(request, payload),
       participantId: payload.mediaParticipantId
@@ -2853,42 +4199,34 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       json(response, 400, { error: "remote_browser_frame_token_payload_required" });
       return;
     }
-    if (!isRemoteBrowserIdentityBinding({ objectId: payload.objectId, executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId, frameStreamId: payload.frameStreamId })) {
-      return json(response, 400, { error: "invalid_session_binding" });
-    }
-    const session = await verifyRoomSessionRequest(request, {
-      roomId: payload.roomId,
-      sessionToken: payload.sessionToken
-    });
+    // A frozen copy of exactly the shared-codec binding; the body is never read for it again.
+    const binding = captureRemoteBrowserFrameBinding(payload);
+    if (!binding) return json(response, 400, { error: "invalid_session_binding" });
+    const bodyToken = payload.sessionToken;
+    const stateSecret = getStateTokenSecret();
+    // Persisted or virtual is decided by this one read, before the proof and binding waits, and never re-decided.
+    const initialRoom = await storage.getRoom(binding.roomId);
+    const session = await verifyRoomSessionRequest(request, { roomId: binding.roomId, sessionToken: bodyToken });
     if (!session.ok) return writeSessionTokenError(response, session);
-    if (!hasRoomPermission(session.payload.permissions, "surface.view")) {
-      return json(response, 403, { error: "forbidden", reason: "remote_browser_frame_not_allowed" });
-    }
-    const frameRoom = await storage.getRoom(payload.roomId);
-    if (!frameRoom && !isAdhocRoomsAllowed()) return json(response, 404, { error: "room_not_found", requestId });
-    const frameBlock = getManagedAccessBlockReason(frameRoom);
+    if (!hasRoomPermission(session.payload.permissions, "surface.view")) return writeFrameNotAllowed(response);
+    if (!initialRoom && !isAdhocRoomsAllowed()) return json(response, 404, { error: "room_not_found", requestId });
+    const frameBlock = getManagedAccessBlockReason(initialRoom);
     if (frameBlock) return json(response, sessionBlockStatusCode(frameBlock), { error: "room_access_denied", reason: frameBlock });
-    if (!await verifyRemoteBrowserAuthority({ roomId: payload.roomId, objectId: payload.objectId, executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId, frameStreamId: payload.frameStreamId })) {
+    const frameSecret = getRemoteBrowserFrameTokenSecret();
+    if (!frameSecret) return json(response, 503, { error: "remote_browser_token_config_invalid" });
+    const proof = session.payload;
+    const plan = captureFrameCredentialPlan({ binding, secret: frameSecret, ttlSeconds: capTokenTtlSeconds(initialRoom, resolveRemoteBrowserTokenTtlSeconds(), Math.floor(Date.now() / 1000)),
+      proofExpiresAtSeconds: proof.exp, frameStreamUrl: getDefaultRemoteBrowserFrameStreamUrl(request) });
+    const rawBearer = bodyToken ?? getBearerToken(request);
+    const release = proof.identityProtocolVersion === 2 ? captureV2FrameRelease(response, storage, proof, plan)
+      : captureLegacyFrameRelease(response, storage, initialRoom, proof, plan,
+        { rawBearer: typeof rawBearer === "string" ? rawBearer : null, secret: stateSecret, requestId });
+    if (!release) return;
+    // No fence is held across this RPC. It may still confirm a since-superseded instance; the consumer pins the exact one.
+    if (!await verifyRemoteBrowserAuthority({ ...binding })) {
       return json(response, 409, { error: "remote_browser_session_not_authoritative" });
     }
-    if (!getRemoteBrowserFrameTokenSecret()) {
-      return json(response, 503, { error: "remote_browser_token_config_invalid" });
-    }
-    const ttlSeconds = capTokenTtlSeconds(frameRoom, resolveRemoteBrowserTokenTtlSeconds(), Math.floor(Date.now() / 1000));
-    const token = encodeRemoteBrowserFrameToken({
-      roomId: payload.roomId,
-      objectId: payload.objectId,
-      executorSessionId: payload.executorSessionId,
-      frameStreamId: payload.frameStreamId,
-      exp: Math.floor(Date.now() / 1000) + ttlSeconds
-    });
-    const frameStreamUrl = new URL(getDefaultRemoteBrowserFrameStreamUrl(request));
-    frameStreamUrl.searchParams.set("token", token);
-    json(response, 200, {
-      token,
-      expiresInSeconds: ttlSeconds,
-      frameStreamUrl: frameStreamUrl.toString()
-    });
+    await release();
     return;
   }
 
@@ -2896,9 +4234,44 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 }
 
 export function startApiServer(port = apiPort) {
+  getStateTokenSecret();
   const server = createServer((request, response) => {
     handleRequest(request, response).catch((error: unknown) => {
+      // A fenced response can already have queued its bytes when COMMIT fails.
+      // Do not attempt a second response or throw ERR_HTTP_HEADERS_SENT.
+      if (response.headersSent) {
+        metrics.requestFailuresTotal += 1;
+        response.destroy();
+        return;
+      }
+      if (error instanceof InvalidSessionTokenInput) {
+        json(response, 400, { error: "invalid_session_token" });
+        return;
+      }
+      if (error instanceof IdentityBoundaryError) {
+        json(response, error.status, { error: error.status === 503 ? "identity_authority_unavailable"
+          : error.reason === "identity_session_expired" || error.reason === "room_state_changed" ? error.reason : "identity_required",
+          reason: error.reason });
+        return;
+      }
+      if (error instanceof RoomEffectPermissionDenied) {
+        json(response, 403, { error: "forbidden", reason: "permission_denied" });
+        return;
+      }
+      if (error instanceof RoomEffectNotFound || error instanceof InvalidVirtualRoomId) {
+        json(response, 404, { error: "room_not_found" });
+        return;
+      }
+      if (error instanceof XrTelemetryQueueFull) {
+        json(response, 429, { error: "xr_telemetry_queue_full" });
+        return;
+      }
+      if (error instanceof Error && error.message === IDENTITY_LIFECYCLE_REQUIRES_V2) {
+        json(response, 409, { error: "identity_required", reason: "identity_upgrade_required" });
+        return;
+      }
       const requestId = attachRequestId(request, response);
+      const roomDeletionFailure = isRoomDeletionRequest(request.method, request.url);
       metrics.requestFailuresTotal += 1;
       logEvent({
         service: "api",
@@ -2908,13 +4281,15 @@ export function startApiServer(port = apiPort) {
         errorCode: "internal_error",
         path: request.url ?? "",
         method: request.method ?? "GET",
-        message: error instanceof Error ? error.message : "unknown",
+        message: roomDeletionFailure ? "room_delete_failed" : error instanceof Error ? error.message : "unknown",
         timestamp: new Date().toISOString()
       });
-      json(response, 500, { error: "internal_error", message: error instanceof Error ? error.message : "unknown" });
+      json(response, 500, roomDeletionFailure ? { error: "internal_error" } : { error: "internal_error", message: error instanceof Error ? error.message : "unknown" });
     });
   });
+  server.once("close", () => mediaScreenService.stop());
   return server.listen(port, () => {
+    mediaScreenService.start();
     logEvent({ service: "api", event: "listening", env: process.env.NODE_ENV ?? "development", port, timestamp: new Date().toISOString() });
   });
 }

@@ -181,12 +181,35 @@ test("merge sorts histories stably, deduplicates full records and preserves dist
   assert.deepEqual(result.latest, left);
 });
 
-test("merge keeps JSON-based equality, including object property order", () => {
-  const first = record({ kind: "event" });
-  const reordered = { kind: first.kind, ...record() };
-  assert.notEqual(JSON.stringify(first), JSON.stringify(reordered));
-  const result = mergeXrTelemetryBuffers(buffer(first, [first]), buffer(reordered, [reordered]));
-  assert.equal(result.history.length, 2);
+function reverseKeys<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(reverseKeys) as T;
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).reverse().map(([key, entry]) => [key, reverseKeys(entry)])) as T;
+}
+
+test("merge deduplicates jsonb-style key reordering at every depth without collapsing distinct events", () => {
+  const live = {
+    ...record({ kind: "input", xrRawInputs: [{ index: 0, handedness: "right", axes: [0.2, 0.4] }, { index: 1 }], interactionRay: { active: true, origin: { x: 1, y: 2, z: 3 } } }),
+    extra: { b: [{ d: 1, c: 2 }], a: null }
+  };
+  const stored = reverseKeys(live);
+  assert.notEqual(JSON.stringify(stored), JSON.stringify(live));
+  assert.notEqual(JSON.stringify(stored.interactionRay), JSON.stringify(live.interactionRay));
+  const nested = structuredClone(live);
+  nested.interactionRay!.origin!.z = 4;
+  const axes = structuredClone(live);
+  axes.xrRawInputs![0]!.axes!.reverse();
+  const inputs = structuredClone(live);
+  inputs.xrRawInputs!.reverse();
+  const nullStatus = { ...live, statusLine: null };
+  const undefinedStatus = { ...live, statusLine: undefined };
+  const left = buffer(live, [live, nested]);
+  const right = buffer(stored, [axes, stored, inputs, nullStatus, undefinedStatus]);
+  const before = JSON.stringify([left, right]);
+  const result = mergeXrTelemetryBuffers(left, right);
+  assert.deepEqual(result.history, [live, nested, axes, inputs, nullStatus]);
+  assert.deepEqual(result.latest, live);
+  assert.equal(JSON.stringify([left, right]), before);
 });
 
 test("merge keeps the latest 80 unique history records after sorting and deduplication", () => {

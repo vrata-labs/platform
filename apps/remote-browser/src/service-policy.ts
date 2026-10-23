@@ -37,6 +37,11 @@ export function validateRemoteBrowserSessionIdentity(input: { sessionId: string;
     && (!input.frameStreamId || input.frameStreamId === `${expectedSessionId}:frames`);
 }
 
+// Matches the validator: a blank frame stream is absent, so a session always holds the one derived stream.
+export function resolveRemoteBrowserFrameStreamId(input: { sessionId: string; frameStreamId?: string }): string {
+  return input.frameStreamId || `${input.sessionId}:frames`;
+}
+
 export function resolveRemoteBrowserFrameTokenSecret(env: NodeJS.ProcessEnv = process.env): string | null {
   const secret = env.REMOTE_BROWSER_TOKEN_SECRET?.trim();
   if (secret) return secret;

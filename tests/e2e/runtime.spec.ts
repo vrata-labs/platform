@@ -780,6 +780,26 @@ test("guest onboarding lets guest enter without audio after microphone denial", 
   }).toEqual({ audioMode: "without_audio", audioJoined: false, publishedAudio: false });
 });
 
+test("guest onboarding makes a muted audio join explicit and shows how to speak", async ({ page }) => {
+  await page.goto("/rooms/demo-room?onboard=1");
+  await expect(page.locator("#guest-join-muted")).toBeChecked();
+  await page.locator("#guest-name-input").fill("Muted Audio Guest");
+  await page.locator("#guest-enter-without-audio").click();
+  await expect(page.locator("#status-line")).toContainText("Joined as Muted Audio Guest");
+
+  await expect(page.locator("#join-muted")).toBeChecked();
+  await expect(page.locator("#join-audio")).toHaveText("Join Audio Muted");
+  await expect(page.locator("#join-audio")).toHaveAttribute("title", /Unmute to speak/);
+  await expect.poll(() => page.evaluate(() => {
+    const media = (window as any).__VRATA_DEBUG__?.media;
+    return { joined: media?.audioJoined ?? false, published: media?.publishedAudio ?? false };
+  })).toEqual({ joined: false, published: false });
+
+  await page.locator("#join-muted").uncheck();
+  await expect(page.locator("#join-audio")).toHaveText("Join Audio");
+  await expect(page.locator("#join-audio")).toHaveAttribute("title", "Connect and publish your microphone");
+});
+
 test("guest onboarding shows unsupported media warning without blocking entry", async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "mediaDevices", {
@@ -3493,6 +3513,18 @@ test("fault-injected mic denied keeps room usable without audio", async ({ page,
 });
 
 test("fault-injected media network block explains WebRTC can fail while scene loads", async ({ page, request }) => {
+  await page.addInitScript(() => {
+    const capture = { calls: 0, activated: false, stream: null as MediaStream | null };
+    (window as any).__faultNetworkCapture = capture;
+    // Control only OS selection: the real action must capture before reaching
+    // the intentionally broken media connection, even on headless Chromium.
+    Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", { configurable: true, value: async () => {
+      capture.calls++; capture.activated = navigator.userActivation.isActive;
+      const canvas = document.createElement("canvas"); canvas.width = 160; canvas.height = 90;
+      canvas.getContext("2d")!.fillRect(0, 0, 160, 90);
+      capture.stream = canvas.captureStream(1); return capture.stream;
+    } });
+  });
   await page.goto("/rooms/demo-room?role=host&failaudio=connection_failed&debug=1");
   await page.waitForTimeout(2500);
   await page.click("#start-share");
@@ -3506,6 +3538,11 @@ test("fault-injected media network block explains WebRTC can fail while scene lo
   expect(debug?.degradedMode).toBe("media_transport_unavailable");
   expect(debug?.screenShareState).toBe("media_network_blocked");
   expect(debug?.statusLine).toContain("scene can load");
+  expect(await page.evaluate(() => {
+    const capture = (window as any).__faultNetworkCapture;
+    return { calls: capture.calls, activated: capture.activated,
+      stopped: capture.stream.getTracks().every((track: MediaStreamTrack) => track.readyState === "ended") };
+  })).toEqual({ calls: 1, activated: true, stopped: true });
 
   const diagnostics = await readDiagnostics<{ items: Array<{ note?: string; issueCode?: string }> }>(request, "demo-room");
   expect(diagnostics.items.some((item) => item.note === "media_network_blocked" && item.issueCode === "media_network_blocked")).toBeTruthy();

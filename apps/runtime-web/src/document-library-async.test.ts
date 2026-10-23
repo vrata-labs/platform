@@ -1,37 +1,46 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { DocumentMediaProbe } from "./document-media-probe.js";
-import type { RuntimeDocumentRecord } from "./index.js";
+import type { RuntimeDocumentLibrary, RuntimeDocumentRecord } from "./index.js";
 import { createDocumentLibraryHarness } from "./testing/document-library-harness.js";
 import { deferred, makeDocument } from "./testing/document-surface-actions-harness.js";
 
 test("loading reads the latest selection after awaiting the list and restores controls", async (t) => {
-  const h = createDocumentLibraryHarness(t); const result = deferred<RuntimeDocumentRecord[]>();
+  const h = createDocumentLibraryHarness(t); const result = deferred<RuntimeDocumentLibrary>();
   h.hooks.listRoomDocuments = () => result.promise;
   const pending = h.runtime.loadRoomDocuments();
   assert.deepEqual(h.calls("list"), [["https://example.invalid", "room", "token-1"]]);
   assert.equal(h.context.documentUploadButton.disabled, true); assert.equal(h.context.documentStatusEl.textContent, "Documents loading...");
   h.context.selectedDocumentId = "second";
-  result.resolve([makeDocument("pdf", "first"), makeDocument("pdf", "second")]); await pending;
+  result.resolve({ items: [makeDocument("pdf", "first"), makeDocument("pdf", "second")], uploadPolicy: null }); await pending;
   assert.equal(h.context.selectedDocumentId, "second"); assert.equal(h.context.documentUploadButton.disabled, false);
   assert.equal(h.context.documentStatusEl.textContent, "Documents ready: 2"); assert.deepEqual(h.dom.storage.writes, []);
 });
 
+test("terminal access loss discards a pending list and prevents late document UI publication", async (t) => {
+  const h = createDocumentLibraryHarness(t), delayed = deferred<RuntimeDocumentLibrary>();
+  h.hooks.listRoomDocuments = () => delayed.promise;
+  const pending = h.runtime.loadRoomDocuments();
+  h.context.sessionControlBlocked = true; h.runtime.invalidate(); h.runtime.clearFeedback(); h.runtime.renderDocumentsUi();
+  delayed.resolve({ items: [makeDocument("pdf", "late-private")], uploadPolicy: null }); await pending;
+  assert.deepEqual(h.context.roomDocuments, []); assert.equal(h.context.documentsPanelEl.hidden, true);
+  assert.equal(h.context.documentUploadButton.disabled, true);
+});
+
 test("loading clears a disappeared selection before choosing the new first document", async (t) => {
   const h = createDocumentLibraryHarness(t); h.context.selectedDocumentId = "removed";
-  h.hooks.listRoomDocuments = async () => [makeDocument("pdf", "first")];
+  h.hooks.listRoomDocuments = async () => ({ items: [makeDocument("pdf", "first")], uploadPolicy: null });
   await h.runtime.loadRoomDocuments();
   assert.deepEqual(h.dom.storage.writes, [["vrata.documents.selected.room", null], ["vrata.documents.selected.room", "first"]]);
 });
 
-test("load failure retains its message and the existing final-render diagnostics behavior", async (t) => {
+test("load failure retains safe feedback through the final render without logging server details", async (t) => {
   const h = createDocumentLibraryHarness(t); const warn = t.mock.method(console, "warn", () => {});
   h.hooks.listRoomDocuments = async () => { throw new Error("network:detail:third:fourth"); };
   await h.runtime.loadRoomDocuments();
-  assert.equal(warn.mock.calls[0]?.arguments[0], "documents_load_failed");
+  assert.equal(warn.mock.callCount(), 0);
   assert.equal(h.context.documentStatusEl.textContent, "Documents unavailable");
-  // The original finally render clears errorCode while preserving status text.
-  assert.equal(h.context.debugState.documents.errorCode, null);
+  assert.equal(h.context.debugState.documents.errorCode, "documents_unavailable");
   assert.equal(h.context.documentUploadButton.disabled, false);
 });
 
@@ -45,8 +54,11 @@ test("upload observes refreshed tokens after probing and the latest list after u
   h.context.roomStateAccessToken = "token-2";
   probe.resolve({ kind: "video", widthPx: 640, heightPx: 480, durationMs: 9000 });
   await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.deepEqual(h.calls("upload"), [["https://example.invalid", "room", "token-2", file,
-    { widthPx: 640, heightPx: 480, durationMs: 9000 }]]);
+  const call = h.calls("upload")[0]!;
+  assert.deepEqual(call.slice(0, 5), ["https://example.invalid", "room", "token-2", file,
+    { kind: "video", widthPx: 640, heightPx: 480, durationMs: 9000 }]);
+  assert.ok(call[5] instanceof AbortSignal);
+  assert.equal((call[5] as AbortSignal).aborted, false);
   const untouched = makeDocument("pdf", "untouched");
   h.context.roomDocuments = [makeDocument("video", "uploaded"), untouched];
   const uploaded = makeDocument("video", "uploaded"); upload.resolve(uploaded); await pending;
@@ -69,9 +81,11 @@ for (const phase of ["probe", "upload"] as const) {
     const fail = async () => { throw new Error("failed:reason:detail:discarded"); };
     if (phase === "probe") h.hooks.probeDocumentMedia = fail; else h.hooks.uploadRoomDocument = fail;
     await h.runtime.uploadSelectedDocument();
+    await new Promise<void>(resolve => setImmediate(resolve));
     assert.equal(h.context.documentUploadButton.disabled, false); assert.equal(h.context.documentUploadInput.value, "keep");
-    assert.equal(h.context.documentStatusEl.textContent, "Document upload failed: failed:reason:detail");
-    assert.equal(h.context.debugState.documents.errorCode, null);
+    assert.equal(h.context.documentStatusEl.textContent, phase === "probe" ? "Document upload failed. Check your connection and try again."
+      : "Upload could not be confirmed. Check the refreshed library before retrying; the server may have saved the file.");
+    assert.equal(h.context.debugState.documents.errorCode, phase === "probe" ? "document_upload_failed" : "document_upload_unconfirmed");
     if (phase === "probe") assert.deepEqual(h.calls("upload"), []);
   });
 }
@@ -82,7 +96,9 @@ test("download captures the selection, clicks once and revokes the URL after 100
   const pending = h.runtime.downloadSelectedDocument();
   h.context.selectedDocumentId = "different"; h.context.roomStateAccessToken = "token-2";
   const blob = new Blob(["pdf"]); result.resolve({ blob, filename: "download.pdf" }); await pending;
-  assert.deepEqual(h.calls("download"), [["https://example.invalid", selected, "token-1"]]);
+  const downloadCall = h.calls("download")[0]!;
+  assert.deepEqual(downloadCall.slice(0, 3), ["https://example.invalid", selected, "token-1"]);
+  assert.ok(downloadCall[3] instanceof AbortSignal);
   assert.deepEqual(h.dom.blobs, [blob]); assert.deepEqual(h.dom.revoked, []);
   const link = h.dom.body.elements()[0]; assert.ok(link);
   assert.equal(link.href, "blob:document-test"); assert.equal(link.download, "download.pdf");
@@ -97,7 +113,9 @@ test("delete filters the current list after await and persists its new first ent
   h.context.roomDocuments = [selected]; const result = deferred<RuntimeDocumentRecord>(); h.hooks.deleteRoomDocument = () => result.promise;
   const pending = h.runtime.deleteSelectedDocument(); const latest = makeDocument("pdf", "latest");
   h.context.roomDocuments = [selected, latest]; result.resolve(selected); await pending;
-  assert.deepEqual(h.calls("delete"), [["https://example.invalid", "room", "selected", "token-1"]]);
+  const deleteCall = h.calls("delete")[0]!;
+  assert.deepEqual(deleteCall.slice(0, 4), ["https://example.invalid", "room", "selected", "token-1"]);
+  assert.ok(deleteCall[4] instanceof AbortSignal);
   assert.deepEqual(h.context.roomDocuments, [latest]); assert.equal(h.context.selectedDocumentId, "latest");
   assert.equal(h.dom.storage.getItem("vrata.documents.selected.room"), "latest");
   await h.runtime.deleteSelectedDocument();
@@ -112,8 +130,9 @@ for (const operation of ["download", "delete"] as const) {
     h.context.roomDocuments = [makeDocument("pdf")];
     const fail = async () => { throw new Error("denied:detail:third:fourth"); };
     if (operation === "download") h.hooks.downloadRoomDocument = fail; else h.hooks.deleteRoomDocument = fail;
-    await action(); assert.equal(h.context.roomDocuments.length, 1);
-    assert.equal(h.context.documentStatusEl.textContent, `Document ${operation} failed: denied:detail:third`);
-    assert.equal(h.context.debugState.documents.errorCode, "denied:detail:third");
+    h.hooks.listRoomDocuments = async () => ({ items: h.context.roomDocuments, uploadPolicy: null });
+    await action(); await new Promise<void>(resolve => setImmediate(resolve)); assert.equal(h.context.roomDocuments.length, 1);
+    assert.doesNotMatch(h.context.documentStatusEl.textContent, /denied|detail|third/);
+    assert.equal(h.context.debugState.documents.errorCode, `document_${operation}_failed`);
   });
 }

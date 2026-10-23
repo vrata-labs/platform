@@ -13,6 +13,8 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import shlex
+from urllib.parse import unquote, urlparse
 import sys
 import tempfile
 
@@ -23,6 +25,21 @@ _state_spec = importlib.util.spec_from_file_location("staging_release_state", Pa
 _state_module = importlib.util.module_from_spec(_state_spec)
 _state_spec.loader.exec_module(_state_module)
 AcceptedState = _state_module.AcceptedState
+
+
+# Match the API reader's version resolution and reference markers; return no room data.
+ROOM_RECORD_SCHEMA_SQL = (
+    "select count(*) = 9 from pg_attribute where not attisdropped and attnum > 0 and ("
+    "(attrelid = to_regclass('rooms') and attname in ('template_id', 'template_version', 'room_type', 'owner_participant_id'))"
+    " or (attrelid = to_regclass('templates') and attname in ('template_id', 'current_version'))"
+    " or (attrelid = to_regclass('template_versions') and (attname in ('template_id', 'version') or (attname = 'snapshot' and atttypid = 'jsonb'::regtype))))")
+OWNERLESS_REFERENCE_PERSONAL_SQL = (
+    "select exists(select 1 from rooms r"
+    " left join templates t on t.template_id = r.template_id"
+    " left join template_versions tv on tv.template_id = r.template_id and tv.version = coalesce(r.template_version, t.current_version)"
+    " cross join lateral (select case when jsonb_typeof(tv.snapshot) = 'string' then (tv.snapshot #>> '{}')::jsonb else tv.snapshot end as snapshot) s"
+    " where r.room_type = 'personal' and r.owner_participant_id is null"
+    " and (s.snapshot is null or jsonb_typeof(s.snapshot) <> 'object' or s.snapshot ?| array['defaults', 'scene', 'assetLock']))")
 
 
 def sha(value):
@@ -37,8 +54,52 @@ def supports_references(contract):
             and contract.get("referenceTemplateVersions") == ["1.0.0", "2.0.0"])
 
 
-def assert_target_allowed(marker, status, target_contract, target_sha):
+def supports_identity_boundary(contract):
+    return (isinstance(contract, dict) and contract.get("schemaVersion") == 1
+            and type(contract.get("identityProtocolFloorGuard")) is int
+            and contract["identityProtocolFloorGuard"] == 1)
+
+
+def supports_room_record_reader(contract):
+    return (isinstance(contract, dict) and contract.get("schemaVersion") == 1
+            and type(contract.get("roomRecordReader")) is int
+            and contract["roomRecordReader"] >= 2)
+
+
+def supports_frame_token_codec(contract):
+    return (isinstance(contract, dict) and contract.get("schemaVersion") == 1
+            and type(contract.get("frameTokenCodec")) is int
+            and contract["frameTokenCodec"] == 2)
+
+
+def assert_target_allowed(marker, status, target_contract, target_sha, minimum_identity_protocol=1, identity_bound=False,
+                          ownerless_reference_personal=False):
     sha(target_sha)
+    if type(minimum_identity_protocol) is not int or minimum_identity_protocol < 1:
+        raise ValueError("identity_rollout_invalid_protocol_floor")
+    if type(identity_bound) is not bool:
+        raise ValueError("identity_rollout_invalid_binding_state")
+    if type(ownerless_reference_personal) is not bool:
+        raise ValueError("room_record_rollout_invalid_reference_state")
+    if minimum_identity_protocol >= 2 or identity_bound:
+        if not supports_identity_boundary(target_contract):
+            raise ValueError("identity_rollback_below_boundary_forbidden")
+    # Floor two permits concurrent ownerless creation after the data probe.
+    if minimum_identity_protocol >= 2 or ownerless_reference_personal:
+        if not supports_room_record_reader(target_contract):
+            raise ValueError("room_record_rollback_requires_reader2")
+    # The target commit's API and remote-browser Dockerfiles label this codec (contract test).
+    if minimum_identity_protocol >= 2 or identity_bound:
+        if not supports_frame_token_codec(target_contract):
+            raise ValueError("frame_rollback_requires_codec2")
+    if minimum_identity_protocol >= 2:
+        if (not isinstance(target_contract, dict)
+                or type(target_contract.get("mediaIdentityCodec")) is not int
+                or target_contract["mediaIdentityCodec"] != 2):
+            raise ValueError("media_rollback_requires_identity_codec2")
+        if (type(target_contract.get("mediaScreenReconciler")) is not int
+                or target_contract["mediaScreenReconciler"] != 2):
+            raise ValueError("media_rollback_requires_screen_reconciler2")
     if marker:
         sha(marker)
         if not supports_references(target_contract):
@@ -57,8 +118,27 @@ class CatalogHost:
         self.compose = ["docker", "compose", "--env-file", str(self.root / "infra/docker/.env.staging"),
                         "-f", str(self.root / "infra/docker/compose.staging.yml")]
 
+    def read_only_compose_environment(self):
+        environment = os.environ.copy()
+        env_file = self.root / "infra/docker/.env.staging"
+        lines = env_file.read_text().splitlines()
+        for key in ("VRATA_INTERNAL_SERVICE_TOKEN", "VRATA_IDENTITY_PROXY_TOKEN"):
+            if environment.get(key):
+                continue
+            environment.pop(key, None)
+            configured = any(re.match(r"^\s*(?:export\s+)?" + key + r"\s*=\s*\S+", line)
+                             and not re.search(r"=\s*['\"]?REPLACE_WITH_", line) for line in lines)
+            if not configured:
+                # Only render/read an already-running database after a failed
+                # checkout. Never write this value or start a service with it.
+                environment[key] = "unconfigured-read-only-preflight"
+        return environment
+
     def run(self, args, optional=False):
-        result = subprocess.run(args, cwd=self.root, stdin=subprocess.DEVNULL, text=True, capture_output=True, timeout=600)
+        read_only_compose = args[:len(self.compose)] == self.compose and args[len(self.compose):len(self.compose) + 1] in (["config"], ["exec"], ["ps"])
+        environment = self.read_only_compose_environment() if read_only_compose else None
+        result = subprocess.run(args, cwd=self.root, env=environment, stdin=subprocess.DEVNULL,
+                                text=True, capture_output=True, timeout=600)
         if result.returncode:
             if optional:
                 return None
@@ -206,16 +286,113 @@ class CatalogHost:
     def prepare(self, target):
         marker = self.marker()
         contract = self.contract(target)
+        self.validate_identity_database()
         # This path must work even when a failed rollout has stopped the API.
         # Query PostgreSQL directly; only CLI mutations need a healthy API image.
         result = self.run(self.compose + ["exec", "-T", "postgres", "sh", "-c",
                          'psql -XAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"', "sh",
                          "select json_build_object('state', case when exists (select 1 from templates where status = 'active' and current_version <> '0.1.0') then 'active' else 'wave2' end, 'referenceRoomCount', (select count(*) from rooms where template_version <> '0.1.0'))"])
         status = json.loads(result)
-        assert_target_allowed(marker, status, contract, target)
+        minimum_identity_protocol = self.minimum_identity_protocol()
+        if minimum_identity_protocol >= 2 and self.read_only_compose_environment().get("VRATA_INTERNAL_SERVICE_TOKEN") == "unconfigured-read-only-preflight":
+            raise ValueError("identity_rollout_internal_service_token_required")
+        identity_bound = self.identity_bound()
+        ownerless = self.ownerless_reference_personal()
+        assert_target_allowed(marker, status, contract, target, minimum_identity_protocol, identity_bound,
+                              ownerless_reference_personal=ownerless)
+        if supports_identity_boundary(contract):
+            self.validate_identity_configuration()
         # Preparation never silently changes availability. A deliberate return to
         # Wave 2 uses rollback first; compatible routine deploys preserve catalog.
-        return {"targetSha": target, "wave2Marker": marker, "state": status["state"]}
+        return {"targetSha": target, "wave2Marker": marker, "state": status["state"],
+                "minimumIdentityProtocol": minimum_identity_protocol, "identityAuthorityBound": identity_bound,
+                "ownerlessReferencePersonal": ownerless}
+
+    def identity_bound(self):
+        command = self.compose + ["exec", "-T", "postgres", "sh", "-c",
+                                  'psql -XAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"', "sh"]
+        exists = self.run(command + ["select to_regclass('room_identity_authority_v2') is not null"])
+        if exists == "f":
+            return False
+        if exists != "t":
+            raise ValueError("identity_rollout_invalid_binding_state")
+        value = self.run(command + ["select exists(select 1 from room_identity_authority_v2)"])
+        if value not in ("t", "f"):
+            raise ValueError("identity_rollout_invalid_binding_state")
+        return value == "t"
+
+    def ownerless_reference_personal(self):
+        command = self.compose + ["exec", "-T", "postgres", "sh", "-c",
+                                  'psql -XAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"', "sh"]
+        rooms = self.run(command + ["select to_regclass('rooms') is not null"])
+        if rooms == "f":
+            boundary = self.run(command + ["select to_regclass('room_identity_protocol_policy') is not null"
+                                           " or to_regclass('room_identity_authority_v2') is not null"])
+            if boundary == "f":
+                return False
+            raise ValueError("room_record_rollout_invalid_reference_state")
+        if rooms != "t" or self.run(command + [ROOM_RECORD_SCHEMA_SQL]) != "t":
+            raise ValueError("room_record_rollout_invalid_reference_state")
+        value = self.run(command + [OWNERLESS_REFERENCE_PERSONAL_SQL])
+        if value not in ("t", "f"):
+            raise ValueError("room_record_rollout_invalid_reference_state")
+        return value == "t"
+
+    def validate_identity_configuration(self):
+        model = json.loads(self.run(self.compose + ["config", "--format", "json"]))
+        secrets = [model.get("services", {}).get(service, {}).get("environment", {}).get("STATE_TOKEN_SECRET")
+                   for service in ("api", "room-state")]
+        if any(not isinstance(value, str) or not value.strip() or value.strip() == "dev-state-secret" or value.strip().startswith("REPLACE_WITH_") for value in secrets):
+            raise ValueError("identity_rollout_state_secret_required")
+        if secrets[0] != secrets[1]:
+            raise ValueError("identity_rollout_state_secret_mismatch")
+        # The v2 credential codecs refuse a shorter signing key; activating with one would fail every admission.
+        if len(secrets[0].strip().encode()) < 32:
+            raise ValueError("identity_rollout_state_secret_too_short")
+        # Inspect only the configured host credential: an older accepted Compose
+        # may not yet pass it to every service introduced by the target release.
+        matches = [re.match(r"^\s*(?:export\s+)?VRATA_INTERNAL_SERVICE_TOKEN\s*=(.*)$", line)
+                   for line in (self.root / "infra/docker/.env.staging").read_text().splitlines()]
+        matches = [match for match in matches if match]
+        try:
+            values = shlex.split(matches[0].group(1), comments=True) if len(matches) == 1 else []
+        except ValueError:
+            values = []
+        token = values[0] if len(values) == 1 else ""
+        if (len(token) < 32 or any(character.isspace() for character in token) or token.startswith("REPLACE_WITH_")
+                or token in ("dev-internal-service-token", "unconfigured-read-only-preflight")):
+            raise ValueError("identity_rollout_internal_service_token_required")
+
+    def validate_identity_database(self):
+        model = json.loads(self.run(self.compose + ["config", "--format", "json"]))
+        api = model.get("services", {}).get("api", {}).get("environment", {})
+        postgres = model.get("services", {}).get("postgres", {}).get("environment", {})
+        try:
+            url = urlparse(api.get("POSTGRES_URL", ""))
+            valid = (url.scheme in ("postgres", "postgresql") and url.hostname == "postgres"
+                     and url.port in (None, 5432) and not url.query and not api.get("PGOPTIONS")
+                     and unquote(url.username or "") == postgres.get("POSTGRES_USER")
+                     and unquote(url.path.removeprefix("/")) == postgres.get("POSTGRES_DB")
+                     and not any(postgres.get(key) for key in ("PGHOST", "PGHOSTADDR", "PGPORT", "PGOPTIONS", "PGSERVICE", "PGSERVICEFILE")))
+        except (TypeError, ValueError):
+            valid = False
+        if not valid:
+            raise ValueError("identity_rollout_requires_matching_bundled_database")
+
+    def minimum_identity_protocol(self):
+        # The API may be stopped or be the incompatible image being rolled back.
+        # Missing rows/errors are not a license to return to legacy authentication.
+        command = self.compose + ["exec", "-T", "postgres", "sh", "-c",
+                                  'psql -XAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"', "sh"]
+        exists = self.run(command + ["select to_regclass('room_identity_protocol_policy') is not null"])
+        if exists == "f":
+            return 1  # A database that predates the boundary schema.
+        if exists != "t":
+            raise ValueError("identity_rollout_invalid_protocol_floor")
+        value = self.run(command + ["select minimum_protocol from room_identity_protocol_policy where singleton=true"])
+        if not re.fullmatch(r"[1-9][0-9]*", value):
+            raise ValueError("identity_rollout_invalid_protocol_floor")
+        return int(value)
 
     def mutate(self, command, expected):
         marker = self.marker()

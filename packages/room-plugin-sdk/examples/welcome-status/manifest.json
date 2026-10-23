@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "sdkApiVersion": 1,
+  "id": "welcome-status",
+  "version": "1.0.0",
+  "displayName": "Welcome status",
+  "requestedCapabilities": ["status.set"],
+  "configSchema": { "greeting": { "type": "string", "required": false, "minLength": 1, "maxLength": 256 } }
+}

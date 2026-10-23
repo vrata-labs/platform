@@ -55,6 +55,7 @@ export interface RoomInviteRecord {
   roomId: string;
   tokenHash: string;
   role: "guest" | "member" | "presenter" | "host" | "admin";
+  protocolVersion?: 1 | 2;
   waitingRoomEnabled: boolean;
   createdAt: string;
   expiresAt: string;
@@ -381,6 +382,38 @@ export interface XrTelemetryEventRecord {
 }
 
 export interface Storage extends IntegrationStore {
+  readonly roomPlugins: import("./plugins/contracts.js").RoomPluginStorage;
+  readonly roomPluginAccess: import("./plugins/access-contracts.js").RoomPluginAccessFactory;
+  readonly roomIdentities: import("./identity/contracts.js").RoomIdentityStorage;
+  readonly identityProtocol: import("./identity/protocol.js").IdentityProtocolPolicy;
+  /** Synchronous response release only: no arbitrary DB/network callback or retained facade. */
+  releasePersonalRoomOwnerResponse(proof: import("@vrata/shared-types/identity-credential").RoomIdentityCredential,
+    send: (room: RoomRecord, identity: import("./identity/contracts.js").RoomIdentityRecord) => undefined): Promise<void>;
+  /** Read-only release for every persisted legacy token: floor 1, unbound, parent then child rows held
+   * through COMMIT. `send` runs exactly once, synchronously, after all checks; no DB/network callback. */
+  releaseLegacyRoomCredential(selector: LegacyRoomCredentialSelector, options: Pick<LegacyRoomEffectOptions, "lockTimeoutMs" | "idleTimeoutMs">,
+    send: (fresh: LegacyRoomCredentialSnapshot) => undefined): Promise<void>;
+  /** Floor-1 deferred admission write, floor 1 and unbound: parent, policy, then child rows held through COMMIT; one CAS
+   * host seat or one pending insert, both leases rechecked before decide, before and after SQL, and before COMMIT. */
+  writeLegacyAdmission(input: LegacyAdmissionWriteInput, options: Pick<LegacyRoomEffectOptions, "lockTimeoutMs" | "idleTimeoutMs">):
+    Promise<LegacyAdmissionWriteReceipt>;
+  /** Floor-1 legacy session control, floor 1 and unbound: parent NO KEY UPDATE then policy SHARE; the pure reducer decides on the
+   * fresh raw row at the store's instant; at most one CAS merge of its patch into the raw column. Original lease rechecked before
+   * decide, before and after SQL, and before COMMIT. No send or projection inside; the receipt follows a known COMMIT. */
+  applyLegacyRoomControl(input: import("./identity/legacy-room-control.js").LegacyRoomControlInput,
+    options: import("./identity/legacy-room-control.js").LegacyRoomControlOptions): Promise<LegacyRoomControlReceipt>;
+  withRoomIdentityEffect<T>(guard: import("./identity/effect-write-guard.js").RoomEffectGuard,
+    effect: (scoped: RoomIdentityEffectStorage, current: import("./identity/effect-write-guard.js").RoomEffectActor) => Promise<T>): Promise<T>;
+  withLegacyRoomEffect<T>(scope: { tenantId: string; roomId: string }, options: LegacyRoomEffectOptions,
+    effect: (scoped: RoomIdentityEffectStorage) => Promise<T>): Promise<T>;
+  /** Absent in every tenant, floor 1, unbound; grants nothing on a persisted room. */
+  withLegacyVirtualRoomEffect<T>(roomId: string, options: VirtualRoomEffectOptions,
+    effect: (scoped: VirtualRoomEffectStorage) => Promise<T>): Promise<T>;
+  setRoomSceneBundleUrl(tenantId: string, roomId: string, sceneBundleUrl: string): Promise<RoomRecord | null>;
+  getPersonalRoomState(tenantId: string, roomId: string): Promise<RoomPersonalState | null>;
+  updatePersonalRoomState(tenantId: string, roomId: string, state: RoomPersonalState): Promise<RoomPersonalState | null>;
+  reserveIdentityAdmission(input: import("./identity/admission-limits.js").AdmissionLimitInput): Promise<boolean>;
+  hasRoomIdentityAuthority(roomId: string): Promise<boolean>;
   listTenants(): Promise<TenantRecord[]>;
   createTenant(input: Partial<TenantRecord>): Promise<TenantRecord>;
   updateTenant(tenantId: string, input: Partial<TenantRecord>): Promise<TenantRecord | null>;
@@ -392,9 +425,18 @@ export interface Storage extends IntegrationStore {
   listRooms(): Promise<RoomRecord[]>;
   getRoom(roomId: string): Promise<RoomRecord | null>;
   createRoom(input: Partial<RoomRecord>): Promise<RoomRecord>;
+  /** Administrative metadata receipt, not a grant; floor 2 rejects raw owner/host/presenter seeds. */
+  createAdministrativeRoom(input: Partial<RoomRecord>): Promise<RoomRecord>;
+  createLegacyPersonalRoom(input: Partial<RoomRecord> & { roomId: string; tenantId: string; ownerParticipantId: string }):
+    Promise<{ room: RoomRecord; created: boolean }>;
+  createPersonalOwnedRoom(input: Omit<Partial<RoomRecord>, "ownerParticipantId" | "roomType" | "sessionControl"> & { displayName: string }):
+    Promise<{ room: RoomRecord; identity: import("./identity/contracts.js").RoomIdentityRecord }>;
   updateRoom(roomId: string, input: Partial<RoomRecord>, expectedTemplateBinding?: ExpectedRoomTemplateBinding): Promise<RoomRecord | null>;
-  deleteRoom(roomId: string): Promise<boolean>;
+  deleteRoom(roomId: string, pluginDeletion?: { tenantId: string; deletionId: string }): Promise<boolean>;
   createRoomInvite(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy"> & { inviteId?: string; createdAt?: string }): Promise<RoomInviteRecord>;
+  createRoomInviteV2(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy" | "protocolVersion"> & {
+    actor: import("./identity/contracts.js").RoomIdentityActor
+  }): Promise<RoomInviteRecord>;
   listRoomInvites(roomId: string): Promise<RoomInviteRecord[]>;
   getRoomInvite(inviteId: string): Promise<RoomInviteRecord | null>;
   getRoomInviteByTokenHash(tokenHash: string): Promise<RoomInviteRecord | null>;
@@ -434,6 +476,56 @@ export interface ExpectedRoomTemplateBinding {
   templateId: string;
   templateVersion: string;
 }
+
+/** Only DB-only mutations and the tombstone read belong inside a room fence. */
+export type RoomEffectDatabase = Pick<Storage, "upsertRoomNote" | "deleteRoomNote" | "restoreRoomNoteVersion"
+  | "createRoomDocument" | "markRoomDocumentDeleted" | "updateRoomDocumentSurface" | "getRoomDocument"
+  | "getPersonalRoomState" | "updatePersonalRoomState" | "setRoomSceneBundleUrl"
+  | "listRoomInvites" | "revokeRoomInvite" | "listWaitingRoomRequests" | "updateWaitingRoomRequest" | "getRoom"
+  | "addDiagnostic" | "addXrTelemetry">;
+
+export type RoomIdentityEffectStorage = RoomEffectDatabase & { releaseResponse(send: () => void): void };
+export interface LegacyRoomEffectOptions { roomWrite?: boolean; lockTimeoutMs?: number; idleTimeoutMs?: number }
+export interface LegacyRoomCredentialSelector {
+  readonly tenantId: string;
+  readonly roomId: string;
+  readonly participantId: string;
+  readonly inviteTokenHash: string | null;
+}
+/** Invite matches (roomId, tokenHash); waiting matches (roomId, fresh inviteId, participantId); else null. */
+export interface LegacyRoomCredentialSnapshot {
+  readonly room: Readonly<RoomRecord>;
+  readonly invite: Readonly<RoomInviteRecord> | null;
+  readonly waiting: Readonly<WaitingRoomRequestRecord> | null;
+}
+/** `decide` is the trusted pure, synchronous re-evaluation over fresh clones at the store's instant. The store derives
+ * every identifier itself (selector subject, pinned invite and row, its own UUID) and validates the answer. */
+export interface LegacyAdmissionWriteInput {
+  readonly selector: LegacyRoomCredentialSelector;
+  readonly mode: "claim_host" | "pending";
+  readonly deadline: import("./identity/legacy-admission-write.js").LegacyAdmissionDeadline | null;
+  /** The presented MAC's own signed expiry; kind bearer only. */
+  readonly presentedBearerDeadline: import("./identity/legacy-admission-write.js").LegacyAdmissionDeadline | null;
+  /** Required for a pending write; never read for a host claim. */
+  readonly displayName: string | null;
+  readonly decide: (fresh: LegacyRoomCredentialSnapshot, atMs: number) => import("./identity/legacy-admission-write.js").LegacyAdmissionWriteDecision;
+}
+/** Returned only after a known COMMIT; nothing is sent or signed inside the transaction. */
+export type LegacyAdmissionWriteReceipt =
+  | { readonly kind: "host_ready" }
+  | { readonly kind: "pending"; readonly accessRequestId: string; readonly created: boolean }
+  | { readonly kind: "refused"; readonly status: 403; readonly reason: string; readonly accessRequestId?: string; readonly fresh: LegacyRoomCredentialSnapshot }
+  | { readonly kind: "changed" };
+/** Returned only after a known COMMIT. `state` is the stored column as written, sanitized; refused and changed wrote nothing. */
+export type LegacyRoomControlReceipt =
+  | { readonly kind: "applied"; readonly state: Required<RoomSessionControlState> }
+  | { readonly kind: "refused"; readonly status: 400 | 403 | 404; readonly error: string; readonly reason?: string }
+  | { readonly kind: "changed" };
+/** Read mode admits at most one release; write mode admits telemetry only;
+ * pinAbsence requires exactly one release and excludes writes. */
+export type VirtualRoomEffectStorage = Pick<RoomEffectDatabase, "addDiagnostic" | "addXrTelemetry"> & { releaseResponse(send: () => void): void };
+/** pinAbsence holds absence through release/COMMIT for virtual state-token issuance. */
+export type VirtualRoomEffectOptions = LegacyRoomEffectOptions & { expiresAtSeconds?: number; pinAbsence?: boolean };
 
 export type SceneBundleUpdateInput = Partial<SceneBundleCreateInput> & {
   publicUrl?: string;

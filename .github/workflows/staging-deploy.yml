@@ -18,6 +18,16 @@ on:
         description: Force the verification gate to fail after rollout
         default: false
         type: boolean
+      rotate_dev_state_secret:
+        description: "Replace a development state key on the host; invalidates existing state sessions and invite links"
+        required: false
+        default: false
+        type: boolean
+      activate_identity_v2:
+        description: "IRREVERSIBLE: raise the shared identity protocol floor to 2 after rollout; the gate then runs on floor 2"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -27,7 +37,7 @@ jobs:
   deploy:
     if: github.event_name == 'workflow_dispatch' || (vars.STAGING_AUTO_DEPLOY_ENABLED != 'false' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 200
     concurrency:
       group: staging-deploy
       cancel-in-progress: false
@@ -84,6 +94,7 @@ jobs:
           cp tools/staging-scene-snapshot.mjs tools/patch-staging-scene-bundles.mjs "$RUNNER_TEMP/vrata-scene-rollback/"
           cp tools/staging-minio-rollout.py "$RUNNER_TEMP/vrata-scene-rollback/"
           cp tools/staging-template-catalog.py "$RUNNER_TEMP/vrata-scene-rollback/"
+          cp tools/staging-state-key.py "$RUNNER_TEMP/vrata-scene-rollback/"
           cp tools/staging-accepted-release.py tools/staging-remote-release.py tools/staging_gate_proof.py tools/staging_scene_files.py "$RUNNER_TEMP/vrata-scene-rollback/"
           cp infra/docker/rollout-staging-images.sh "$RUNNER_TEMP/vrata-scene-rollback/"
           echo "REMOTE_HELPERS=${STAGING_APP_DIR}-stage-state/helpers/$GITHUB_SHA" >> "$GITHUB_ENV"
@@ -169,6 +180,33 @@ jobs:
           # shellcheck disable=SC2029
           cat "$RUNNER_TEMP/vrata-scene-bundle-snapshot.json" | ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo install -d -m 700 '${STAGING_APP_DIR}-stage-state/attempts/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT' && sudo sh -c 'umask 077; cat > \"${STAGING_APP_DIR}-stage-state/attempts/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/scene-urls.json\"'"
 
+      - name: Replace development state signing key
+        if: github.event_name == 'workflow_dispatch' && inputs.rotate_dev_state_secret
+        run: |
+          STATE_KEY_HELPER_B64="$(base64 -w0 "$RUNNER_TEMP/vrata-scene-rollback/staging-state-key.py")"
+          # The new key is generated on the host and never returned to the runner.
+          # shellcheck disable=SC2087
+          ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
+          set -euo pipefail
+          STATE_KEY_HELPER="\$(mktemp)"
+          trap 'rm -f "\$STATE_KEY_HELPER"' EXIT
+          printf '%s' '$STATE_KEY_HELPER_B64' | base64 -d > "\$STATE_KEY_HELPER"
+          python3 "\$STATE_KEY_HELPER" --env-file "$STAGING_APP_DIR/infra/docker/.env.staging"
+          EOF
+
+      - name: Provision identity proxy key
+        run: |
+          PROXY_KEY_HELPER_B64="$(base64 -w0 "$RUNNER_TEMP/vrata-scene-rollback/staging-state-key.py")"
+          # The new key is generated on the staging host; only a status leaves it.
+          # shellcheck disable=SC2087
+          ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
+          set -euo pipefail
+          PROXY_KEY_HELPER="\$(mktemp)"
+          trap 'rm -f "\$PROXY_KEY_HELPER"' EXIT
+          printf '%s' '$PROXY_KEY_HELPER_B64' | base64 -d > "\$PROXY_KEY_HELPER"
+          python3 "\$PROXY_KEY_HELPER" --env-file "$STAGING_APP_DIR/infra/docker/.env.staging" --ensure-proxy-key
+          EOF
+
       - name: Roll out staging images
         id: rollout
         timeout-minutes: 25
@@ -206,13 +244,36 @@ jobs:
         env:
           STAGING_SCENE_BUNDLE_PATCH_REPORT: /tmp/vrata-scene-bundle-patch-report.json
         run: node tools/patch-staging-scene-bundles.mjs
+      - name: Activate identity protocol v2
+        id: identity_activation
+        # The floor is never lowered. The helper refuses unless the running candidate and the
+        # accepted release an automatic rollback would restore both carry every floor-2 capability.
+        if: steps.rollout.outcome == 'success' && github.event_name == 'workflow_dispatch' && inputs.activate_identity_v2
+        timeout-minutes: 5
+        env:
+          SHA: ${{ steps.deploy.outputs.deploy_sha }}
+        run: |
+          set -o pipefail
+          # shellcheck disable=SC2029
+          ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo python3 -B '$REMOTE_HELPERS/staging-remote-release.py' activate-identity-v2 --root '$STAGING_APP_DIR' --image-sha '$SHA'" | tee "$RUNNER_TEMP/identity-activation.json"
+          for attempt in $(seq 1 24); do
+            if curl --fail --silent --max-time 10 "$BASE_URL/health" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.exit(JSON.parse(s).features?.identityProtocolVersion===2?0:1))'; then exit 0; fi
+            sleep 5
+            echo "waiting_for_public_identity_v2:$attempt"
+          done
+          echo identity_v2_not_advertised >&2
+          exit 1
       - name: Install Playwright browser
         if: steps.rollout.outcome == 'success'
         timeout-minutes: 5
         run: pnpm exec playwright install --with-deps chromium
       - name: Verification gate
         id: gate
-        timeout-minutes: 35
+        # The full reference/RTC catalog and mandatory Rutube share this budget.
+        # The 79-case catalog reached 77 passes at 50 minutes; retain time for
+        # its final capture cases, the bounded Rutube test and report flushing.
+        # Stop on the first failure so its report survives instead of timing out.
+        timeout-minutes: 70
         if: steps.rollout.outcome == 'success'
         continue-on-error: true
         env:
@@ -223,7 +284,11 @@ jobs:
           curl --fail --silent "$BASE_URL/rooms/demo-room" >/dev/null
           curl --fail --silent "$BASE_URL/control-plane" >/dev/null
           if [ "$FORCE_FAIL" = true ]; then echo forced_gate_failure >&2; exit 1; fi
-          pnpm test:e2e:staging
+          # Verify private plugin policy only for targets that implement plugin storage.
+          if [ -f apps/api/src/plugins/verify-private-storage.ts ]; then
+            ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo docker compose --env-file '$STAGING_APP_DIR/infra/docker/.env.staging' -f '$STAGING_APP_DIR/infra/docker/compose.staging.yml' exec -T -w /app api node apps/api/dist/plugins/verify-private-storage.js"
+          fi
+          pnpm test:e2e:staging -- --max-failures=1
           if [ "$RUTUBE_BLOCKING" = true ]; then PLAYWRIGHT_REPORT_NAME=staging-rutube-blocking pnpm test:e2e:rutube; fi
 
       - name: Publish accepted release and finalize catalog

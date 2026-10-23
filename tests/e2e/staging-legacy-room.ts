@@ -1,5 +1,7 @@
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import fixtures from "./staging-legacy-fixtures.json";
+import { completeGuestEntry } from "./guest-entry";
+import { identityProtocolOf } from "./staging-identity";
 
 type FixtureKey = keyof typeof fixtures;
 type RequestOptions = NonNullable<Parameters<APIRequestContext["post"]>[1]>;
@@ -25,13 +27,51 @@ export async function createLegacyStagingRoom(request: APIRequestContext, key: F
   expect(room.templateVersion).toBe("0.1.0");
   retainedRooms.add(roomId);
   const { templateId: _templateId, tenantId: _tenantId, ...overrides } = input;
+  // Floor 2 freezes the persisted legacy session lifecycle: v2 authority replaces it, so only
+  // floor 1 resets it. Retained rooms therefore keep their v2 Host slot between runs.
+  const lifecycle = await identityProtocolOf(request) === 2 ? {} : { sessionControl: {} };
   return request.patch(`/api/rooms/${roomId}`, { ...options, data: {
     roomType: "standard", visibility: "public", guestAllowed: true, sceneBundleUrl: null,
     features: { voice: true, spatialAudio: true, screenShare: true },
     avatarConfig: { avatarsEnabled: true, avatarCatalogUrl: "/assets/avatars/catalog.v1.json", avatarQualityProfile: "desktop-standard", avatarFallbackCapsulesEnabled: true, avatarSeatsEnabled: true },
     ...overrides, status: "active", disabledAt: null, disabledBy: null,
-    sessionControl: {}, personalState: {}
+    ...lifecycle, personalState: {}
   } });
+}
+
+/** A real invitation link with extra runtime query parameters; the caller revokes it. */
+export async function stagingInvitation(request: APIRequestContext, roomId: string, headers: Record<string, string>,
+  role: "host" | "member", query: Record<string, string> = {}) {
+  const response = await request.post(`/api/rooms/${roomId}/invites`, { headers, data: { role, expiresInSeconds: 900 } });
+  expect(response.ok()).toBe(true);
+  const { inviteId, inviteLink } = await response.json() as { inviteId: string; inviteLink: string };
+  const link = new URL(inviteLink);
+  for (const [key, value] of Object.entries(query)) link.searchParams.set(key, value);
+  return { link: `${link.pathname}${link.search}`,
+    revoke: async () => { expect((await request.post(`/api/rooms/${roomId}/invites/${inviteId}/revoke`, { headers })).ok()).toBe(true); } };
+}
+
+/** Enters through a Host invitation on either floor. A retained floor-2 room keeps the Host slot
+ * of an earlier run, so the administrator moves it to the participant this run just admitted. */
+export async function enterStagingRoomAsHost(page: Page, request: APIRequestContext, roomId: string, headers: Record<string, string>,
+  displayName: string, query: Record<string, string> = {}) {
+  const invitation = await stagingInvitation(request, roomId, headers, "host", query);
+  try {
+    await page.goto(invitation.link);
+    await completeGuestEntry(page, displayName);
+    if (await identityProtocolOf(request) === 2) {
+      const role = () => page.evaluate(() => (window as any).__VRATA_DEBUG__?.access?.role as string | undefined);
+      await expect.poll(role, { timeout: 15_000 }).toMatch(/^(host|member)$/);
+      if (await role() !== "host") {
+        const participantId = await page.evaluate(() => (window as any).__VRATA_DEBUG__?.participantId as string);
+        // Transfer targets a present participant; presence follows the room-state join.
+        await expect.poll(async () => (await request.post(`/api/rooms/${roomId}/host/transfer`, { headers, data: { participantId } })).status(),
+          { timeout: 20_000 }).toBe(200);
+        await expect.poll(role, { timeout: 20_000 }).toBe("host");
+      }
+    }
+  } catch (error) { await invitation.revoke().catch(() => undefined); throw error; }
+  return invitation;
 }
 
 export async function releaseLegacyStagingRoom(request: APIRequestContext, roomId: string, options: RequestOptions) {

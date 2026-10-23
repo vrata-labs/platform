@@ -99,6 +99,7 @@ export interface StopMediaObjectInput {
   commandId: string;
   surfaceId: string;
   objectId: string;
+  expectedRevision?: unknown;
 }
 
 export interface PatchMediaObjectInput {
@@ -1124,7 +1125,9 @@ function reduceScreenShareState(current: ScreenShareObjectState, patch: ScreenSh
   };
 }
 
-function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: RemoteBrowserPatch, participantId: string, objectId: string, nowMs: number): RemoteBrowserObjectState | null {
+// `generation` is the object revision this patch commits. Open-url binds it as the executor instance, so every
+// accepted open gets a fresh server-owned instance whatever inputEventId the client sent.
+function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: RemoteBrowserPatch, participantId: string, objectId: string, generation: number, nowMs: number): RemoteBrowserObjectState | null {
   if (current.lastInputEventId === patch.inputEventId) {
     return current;
   }
@@ -1149,6 +1152,10 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
     };
   }
   if (patch.type === "open-url") {
+    // An overflowed revision could repeat an earlier instance; refuse rather than rebind it.
+    if (!Number.isSafeInteger(generation) || generation < 1) {
+      return null;
+    }
     const executorSessionId = current.executorSessionId ?? `remote-browser:${objectId}`;
     const mediaParticipantId = current.mediaParticipantId ?? executorSessionId;
     return {
@@ -1156,7 +1163,7 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
       status: "loading",
       controllerParticipantId: current.controllerParticipantId ?? participantId,
       executorSessionId,
-      executorInstanceId: `${executorSessionId}:instance:${patch.inputEventId}`,
+      executorInstanceId: `${executorSessionId}:instance:${generation}`,
       mediaParticipantId,
       mediaTrackSid: undefined,
       audioTrackSid: undefined,
@@ -1421,6 +1428,12 @@ export function stopMediaObject(state: RoomState, participantId: string, input: 
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "object-surface-mismatch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
   }
 
+  if (input.expectedRevision !== undefined && (!Number.isSafeInteger(input.expectedRevision)
+    || input.expectedRevision !== object.revision)) {
+    return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "revision-mismatch",
+      surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+  }
+
   const nextObjects = { ...mediaObjects.objects };
   delete nextObjects[input.objectId];
   const nextMediaObjects: RoomMediaObjectsState = {
@@ -1618,7 +1631,7 @@ export function patchMediaObjectState(state: RoomState, participantId: string, i
     if (currentState.lastInputEventId === patch.inputEventId) {
       return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "duplicate-input-event", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
     }
-    const nextState = reduceRemoteBrowserState(currentState, patch, participantId, object.objectId, input.nowMs);
+    const nextState = reduceRemoteBrowserState(currentState, patch, participantId, object.objectId, object.revision + 1, input.nowMs);
     if (!nextState) {
       return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
     }
@@ -1809,7 +1822,7 @@ export function patchRemoteBrowserExecutorState(state: RoomState, input: PatchRe
   if (currentState.lastInputEventId === input.patch.inputEventId) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: "admin", permission, blockedReason: "duplicate-input-event", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
   }
-  const nextState = reduceRemoteBrowserState(currentState, input.patch, object.ownerParticipantId, object.objectId, input.nowMs);
+  const nextState = reduceRemoteBrowserState(currentState, input.patch, object.ownerParticipantId, object.objectId, object.revision + 1, input.nowMs);
   if (!nextState) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: "admin", permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
   }
@@ -1883,17 +1896,22 @@ export function setSurfaceMediaAudioEnabled(state: RoomState, participantId: str
 
 export function joinRoom(state: RoomState, participantId: string, access?: ParticipantAccessState): RoomState {
   const mediaObjects = ensureMediaObjectsState(state);
-  if (state.participants.some((item) => item.participantId === participantId)) {
-    return {
-      ...state,
-      mediaObjects,
-      participants: state.participants.map((item) => item.participantId === participantId ? applyParticipantAccess(item, access) : item)
-    };
+  const previous = state.participants.find((item) => item.participantId === participantId);
+  const participant = previous ? applyParticipantAccess(previous, access) : createParticipantState(participantId, access);
+  // Authority changes and reconnects share this invariant. Room content remains,
+  // but a participant without capture permission cannot retain a live screen.
+  if (!hasRoomPermission(participant.permissions, "screen-share.start")) {
+    for (const [objectId, object] of Object.entries(mediaObjects.objects)) {
+      if (object.type !== SCREEN_SHARE_OBJECT_TYPE || object.ownerParticipantId !== participantId) continue;
+      delete mediaObjects.objects[objectId];
+      const surface = mediaObjects.surfaces[object.surfaceId];
+      if (surface?.activeObjectId === objectId) surface.activeObjectId = null;
+    }
   }
   return {
     ...state,
     mediaObjects,
-    participants: [...state.participants, createParticipantState(participantId, access)]
+    participants: previous ? state.participants.map((item) => item === previous ? participant : item) : [...state.participants, participant]
   };
 }
 

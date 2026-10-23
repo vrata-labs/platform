@@ -1,4 +1,5 @@
 import type { RuntimeAccessError } from "./index.js";
+import { describeIdentityRequirement } from "./session-upgrade.js";
 
 export function describeRoomAccessError(error: Pick<RuntimeAccessError, "reason">): string {
   switch (error.reason) {
@@ -20,6 +21,10 @@ export function describeRoomAccessError(error: Pick<RuntimeAccessError, "reason"
       return "Access denied: removed by host";
     case "session_ended":
       return "Session ended by host";
+    case "identity_rate_limited":
+      return "Too many new room entries. Please try again later";
+    case "room_identity_full":
+      return "This room has reached its identity limit. Contact the administrator";
     default:
       return "Access denied";
   }
@@ -27,6 +32,9 @@ export function describeRoomAccessError(error: Pick<RuntimeAccessError, "reason"
 
 export function describeSessionControlReason(reason: string): string {
   switch (reason) {
+    case "identity_upgrade_required":
+    case "identity_recovery_required":
+      return describeIdentityRequirement(reason);
     case "room_locked":
       return "Access denied: room is locked";
     case "participant_removed":

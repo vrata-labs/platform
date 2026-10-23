@@ -153,7 +153,12 @@ export function hasRoomPermission(permissions: readonly RoomPermission[], permis
 }
 
 export function createRoomAccessDebugState(role: RoomRole): RoomAccessDebugState {
-  const permissions = getRoomPermissions(role);
+  return createRoomAccessFromPermissions(role, getRoomPermissions(role));
+}
+
+/** A role label is not a capability grant. Project only the supplied permissions. */
+export function createRoomAccessFromPermissions(role: RoomRole, granted: readonly RoomPermission[]): RoomAccessDebugState {
+  const permissions = [...new Set(granted)];
   return {
     role,
     permissions,

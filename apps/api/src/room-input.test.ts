@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { MemoryStorage } from "./storage.js";
 
 import {
   isRoomVisibility,
@@ -16,6 +17,19 @@ const valid = (): RoomPayloadInput => ({ roomId: "room-1", name: "Meeting room",
 // Exercise the same untrusted values that JSON parsing supplies to the API.
 const raw = (input: unknown): RoomPayloadInput => input as RoomPayloadInput;
 const validate = (input: RoomPayloadInput) => validateRoomInput(input, templates, tenants);
+
+test("readonly current-owner presentation is never copied from input or stored by Memory updates", async () => {
+  for (const mode of ["create", "patch"] as const) for (const currentOwnerParticipantId of ["forged", null, 7, { id: "forged" }]) {
+    const input = raw({ ...valid(), currentOwnerParticipantId }), before = structuredClone(input);
+    assert.equal(Object.hasOwn(normalizeRoomPayload(input, mode), "currentOwnerParticipantId"), false);
+    assert.deepEqual(input, before);
+  }
+  const storage = new MemoryStorage(), room = await storage.createRoom({ name: "Readonly presentation" });
+  const updated = await storage.updateRoom(room.roomId, normalizeRoomPayload(raw({ name: "Renamed", currentOwnerParticipantId: "forged" }), "patch"));
+  assert.equal(updated?.name, "Renamed");
+  assert.equal(Object.hasOwn(updated ?? {}, "currentOwnerParticipantId"), false);
+  assert.equal(Object.hasOwn(await storage.getRoom(room.roomId) ?? {}, "currentOwnerParticipantId"), false);
+});
 
 for (const visibility of ["public", "unlisted", "private"] as const) {
   test(`visibility accepts and preserves ${visibility}`, () => {
@@ -96,6 +110,19 @@ test("only personal rooms require a valid owner and validation does not rewrite 
   const input = { ...valid(), roomType: "personal" as const, ownerParticipantId: "  Owner-1  " };
   assert.equal(validate(input), null);
   assert.equal(input.ownerParticipantId, "  Owner-1  ");
+});
+
+test("ownerless personal input needs a server option, not a body flag or malformed owner", () => {
+  const allow = { allowUnownedPersonal: true };
+  const personal = (ownerParticipantId?: unknown) => raw({ ...valid(), roomType: "personal", ownerParticipantId });
+  for (const input of [personal(), personal(null), raw({ ...valid(), roomType: "personal" })]) {
+    const before = structuredClone(input);
+    assert.equal(validate(input), "missing_personal_room_owner");
+    assert.equal(validate(raw({ ...input, allowUnownedPersonal: true })), "missing_personal_room_owner");
+    assert.equal(validateRoomInput(input, templates, tenants, allow), null); assert.deepEqual(input, before);
+  }
+  for (const owner of ["", "ab", "bad/id", 7, {}]) assert.equal(validateRoomInput(personal(owner), templates, tenants, allow), "missing_personal_room_owner");
+  assert.equal(validateRoomInput(raw({ ...valid(), roomType: "other" }), templates, tenants, allow), "invalid_room_type");
 });
 
 test("normalization strips template snapshots and legacy fields without mutating input", () => {

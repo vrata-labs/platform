@@ -37,6 +37,7 @@ The workflow also runs `tools/check-public-assets.mjs`; it fails if non-cleared 
 - [ ] Internal staging gate is green for the release commit.
 - [ ] Self-host compose config check passes.
 - [ ] Self-host smoke passes from a clean clone or clean Docker environment.
+- [ ] The four-person private public demo follows [`docs/demo/README.md`](demo/README.md), with separate human voice/visual acceptance and cleanup evidence when included in release scope.
 - [ ] GHCR images are published with SemVer and SHA tags.
 - [ ] Upgrade rehearsal passes.
 - [ ] Rollback rehearsal passes.

@@ -27,7 +27,7 @@ export interface MediaObjectQueriesContext {
 }
 
 export function createMediaObjectQueries(context: MediaObjectQueriesContext) {
-  const { participantId, mediaSurfaceViews } = context;
+  const { mediaSurfaceViews } = context;
 
   function activeMediaObjectForSurface(surfaceId: string): MediaObjectInstance | null {
     return selectActiveMediaObjectForSurface(context.roomMediaObjects, surfaceId);
@@ -88,7 +88,7 @@ export function createMediaObjectQueries(context: MediaObjectQueriesContext) {
       return null;
     }
     for (const object of Object.values(context.roomMediaObjects.objects)) {
-      if (object.type !== SCREEN_SHARE_OBJECT_TYPE || object.ownerParticipantId !== participantId) {
+      if (object.type !== SCREEN_SHARE_OBJECT_TYPE || object.ownerParticipantId !== context.participantId) {
         continue;
       }
       if (!mediaSurfaceViews.has(object.surfaceId)) {
@@ -137,7 +137,7 @@ export function createMediaObjectQueries(context: MediaObjectQueriesContext) {
       if (!mediaSurfaceViews.has(surfaceId)) continue;
       const object = activeScreenShareObjectForSurface(surfaceId);
       const trackSid = object?.state.mediaTrackSid;
-      if (object && object.ownerParticipantId !== participantId && object.state.status === "active"
+      if (object && object.ownerParticipantId !== context.participantId && object.state.status === "active"
         && typeof trackSid === "string" && trackSid.length > 0 && !trackSid.startsWith("mock-screen-share:")) return object;
     }
     return null;

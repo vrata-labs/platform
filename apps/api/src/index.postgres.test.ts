@@ -228,6 +228,17 @@ test("API serves server-owned template metadata through PostgreSQL storage", {
     const referencePool = new Pool({ connectionString: connectionUrl.toString() });
     try {
       const storage = new PostgresStorage(referencePool);
+      const guarded = await storage.createRoom({ tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Identity boundary" });
+      await storage.roomIdentities.create({ tenantId: guarded.tenantId, roomId: guarded.roomId, displayName: "Prepared identity", baseRole: "guest", provenance: { kind: "guest" } });
+      const lifecycle = await fetch(`${baseUrl}/api/rooms/${guarded.roomId}`, {
+        method: "PATCH", headers, body: JSON.stringify({ ownerParticipantId: "legacy-owner-change" })
+      });
+      assert.equal(lifecycle.status, 409);
+      assert.deepEqual(await lifecycle.json(), { error: "identity_required", reason: "identity_upgrade_required" });
+      const ordinary = await fetch(`${baseUrl}/api/rooms/${guarded.roomId}`, {
+        method: "PATCH", headers, body: JSON.stringify({ name: "Ordinary metadata still works" })
+      });
+      assert.equal(ordinary.status, 200);
       await storage.transitionReferenceTemplateCatalog("active");
       const catalog = await (await fetch(`${baseUrl}/api/templates`)).json() as { items: Array<{ templateId: string; currentVersion: string; previewUrl: string }> };
       assert.deepEqual(catalog.items.map(row => row.templateId), ["personal-room-basic", "meeting-room-basic", "presentation-room-basic"]);

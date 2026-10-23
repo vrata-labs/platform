@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, link, mkdir, open, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createHash, createHmac } from "node:crypto";
 import { dirname, extname, join, relative, sep } from "node:path";
 
@@ -60,7 +60,14 @@ function formatAmzDate(date: Date): { amzDate: string; dateStamp: string } {
   return { amzDate: iso, dateStamp: iso.slice(0, 8) };
 }
 
-async function putS3Object(storage: Extract<SceneBundleUploadStorage, { type: "s3" }>, key: string, body: Buffer, contentType: string, errorPrefix = "scene_bundle_object_upload_failed"): Promise<void> {
+async function discardResponseBody(response: Response): Promise<void> {
+  // PUT/DELETE and unsuccessful GET do not consume their response bodies. Cancel them even when
+  // headers arrive early and the server never ends the body; this is transport cleanup, not a
+  // statement about whether a remote write has settled. Preserve the original result/status error.
+  if (response.body && !response.body.locked) await response.body.cancel().catch(() => undefined);
+}
+
+async function putS3Object(storage: Extract<SceneBundleUploadStorage, { type: "s3" }>, key: string, body: Buffer, contentType: string, errorPrefix = "scene_bundle_object_upload_failed", ifAbsent = false, signal?: AbortSignal): Promise<void> {
   const endpoint = storage.endpoint.endsWith("/") ? storage.endpoint : `${storage.endpoint}/`;
   const url = new URL(`${trimSlashes(storage.bucket)}/${key.split("/").map(encodeURIComponent).join("/")}`, endpoint);
   const payloadHash = sha256Hex(body);
@@ -71,6 +78,7 @@ async function putS3Object(storage: Extract<SceneBundleUploadStorage, { type: "s
     ["x-amz-content-sha256", payloadHash],
     ["x-amz-date", amzDate]
   ]);
+  if (ifAbsent) headers.set("if-none-match", "*");
   const signedHeaders = Array.from(headers.keys()).sort().join(";");
   const canonicalHeaders = Array.from(headers.entries()).sort(([left], [right]) => left.localeCompare(right)).map(([name, value]) => `${name}:${value.trim()}\n`).join("");
   const canonicalRequest = ["PUT", url.pathname, "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
@@ -86,27 +94,55 @@ async function putS3Object(storage: Extract<SceneBundleUploadStorage, { type: "s
       "authorization": authorization,
       "content-type": contentType,
       "x-amz-content-sha256": payloadHash,
-      "x-amz-date": amzDate
+      "x-amz-date": amzDate,
+      ...(ifAbsent ? { "if-none-match": "*" } : {})
     },
-    body: new Uint8Array(body)
+    body: new Uint8Array(body),
+    ...(signal ? { signal } : {})
   });
-  if (!response.ok) {
-    throw new Error(`${errorPrefix}:${response.status}`);
-  }
+  try {
+    if (!response.ok) throw new Error(`${errorPrefix}:${response.status}`);
+  } finally { await discardResponseBody(response); }
 }
 
-export async function writeDocumentObject(storage: DocumentUploadStorage, storageKey: string, body: Buffer, contentType: string): Promise<void> {
+/** The deterministic temp key belongs to the already-reserved immutable object prefix. Cleanup never
+ * enumerates a directory: after proven writer settlement it removes this key and the final key only.
+ */
+export function immutableUploadTempKey(key: string): string { return `${key}.upload`; }
+
+async function writeLocalImmutableObject(target: string, body: Buffer): Promise<void> {
+  const temporary = immutableUploadTempKey(target);
+  // wx keeps a still-running or crashed writer's temp file intact. The returned promise includes all
+  // local writes, close and cleanup, so a confirmed rejection cannot leave a live local writer behind.
+  const file = await open(temporary, "wx");
+  let closed = false;
+  try {
+    await file.writeFile(body);
+    await file.sync();
+    await file.close(); closed = true;
+    // Hard-link publication is atomic and cannot overwrite an existing immutable object.
+    await link(temporary, target);
+  } finally {
+    try { if (!closed) await file.close(); }
+    finally { await rm(temporary, { force: true }); }
+  }
+  const directory = await open(dirname(target), "r");
+  try { await directory.sync(); } finally { await directory.close(); }
+}
+
+export async function writeDocumentObject(storage: DocumentUploadStorage, storageKey: string, body: Buffer, contentType: string, options?: { ifAbsent?: boolean; signal?: AbortSignal }): Promise<void> {
   if (storage.type === "local") {
     const target = join(storage.root, storageKey);
     if (!target.startsWith(`${storage.root}${sep}`)) throw new Error("unsafe_document_storage_key");
     await mkdir(dirname(target), { recursive: true });
-    await writeFile(target, body);
+    if (options?.ifAbsent) await writeLocalImmutableObject(target, body);
+    else await writeFile(target, body);
     return;
   }
-  await putS3Object(storage, storageKey, body, contentType, "document_object_upload_failed");
+  await putS3Object(storage, storageKey, body, contentType, "document_object_upload_failed", options?.ifAbsent, options?.signal);
 }
 
-async function deleteS3Object(storage: Extract<DocumentUploadStorage, { type: "s3" }>, key: string): Promise<void> {
+async function deleteS3Object(storage: Extract<DocumentUploadStorage, { type: "s3" }>, key: string, signal?: AbortSignal): Promise<void> {
   const endpoint = storage.endpoint.endsWith("/") ? storage.endpoint : `${storage.endpoint}/`;
   const url = new URL(`${trimSlashes(storage.bucket)}/${key.split("/").map(encodeURIComponent).join("/")}`, endpoint);
   const payloadHash = sha256Hex("");
@@ -129,21 +165,23 @@ async function deleteS3Object(storage: Extract<DocumentUploadStorage, { type: "s
       "authorization": `AWS4-HMAC-SHA256 Credential=${storage.accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
       "x-amz-content-sha256": payloadHash,
       "x-amz-date": amzDate
-    }
+    },
+    ...(signal ? { signal } : {})
   });
-  if (!response.ok && response.status !== 404) {
-    throw new Error(`document_object_delete_failed:${response.status}`);
-  }
+  try {
+    if (!response.ok && response.status !== 404) throw new Error(`document_object_delete_failed:${response.status}`);
+  } finally { await discardResponseBody(response); }
 }
 
-export async function deleteDocumentObject(storage: DocumentUploadStorage, storageKey: string): Promise<void> {
+export async function deleteDocumentObject(storage: DocumentUploadStorage, storageKey: string, options?: { signal?: AbortSignal; immutableTemp?: boolean }): Promise<void> {
   if (storage.type === "local") {
     const target = join(storage.root, storageKey);
     if (!target.startsWith(`${storage.root}${sep}`)) throw new Error("unsafe_document_storage_key");
     await rm(target, { force: true });
+    if (options?.immutableTemp) await rm(immutableUploadTempKey(target), { force: true });
     return;
   }
-  await deleteS3Object(storage, storageKey);
+  await deleteS3Object(storage, storageKey, options?.signal);
 }
 
 export function resolveUploadedDocumentPublicUrl(storage: DocumentUploadStorage, storageKey: string): string {
@@ -160,10 +198,63 @@ export async function readDocumentObject(storage: DocumentUploadStorage, storage
     return readFile(target);
   }
   const response = await fetch(resolveUploadedDocumentPublicUrl(storage, storageKey));
-  if (!response.ok) {
-    throw new Error(`document_object_download_failed:${response.status}`);
+  try {
+    if (!response.ok) throw new Error(`document_object_download_failed:${response.status}`);
+    return Buffer.from(await response.arrayBuffer());
+  } finally { await discardResponseBody(response); }
+}
+
+/** Authenticated object read for private code artifacts; never fetch their public URL. */
+export async function readPrivateUploadedObject(storage: DocumentUploadStorage, key: string, maxBytes: number, signal?: AbortSignal): Promise<Buffer> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new Error("invalid_private_object_limit");
+  if (storage.type === "local") {
+    const target = join(storage.root, key);
+    if (!target.startsWith(`${storage.root}${sep}`)) throw new Error("unsafe_document_storage_key");
+    const file = await open(target, "r");
+    try {
+      const buffer = Buffer.alloc(maxBytes + 1);
+      let length = 0;
+      while (length < buffer.length) {
+        const { bytesRead } = await file.read(buffer, length, buffer.length - length, length);
+        if (!bytesRead) break;
+        length += bytesRead;
+      }
+      if (length > maxBytes) throw new Error("private_object_too_large");
+      return buffer.subarray(0, length);
+    } finally { await file.close(); }
   }
-  return Buffer.from(await response.arrayBuffer());
+  const endpoint = storage.endpoint.endsWith("/") ? storage.endpoint : `${storage.endpoint}/`;
+  const url = new URL(`${trimSlashes(storage.bucket)}/${key.split("/").map(encodeURIComponent).join("/")}`, endpoint);
+  const payloadHash = sha256Hex("");
+  const { amzDate, dateStamp } = formatAmzDate(new Date());
+  const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+  const canonicalHeaders = `host:${url.host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`;
+  const scope = `${dateStamp}/${storage.region}/s3/aws4_request`;
+  const canonicalRequest = ["GET", url.pathname, "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
+  const signingKey = hmac(hmac(hmac(hmac(`AWS4${storage.secretAccessKey}`, dateStamp), storage.region), "s3"), "aws4_request");
+  const signature = createHmac("sha256", signingKey).update(["AWS4-HMAC-SHA256", amzDate, scope, sha256Hex(canonicalRequest)].join("\n")).digest("hex");
+  const response = await fetch(url, { headers: {
+    authorization: `AWS4-HMAC-SHA256 Credential=${storage.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
+    "x-amz-content-sha256": payloadHash, "x-amz-date": amzDate
+  }, ...(signal ? { signal } : {}) });
+  if (!response.ok) {
+    await discardResponseBody(response);
+    throw new Error(`private_object_download_failed:${response.status}`);
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("private_object_empty_response");
+  const chunks: Buffer[] = [];
+  let length = 0;
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      length += chunk.value.byteLength;
+      if (length > maxBytes) throw new Error("private_object_too_large");
+      chunks.push(Buffer.from(chunk.value));
+    }
+    return Buffer.concat(chunks, length);
+  } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
 }
 
 export async function publishSceneBundleFiles(storage: SceneBundleUploadStorage, bundleRoot: string, storagePrefix: string): Promise<void> {

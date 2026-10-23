@@ -64,6 +64,12 @@ export interface ControlPlaneSession {
     roomId?: string;
   };
   permissions: string[];
+  minimumIdentityProtocol?: 1 | 2;
+}
+
+/** A UI hint, not authorization. Older APIs omit it and default to floor 1. */
+export function controlPlaneIdentityFloor(session?: ControlPlaneSession): 1 | 2 {
+  return session?.minimumIdentityProtocol === 2 ? 2 : 1;
 }
 
 export interface RoomRecord {
@@ -75,6 +81,8 @@ export interface RoomRecord {
   name: string;
   roomType?: "standard" | "personal";
   ownerParticipantId?: string | null;
+  /** Admin item-GET presentation of current authority; never sent back as a raw owner seed. */
+  currentOwnerParticipantId?: string | null;
   status?: "active" | "disabled";
   disabledAt?: string | null;
   disabledBy?: string | null;
@@ -315,7 +323,7 @@ export async function createRoom(apiBaseUrl: string, input: RoomCreateInput, aut
 
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ error: `failed_to_create_room:${response.status}` }));
-    throw new Error(payload.error ?? `failed_to_create_room:${response.status}`);
+    throw new Error(payload.reason === "identity_upgrade_required" ? payload.reason : payload.error ?? `failed_to_create_room:${response.status}`);
   }
 
   return (await response.json()) as RoomRecord;
@@ -374,6 +382,15 @@ export async function listRooms(apiBaseUrl: string, auth?: ControlPlaneAuth): Pr
   return payload.items;
 }
 
+export async function fetchRoomMetadata(apiBaseUrl: string, roomId: string, auth?: ControlPlaneAuth): Promise<RoomRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}`, apiBaseUrl), { headers: { ...authHeaders(auth) } });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ error: `failed_to_fetch_room:${response.status}` }));
+    throw new Error(payload.error ?? `failed_to_fetch_room:${response.status}`);
+  }
+  return (await response.json()) as RoomRecord;
+}
+
 export async function fetchRoomManifest(apiBaseUrl: string, roomId: string, auth?: ControlPlaneAuth): Promise<RoomManifestRecord> {
   const response = await fetch(new URL(`/api/rooms/${roomId}/manifest`, apiBaseUrl), {
     headers: { ...authHeaders(auth) }
@@ -397,7 +414,7 @@ export async function listRoomInvites(apiBaseUrl: string, roomId: string, auth?:
   return payload.items;
 }
 
-export async function createRoomInvite(apiBaseUrl: string, roomId: string, input: { expiresInSeconds?: number; waitingRoomEnabled?: boolean }, auth?: ControlPlaneAuth): Promise<RoomInviteRecord> {
+export async function createRoomInvite(apiBaseUrl: string, roomId: string, input: { expiresInSeconds?: number; waitingRoomEnabled?: boolean; role?: "member" }, auth?: ControlPlaneAuth): Promise<RoomInviteRecord> {
   const response = await fetch(new URL(`/api/rooms/${roomId}/invites`, apiBaseUrl), {
     method: "POST",
     headers: { "content-type": "application/json", ...authHeaders(auth) },

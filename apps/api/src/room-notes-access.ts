@@ -5,7 +5,9 @@ import type { createApiMetrics } from "./api-metrics.js";
 import { incrementCounter } from "./api-metrics.js";
 import { json } from "./http-responses.js";
 import { isRoomDisabled } from "./room-session-control.js";
-import type { RoomNoteRecord, RoomNoteScope, RoomRecord } from "./storage.js";
+import type { RoomNoteRecord, RoomNoteScope, RoomRecord, Storage } from "./storage.js";
+import type { RoomIdentityEffectStorage } from "./storage-contracts.js";
+import { releaseFencedResponse } from "./identity/response-release.js";
 
 export interface RoomNotesAccessContext {
   metrics: Pick<ReturnType<typeof createApiMetrics>["metrics"],
@@ -17,6 +19,9 @@ export interface RoomNotesAccessContext {
     | { ok: false; statusCode: 401; reason: string };
   getRequestId(request: IncomingMessage): string;
   logEvent(event: Record<string, unknown>): void;
+  runGuardedRoomEffect<T>(storage: Storage, actor: ControlPlaneActor, room: RoomRecord, permission: RoomPermission,
+    effect: (scoped: RoomIdentityEffectStorage) => Promise<T>): Promise<T>;
+  deniedEffectReason(error: unknown): string | null;
 }
 
 export function createRoomNotesAccess(context: RoomNotesAccessContext) {
@@ -116,7 +121,9 @@ export function createRoomNotesAccess(context: RoomNotesAccessContext) {
       return deny("permission_denied");
     }
 
-    writeRoomNotesAudit({ request, action: input.action, roomId: input.room.roomId, scope: input.scope, result: "allowed", actor });
+    if (actor.identityProtocolVersion !== 2 || !["notes.read", "notes.versions", "notes.export"].includes(input.action)) {
+      writeRoomNotesAudit({ request, action: input.action, roomId: input.room.roomId, scope: input.scope, result: "allowed", actor });
+    }
     return actor;
   }
 
@@ -144,8 +151,24 @@ export function createRoomNotesAccess(context: RoomNotesAccessContext) {
     return note.ownerParticipantId === actor.participantId;
   }
 
+  async function releaseRoomNotes(request: IncomingMessage, storage: Storage, actor: ControlPlaneActor, room: RoomRecord,
+    scope: RoomNoteScope, action: "notes.read" | "notes.versions" | "notes.export", send: () => void): Promise<void> {
+    await releaseFencedResponse({ send,
+      run: release => context.runGuardedRoomEffect(storage, actor, room, "notes.view", async scoped => { scoped.releaseResponse(release); }),
+      onReleased: () => {
+        if (actor.identityProtocolVersion === 2) writeRoomNotesAudit({ request, action, roomId: room.roomId, scope, result: "allowed", actor });
+      },
+      onDenied: error => {
+        const reason = context.deniedEffectReason(error);
+        if (actor.identityProtocolVersion === 2 && reason) {
+          writeRoomNotesAudit({ request, action, roomId: room.roomId, scope, result: "denied", reason, actor });
+        }
+      }
+    });
+  }
+
   return {
     emptyRoomNote, writeRoomNotesAudit, noteWritePermission, resolveRoomNotesActor,
-    resolveAuthorizedRoomNoteOwner, roomNoteVisibleToActor
+    resolveAuthorizedRoomNoteOwner, roomNoteVisibleToActor, releaseRoomNotes
   };
 }

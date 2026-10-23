@@ -35,6 +35,7 @@
     "rollback:compose": "node tools/backup-restore.mjs rollback",
     "smoke:compose": "node tools/backup-restore.mjs smoke",
     "backup:prune": "node tools/backup-restore.mjs prune",
+    "demo:public": "node tools/public-demo.mjs",
     "xr:telemetry": "node tools/xr-telemetry.mjs",
     "xr:telemetry:blueoffice": "XR_ROOM_ID=\"${XR_ROOM_ID:-0b537d34-7b92-4b51-854a-8c64cfb4c114}\" node tools/xr-telemetry.mjs"
   }

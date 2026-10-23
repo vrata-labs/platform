@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "releases": [
+    {
+      "package": "@vrata/room-plugin-sdk",
+      "version": "0.2.0",
+      "sha256": "22789546969b069aa48b690558609c85ddd17107ed7f25c0359452c466995d89",
+      "url": "/assets/plugin-sdk/0.2.0/22789546969b069aa48b690558609c85ddd17107ed7f25c0359452c466995d89/vrata-room-plugin-sdk-0.2.0.tgz"
+    },
+    {
+      "package": "@vrata/room-plugin-sdk",
+      "version": "0.1.0",
+      "sha256": "c301002fb1fdbd3eb1c4aad396adef4e0160d450051f1a3ee5e9ae84b66a7896",
+      "url": "/assets/plugin-sdk/0.1.0/c301002fb1fdbd3eb1c4aad396adef4e0160d450051f1a3ee5e9ae84b66a7896/vrata-room-plugin-sdk-0.1.0.tgz"
+    }
+  ]
+}

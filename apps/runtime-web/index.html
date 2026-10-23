@@ -7,12 +7,25 @@
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
+    <dialog id="meeting-replace-dialog" class="meeting-replace-dialog" aria-labelledby="meeting-replace-title" aria-describedby="meeting-replace-explanation">
+      <h2 id="meeting-replace-title">Replace surface content?</h2>
+      <p id="meeting-replace-explanation"></p>
+      <div class="controls">
+        <button id="meeting-replace-cancel" type="button" autofocus>Keep current content</button>
+        <button id="meeting-replace-confirm" type="button">Stop and replace</button>
+      </div>
+    </dialog>
+    <dialog id="session-upgrade-dialog" aria-labelledby="session-upgrade-title" aria-describedby="session-upgrade-message">
+      <h1 id="session-upgrade-title" tabindex="-1">Update required to rejoin this room</h1>
+      <p id="session-upgrade-message"></p>
+      <button id="session-upgrade-reload" type="button">Update and rejoin</button>
+    </dialog>
     <div id="app">
       <section id="guest-onboarding" class="guest-onboarding" hidden aria-labelledby="guest-onboarding-title">
         <div class="guest-onboarding-card">
           <div class="brand">Vrata</div>
           <h1 id="guest-onboarding-title">Join this room</h1>
-          <p class="guest-onboarding-copy">Set your display name, review device status, then enter. You can join without microphone access.</p>
+          <p class="guest-onboarding-copy">Set your display name, review device status, then enter. Enter without audio does not turn on your microphone. If Join muted is checked, press Unmute after Join Audio so others can hear you.</p>
           <label for="guest-name-input">Display name</label>
           <input id="guest-name-input" type="text" autocomplete="name" maxlength="40" placeholder="Your name" />
           <label class="surface-audio-toggle" for="guest-join-muted">
@@ -34,17 +47,32 @@
           <span class="brand">Vrata</span>
         </summary>
         <div class="hud-content">
+          <nav id="meeting-nav" class="meeting-nav" aria-label="Meeting tools">
+            <button id="meeting-nav-audio" type="button" aria-controls="meeting-audio">Audio</button>
+            <button id="meeting-nav-present" type="button" aria-controls="meeting-present">Present</button>
+            <button id="meeting-nav-board" type="button" aria-controls="meeting-board">Board</button>
+            <button id="meeting-nav-notes" type="button" aria-controls="meeting-notes">Notes</button>
+            <button id="meeting-nav-people" type="button" aria-controls="meeting-people">People</button>
+          </nav>
+          <p id="meeting-transition-status" class="meeting-tool-status" role="status" aria-live="polite" aria-busy="false"></p>
           <div class="room-meta">
-            <div id="room-name">Loading room...</div>
+            <h1 id="room-name">Loading room...</h1>
             <div id="status-line">Connecting...</div>
             <div id="branding-line"></div>
             <div id="room-state-line"></div>
             <div id="report-line" hidden></div>
             <a id="diagnostics-link" class="diagnostics-link" href="/diagnostics?roomId=demo-room" target="_blank" rel="noreferrer">Connectivity diagnostics</a>
             <div id="guest-access-line"></div>
-            <div id="presenter-line">Presenter: none</div>
             <div id="compatibility-status" class="audio-device-status">Checking compatibility...</div>
           </div>
+          <section id="room-plugin-statuses" class="attributions-panel" aria-labelledby="room-plugin-statuses-title" hidden>
+            <div id="room-plugin-statuses-title" class="attributions-title">Room behaviors</div>
+            <div id="room-plugin-status-list" role="status" aria-live="polite"></div>
+            <label id="room-plugin-seat-choice" class="room-plugin-seat-choice" hidden>
+              <input id="room-plugin-seat-choice-input" type="checkbox" checked />
+              Let room behaviors seat me automatically when I enter
+            </label>
+          </section>
           <div id="scene-attributions" class="attributions-panel" hidden>
             <div class="attributions-title">Scene credits</div>
             <ul id="scene-attributions-list"></ul>
@@ -54,9 +82,25 @@
             <select id="space-select" disabled>
               <option>Loading spaces...</option>
             </select>
-            <button id="open-personal-room" type="button">Open my room</button>
+            <button id="open-personal-room" type="button" disabled>Open my room</button>
             <div id="space-select-status" class="space-select-status">Loading spaces...</div>
           </div>
+          <details id="room-recovery-panel" class="room-recovery-panel">
+            <summary>Recover room access</summary>
+            <label for="room-recovery-credential">Administrator recovery code</label>
+            <input id="room-recovery-credential" type="password" autocomplete="off" spellcheck="false" />
+            <button id="room-recovery-submit" type="button">Restore access</button>
+            <p id="room-recovery-status" role="status"></p>
+          </details>
+          <section id="session-upgrade-drafts" hidden aria-labelledby="session-upgrade-drafts-title">
+              <h2 id="session-upgrade-drafts-title">Local note drafts</h2>
+              <p id="session-upgrade-draft-status" role="status"></p>
+              <div id="session-upgrade-draft-list"></div>
+              <button id="session-upgrade-discard-drafts" type="button">Discard local drafts</button>
+          </section>
+          <details id="meeting-notes" class="meeting-panel" open>
+            <summary><h2>Notes</h2></summary>
+            <p id="meeting-notes-status" class="meeting-tool-status"></p>
           <div id="notes-panel" class="notes-panel">
             <div class="notes-title">Notes</div>
             <label for="notes-scope-select">Scope</label>
@@ -84,10 +128,17 @@
             <div class="notes-preview-title">Preview</div>
             <div id="notes-preview" class="notes-preview" aria-live="polite"></div>
           </div>
+          </details>
+          <details id="meeting-present" class="meeting-panel" open>
+            <summary><h2>Present</h2></summary>
+            <p id="meeting-present-status" class="meeting-tool-status"></p>
+            <p id="meeting-presentation-target" class="meeting-target-status"></p>
+            <button id="meeting-use-presentation-surface" type="button" aria-describedby="meeting-presentation-target" hidden>Use presentation surface</button>
           <div id="documents-panel" class="documents-panel" hidden>
             <div class="documents-title">Documents</div>
             <label for="document-upload-input">Upload PDF, image, video, or text</label>
-            <input id="document-upload-input" type="file" accept="application/pdf,image/png,image/jpeg,image/webp,video/mp4,video/webm,text/plain,.pdf,.png,.jpg,.jpeg,.webp,.mp4,.webm,.txt" />
+            <input id="document-upload-input" type="file" aria-describedby="document-upload-policy" accept="application/pdf,image/png,image/jpeg,image/webp,video/mp4,video/webm,text/plain,.pdf,.png,.jpg,.jpeg,.webp,.mp4,.webm,.txt" />
+            <p id="document-upload-policy" class="document-upload-policy">Checking server upload limits…</p>
             <button id="document-upload-button" type="button">Upload document</button>
             <label for="document-select">Room library</label>
             <select id="document-select" disabled>
@@ -97,7 +148,9 @@
               <button id="document-download-button" type="button" disabled>Download selected</button>
               <button id="document-surface-button" type="button" disabled>Select for surface</button>
               <button id="document-delete-button" type="button" disabled>Delete selected</button>
+              <button id="document-refresh-button" type="button">Refresh library</button>
             </div>
+            <progress id="document-operation-progress" aria-label="Document operation" hidden></progress>
             <div id="document-status" class="audio-device-status" role="status" aria-live="polite">Documents loading...</div>
             <div id="presentation-controls" class="presentation-controls" hidden>
               <div class="presentation-controls-title">PDF presentation</div>
@@ -124,74 +177,32 @@
               <div id="document-media-status" class="audio-device-status" role="status" aria-live="polite">Media idle</div>
             </div>
           </div>
-          <div class="controls">
+          <div class="controls meeting-share-controls">
             <label class="surface-picker" for="media-surface-select">Surface
               <select id="media-surface-select" disabled>
                 <option value="debug-main">Main screen</option>
               </select>
             </label>
-            <button id="join-audio">Join Audio</button>
-            <button id="toggle-mute" disabled>Mute</button>
-            <button id="start-whiteboard" disabled>Start Board</button>
-            <button id="draw-whiteboard" disabled aria-pressed="false">Draw: Off</button>
-            <button id="clear-whiteboard" disabled>Clear Board</button>
-            <button id="stop-whiteboard" disabled>Stop Board</button>
-            <button id="start-markdown-board" disabled>Start Sticky Board</button>
             <button id="start-share" disabled>Start Share</button>
             <button id="stop-share" disabled>Stop Share</button>
           </div>
-          <div id="markdown-board-control" class="markdown-board-panel" hidden>
-            <label for="markdown-board-note-text">Sticky note Markdown</label>
-            <textarea id="markdown-board-note-text" rows="3" maxlength="2000" placeholder="# Decision\n- next step"></textarea>
-            <div class="controls compact-controls">
-              <button id="add-sticky-note" type="button" disabled>Add Note</button>
-              <button id="update-sticky-note" type="button" disabled>Update Last</button>
-              <button id="move-sticky-note" type="button" disabled>Move Last</button>
-              <button id="delete-sticky-note" type="button" disabled>Delete Last</button>
-              <button id="stop-markdown-board" type="button" disabled>Stop Sticky Board</button>
-            </div>
-            <div id="markdown-board-status" class="audio-device-status" role="status" aria-live="polite">Sticky board idle</div>
+          <div id="surface-audio-control" class="surface-audio-control" hidden>
+            <label class="surface-audio-toggle" for="surface-audio-enabled">
+              <input id="surface-audio-enabled" type="checkbox" />
+              Share media surface audio
+            </label>
+            <div id="surface-audio-status" class="audio-device-status">Surface audio follows admin policy</div>
           </div>
-          <div id="host-controls" class="host-controls-panel" hidden>
-            <div class="host-controls-title">Host Controls</div>
-            <div id="host-controls-status" class="audio-device-status">Host controls idle</div>
-            <div class="controls compact-controls">
-              <button id="lock-room" disabled>Lock Room</button>
-              <button id="unlock-room" disabled>Unlock Room</button>
-              <button id="end-session" disabled>End Session</button>
-            </div>
-            <label for="host-participant-select">Participant</label>
-            <select id="host-participant-select" disabled>
-              <option value="">No participants</option>
-            </select>
-            <div class="controls compact-controls">
-              <button id="remove-participant" disabled>Remove</button>
-              <button id="transfer-host" disabled>Transfer Host</button>
-              <button id="grant-presenter" disabled>Grant Presenter</button>
-              <button id="revoke-presenter" disabled>Revoke Presenter</button>
-            </div>
-          </div>
-          <div id="remote-browser-control" class="remote-browser-panel" hidden>
-            <label for="remote-browser-url">Remote Browser URL <span id="remote-browser-experimental-badge" class="experimental-badge">Experimental</span></label>
-            <div class="remote-browser-row">
-              <input id="remote-browser-url" type="url" value="/remote-browser-demo.html" spellcheck="false" />
-              <button id="open-remote-browser" disabled>Open Browser</button>
-            </div>
-            <div class="controls compact-controls">
-              <button id="take-remote-browser-control" disabled>Take Control</button>
-              <button id="release-remote-browser-control" disabled>Release Control</button>
-              <button id="stop-remote-browser" disabled>Stop Browser</button>
-            </div>
-            <div id="remote-browser-status" class="audio-device-status">Remote browser idle</div>
+          </details>
+          <details id="meeting-audio" class="meeting-panel" open>
+            <summary><h2>Audio</h2></summary>
+            <p id="meeting-audio-status" class="meeting-tool-status"></p>
+          <div id="primary-controls" class="controls">
+            <button id="join-audio">Join Audio</button>
+            <button id="toggle-mute" disabled>Mute</button>
+            <button id="stand-up" type="button" hidden>Stand up</button>
           </div>
           <div class="audio-panel">
-            <div id="surface-audio-control" class="surface-audio-control" hidden>
-              <label class="surface-audio-toggle" for="surface-audio-enabled">
-                <input id="surface-audio-enabled" type="checkbox" />
-                Share media surface audio
-              </label>
-              <div id="surface-audio-status" class="audio-device-status">Surface audio follows admin policy</div>
-            </div>
             <label for="mic-select">Microphone</label>
             <select id="mic-select">
               <option value="default">System default microphone</option>
@@ -213,7 +224,84 @@
               <div class="audio-meter"><div id="speaker-level-fill" class="audio-meter-fill"></div></div>
             </div>
             <div id="audio-device-status" class="audio-device-status">Audio devices idle</div>
+          </div>
+          </details>
+          <details id="meeting-board" class="meeting-panel" open>
+            <summary><h2>Board</h2></summary>
+            <p id="meeting-board-status" class="meeting-tool-status"></p>
+            <p id="meeting-board-target" class="meeting-target-status"></p>
+            <button id="meeting-use-board-surface" type="button" aria-describedby="meeting-board-target" hidden>Use board surface</button>
+          <div class="controls">
+            <button id="start-whiteboard" disabled>Start Board</button>
+            <button id="draw-whiteboard" disabled aria-pressed="false">Draw: Off</button>
+            <button id="clear-whiteboard" disabled>Clear Board</button>
+            <button id="stop-whiteboard" disabled>Stop Board</button>
+            <button id="start-markdown-board" disabled>Start Sticky Board</button>
+          </div>
+          <div id="markdown-board-control" class="markdown-board-panel" hidden>
+            <label for="markdown-board-note-text">Sticky note Markdown</label>
+            <textarea id="markdown-board-note-text" rows="3" maxlength="2000" placeholder="# Decision\n- next step"></textarea>
+            <div class="controls compact-controls">
+              <button id="add-sticky-note" type="button" disabled>Add Note</button>
+              <button id="update-sticky-note" type="button" disabled>Update Last</button>
+              <button id="move-sticky-note" type="button" disabled>Move Last</button>
+              <button id="delete-sticky-note" type="button" disabled>Delete Last</button>
+              <button id="stop-markdown-board" type="button" disabled>Stop Sticky Board</button>
+            </div>
+            <div id="markdown-board-status" class="audio-device-status" role="status" aria-live="polite">Sticky board idle</div>
+          </div>
+          </details>
+          <details id="meeting-people" class="meeting-panel" open>
+            <summary><h2>People</h2></summary>
+            <p id="meeting-people-status" class="meeting-tool-status"></p>
+            <p id="meeting-people-count" class="meeting-target-status">Joining room…</p>
+            <ul id="meeting-people-list" class="meeting-people-list" aria-label="Participants"></ul>
+            <div id="presenter-line">Presenter: none</div>
             <div id="remote-mic-status" class="audio-device-status">Remote microphones idle</div>
+          <div id="host-controls" class="host-controls-panel" hidden>
+            <div class="host-controls-title">Host Controls</div>
+            <div id="host-controls-status" class="audio-device-status">Host controls idle</div>
+            <div class="controls compact-controls">
+              <button id="lock-room" disabled>Lock Room</button>
+              <button id="unlock-room" disabled>Unlock Room</button>
+              <button id="end-session" disabled>End Session</button>
+            </div>
+            <label for="host-participant-select">Participant</label>
+            <select id="host-participant-select" disabled>
+              <option value="">No participants</option>
+            </select>
+            <div class="controls compact-controls">
+              <button id="remove-participant" disabled>Remove</button>
+              <button id="transfer-host" disabled>Transfer Host</button>
+              <button id="transfer-owner" hidden disabled>Transfer Ownership</button>
+              <button id="grant-presenter" disabled title="Allow the selected participant to show documents and share their screen">Give presenting access</button>
+              <button id="revoke-presenter" disabled title="Stop screen sharing and take back control; the shared PDF can stay visible">Take back presenting access</button>
+            </div>
+          </div>
+          </details>
+          <details id="meeting-advanced" class="meeting-panel" open>
+            <summary><h2>More tools and details</h2></summary>
+          <section id="room-plugin-author" class="host-controls-panel room-plugin-author" aria-labelledby="room-plugin-author-title" hidden>
+            <div id="room-plugin-author-title" class="host-controls-title">Room behaviors</div>
+            <p class="audio-device-status">Packages run in an isolated sandbox without network or page access. Enable only a version whose permissions you accept for this room.</p>
+            <label for="room-plugin-upload-input">Plugin package (.vrata-plugin.json, up to 1 MiB)</label>
+            <input id="room-plugin-upload-input" type="file" accept=".json,application/json,application/octet-stream" />
+            <button id="room-plugin-upload-button" type="button" disabled>Upload package</button>
+            <p id="room-plugin-author-message" class="meeting-tool-status" role="status" aria-live="polite"></p>
+            <div id="room-plugin-author-list"></div>
+          </section>
+          <div id="remote-browser-control" class="remote-browser-panel" hidden>
+            <label for="remote-browser-url">Remote Browser URL <span id="remote-browser-experimental-badge" class="experimental-badge">Experimental</span></label>
+            <div class="remote-browser-row">
+              <input id="remote-browser-url" type="url" value="/remote-browser-demo.html" spellcheck="false" />
+              <button id="open-remote-browser" disabled>Open Browser</button>
+            </div>
+            <div class="controls compact-controls">
+              <button id="take-remote-browser-control" disabled>Take Control</button>
+              <button id="release-remote-browser-control" disabled>Release Control</button>
+              <button id="stop-remote-browser" disabled>Stop Browser</button>
+            </div>
+            <div id="remote-browser-status" class="audio-device-status">Remote browser idle</div>
           </div>
           <div id="avatar-sandbox-panel" class="avatar-sandbox" hidden>
             <label for="avatar-preset-select">Avatar Sandbox</label>
@@ -234,6 +322,9 @@
             <div>`?debug=1` shows diagnostics, `?bot=orbit` emulates second client</div>
             <div>`?avatarsandbox=1` opens the technical avatar sandbox</div>
           </div>
+          </details>
+          <div id="meeting-action-descriptions" class="visually-hidden"></div>
+          <div id="meeting-announcement" class="visually-hidden" role="status" aria-live="polite"></div>
         </div>
       </details>
       <div id="scene"></div>

@@ -27,6 +27,7 @@ function validProductionEnv(overrides = {}) {
     CONTROL_PLANE_ADMIN_TOKEN: "admin_token_0123456789abcdef0123456789abcdef",
     STATE_TOKEN_SECRET: "state_token_0123456789abcdef0123456789abcdef",
     VRATA_INTERNAL_SERVICE_TOKEN: "internal_token_0123456789abcdef0123456789abcdef",
+    VRATA_IDENTITY_PROXY_TOKEN: "identity_proxy_0123456789abcdef0123456789abcdef",
     POSTGRES_DB: "vrata",
     POSTGRES_USER: "vrata",
     POSTGRES_PASSWORD: "postgres_password_0123456789abcdef",
@@ -52,6 +53,15 @@ function issueCodes(result) {
 test("production config validator accepts a complete production env", () => {
   const result = validateProductionConfig(validProductionEnv());
   assert.deepEqual(result, { ok: true, issues: [] });
+});
+
+test("production requires an independent non-placeholder identity proxy proof", () => {
+  const missing = validateProductionConfig(validProductionEnv({ VRATA_IDENTITY_PROXY_TOKEN: "" }));
+  assert.equal(missing.ok, false);
+  assert(issueCodes(missing).includes("missing_required_env"));
+  const placeholder = validateProductionConfig(validProductionEnv({ VRATA_IDENTITY_PROXY_TOKEN: "REPLACE_WITH_32_PLUS_RANDOM_CHARS_PROXY_TOKEN" }));
+  assert.equal(placeholder.ok, false);
+  assert.equal(formatProductionConfigIssues(placeholder.issues).join("\n").includes("REPLACE_WITH_"), false);
 });
 
 test("optional reference mirror requires a safe HTTPS root without leaking values", () => {

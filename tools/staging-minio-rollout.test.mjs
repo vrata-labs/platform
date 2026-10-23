@@ -143,3 +143,26 @@ test("workflow snapshots compatibility helper before old checkout and uses it fo
   assert.match(workflow, /pnpm test:e2e:staging/);
   assert.match(workflow, /PLAYWRIGHT_REPORT_NAME=staging-rutube-blocking pnpm test:e2e:rutube/);
 });
+
+test("verification fails fast and leaves job headroom for every declared step including rollback", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
+  const deploy = workflow.split("  deploy:\n")[1].split("  rutube-canary:\n")[0];
+  const [job, ...steps] = [...deploy.matchAll(/timeout-minutes: (\d+)/g)].map(match => Number(match[1]));
+  assert.ok(job >= steps.reduce((sum, value) => sum + value, 0) + 15, "job must retain explicit setup/cleanup headroom beyond step budgets");
+  const gate = deploy.split("- name: Verification gate")[1].split("- name: Publish accepted release")[0];
+  assert.match(gate, /pnpm test:e2e:staging -- --max-failures=1/);
+  assert.match(gate, /PLAYWRIGHT_REPORT_NAME=staging-rutube-blocking pnpm test:e2e:rutube/);
+  assert.match(deploy, /if: steps\.gate\.outcome == 'success'/);
+});
+
+test("expanded staging catalog retains budget for final capture cases and mandatory Rutube", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
+  const deploy = workflow.split("  deploy:\n")[1].split("  rutube-canary:\n")[0];
+  const gate = deploy.split("- name: Verification gate")[1].split("- name: Publish accepted release")[0];
+  const gateMinutes = Number(gate.match(/timeout-minutes: (\d+)/)[1]);
+  // The 79-case run reached 77 passes at the old 50-minute outer deadline.
+  // Preserve the remaining two 3-minute cases, the 7-minute Rutube test and
+  // 5 minutes for runner startup/reporting without relaxing their own limits.
+  const minimumGateMinutes = 50 + 2 * 3 + 7 + 5;
+  assert.ok(gateMinutes >= minimumGateMinutes, "gate must fit the measured catalog plus final capture cases and Rutube");
+});

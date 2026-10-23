@@ -67,7 +67,7 @@ export class MediaSurfaceCommandClient {
     this.pending.clear();
   }
 
-  sendAndWait(commandId: string, send: (client: RoomStateClient) => void): Promise<SurfaceCommandResult> {
+  async sendAndWait(commandId: string, send: (client: RoomStateClient) => void): Promise<SurfaceCommandResult> {
     const client = this.requireClient();
     return new Promise((resolve, reject) => {
       const timeoutId = window.setTimeout(() => {
@@ -170,13 +170,14 @@ export class MediaSurfaceCommandClient {
     });
   }
 
-  stopObject(objectId: string, surfaceId: string, kind = "stop"): Promise<SurfaceCommandResult> {
+  stopObject(objectId: string, surfaceId: string, kind = "stop", expectedRevision?: number): Promise<SurfaceCommandResult> {
     const commandId = this.createCommandId(kind);
     return this.sendAndWait(commandId, (client) => {
       sendSurfaceStopObjectCommand(client, {
         commandId,
         surfaceId,
-        objectId
+        objectId,
+        ...(expectedRevision !== undefined ? { expectedRevision } : {})
       });
     });
   }

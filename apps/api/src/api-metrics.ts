@@ -15,7 +15,7 @@ function formatMetricLine(name: string, value: number, labels?: Record<string, s
 }
 
 export function createApiMetrics(
-  presenceByRoom: ReadonlyMap<string, unknown>,
+  presenceByRoom: Pick<ReadonlyMap<string, unknown>, "size">,
   cleanupAllPresence: () => void,
   activeParticipantCount: () => number
 ) {
@@ -66,7 +66,13 @@ export function createApiMetrics(
     screenShareStartedTotal: new Map<string, number>(),
     screenShareFailuresTotal: new Map<string, number>(),
     screenSharePermissionDeniedTotal: 0,
-    screenShareActiveSessions: new Set<string>()
+    screenShareActiveSessions: new Set<string>(),
+    virtualStateReleaseCompletionFailuresTotal: 0,
+    // Appended last: report fixtures index counters by declaration order.
+    legacyStateReleaseCompletionFailuresTotal: 0,
+    frameCredentialReleaseCompletionFailuresTotal: 0,
+    mediaCredentialReleaseCompletionFailuresTotal: 0,
+    mediaScreenReconciliationTotal: new Map<string, number>()
   };
 
   async function apiMetricsText(storage: Pick<Storage, "listRooms">): Promise<string> {
@@ -79,6 +85,22 @@ export function createApiMetrics(
       "# HELP vrata_api_request_failures_total Total unhandled API request failures.",
       "# TYPE vrata_api_request_failures_total counter",
       formatMetricLine("vrata_api_request_failures_total", metrics.requestFailuresTotal),
+      "# HELP vrata_api_virtual_state_release_completion_failures_total Virtual state-token replies already released whose read-only fence then failed to complete.",
+      "# TYPE vrata_api_virtual_state_release_completion_failures_total counter",
+      formatMetricLine("vrata_api_virtual_state_release_completion_failures_total", metrics.virtualStateReleaseCompletionFailuresTotal),
+      "# HELP vrata_api_legacy_state_release_completion_failures_total Persisted-room legacy state-token replies already released whose read-only fence then failed to complete.",
+      "# TYPE vrata_api_legacy_state_release_completion_failures_total counter",
+      formatMetricLine("vrata_api_legacy_state_release_completion_failures_total", metrics.legacyStateReleaseCompletionFailuresTotal),
+      "# HELP vrata_api_frame_credential_release_completion_failures_total Remote-browser frame credential replies already released whose read-only fence then failed to complete.",
+      "# TYPE vrata_api_frame_credential_release_completion_failures_total counter",
+      formatMetricLine("vrata_api_frame_credential_release_completion_failures_total", metrics.frameCredentialReleaseCompletionFailuresTotal),
+      "# HELP vrata_api_media_credential_release_completion_failures_total User media credential replies already released whose read-only fence then failed to complete.",
+      "# TYPE vrata_api_media_credential_release_completion_failures_total counter",
+      formatMetricLine("vrata_api_media_credential_release_completion_failures_total", metrics.mediaCredentialReleaseCompletionFailuresTotal),
+      "# HELP vrata_api_media_screen_reconciliation_total Native user-media reconciliation outcomes; observations are not token revocation.",
+      "# TYPE vrata_api_media_screen_reconciliation_total counter",
+      ...["observed", "pending", "unavailable", "lowered", "evicted"].map(outcome =>
+        formatMetricLine("vrata_api_media_screen_reconciliation_total", metrics.mediaScreenReconciliationTotal.get(outcome) ?? 0, { outcome })),
       "# HELP vrata_rooms_total Rooms known to the API storage backend.",
       "# TYPE vrata_rooms_total gauge",
       formatMetricLine("vrata_rooms_total", rooms.length),

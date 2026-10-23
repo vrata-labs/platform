@@ -79,12 +79,13 @@ for (const failure of ["missing-file", "permission"] as const) {
   });
 }
 
-test("document diagnostics and error-code truncation retain the existing values", (t) => {
+test("document diagnostics retain safe fields and discard unknown raw error text", (t) => {
   const h = createDocumentLibraryHarness(t);
   h.context.roomDocuments = [{ ...makeDocument("pdf"), linkedSurfaceId: "surface" }];
-  assert.equal(h.runtime.documentErrorCode(new Error("a:b:c:d")), "a:b:c");
+  assert.equal(h.runtime.documentErrorCode(new Error("a:b:c:d")), "document_error");
   assert.equal(h.runtime.documentErrorCode(""), "document_error");
-  assert.equal(h.runtime.documentErrorCode(null), "null");
+  assert.equal(h.runtime.documentErrorCode(null), "document_error");
+  assert.equal(h.runtime.documentErrorCode(new Error("failed_to_select_document_surface:400:private-storage-key")), "failed_to_select_document_surface");
   h.runtime.setDocumentStatus("message", "code");
   assert.deepEqual(h.context.debugState.documents, { enabled: true, count: 1, selectedDocumentId: "selected",
     selectedFilename: "selected.pdf", selectedSurfaceId: "surface", lastStatus: "message", errorCode: "code" });

@@ -115,3 +115,8 @@ test("PDF navigation boundaries, display labels, idle reset and status update ti
   assert.equal(h.context.presentationThumbnailsEl.elements().length, 0);
   h.state.pdf = object; h.view.renderPresentationControls(); assert.equal(h.calls("thumbnail").length, 8);
 });
+test("document input IDs use the identity adopted after view construction", (t) => {
+  const h = createDocumentSurfaceViewHarness(t); h.context.participantId = "server-issued";
+  assert.match(h.view.presentationInputEventId("next"), /^server-issued:pdf-presentation:next:/);
+  assert.match(h.view.documentMediaInputEventId("play"), /^server-issued:document-media:play:/);
+});

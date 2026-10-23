@@ -14,15 +14,23 @@ const milliseconds = (seconds) => Math.round(seconds * 1000);
 export function sceneAssetIdentity(rawUrl) {
   try {
     const url = new URL(rawUrl);
-    if (!/^https?:$/.test(url.protocol) || !/^\/assets\/scenes\//.test(url.pathname)) return null;
-    const kind = /\/scene\.json$/i.test(url.pathname) ? "manifest"
-      : /\.glb$/i.test(url.pathname) ? "glb" : null;
+    if (!/^https?:$/.test(url.protocol)) return null;
+    // Pinned reference bundles use the same asset paths below jsDelivr's repository prefix.
+    const assetPath = url.hostname === "cdn.jsdelivr.net"
+      ? url.pathname.replace(/^\/gh\/vrata-labs\/(?:personal-workspace-v1|warm-modern-meeting-room-candidate-01|presentation-room-v1)@[a-f0-9]{40}(?=\/assets\/scenes\/)/, "")
+      : url.pathname;
+    if (!/^\/assets\/scenes\//.test(assetPath)) return null;
+    const kind = /\/scene\.json$/i.test(assetPath) ? "manifest"
+      : /\.glb$/i.test(assetPath) ? "glb" : null;
     if (!kind) return null;
-    const sceneId = url.pathname.split("/")[3];
+    const sceneId = assetPath.split("/")[3];
     return {
       assetKey: createHash("sha256").update(url.origin + url.pathname).digest("hex").slice(0, 16),
       scene: sceneId === "sense-hall2-v1" ? "Hall"
-        : sceneId === "sense-blueoffice-glb-v4" ? "BlueOffice" : "other",
+        : sceneId === "sense-blueoffice-glb-v4" ? "BlueOffice"
+        : sceneId === "personal-workspace-v1" ? "personal"
+        : sceneId === "warm-modern-meeting-room-candidate-01" ? "meeting"
+        : sceneId === "presentation-room-v1" ? "presentation" : "other",
       kind
     };
   } catch { return null; }

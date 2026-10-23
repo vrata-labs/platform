@@ -44,6 +44,8 @@ test("PostgresStorage upgrades legacy schema and preserves pinned template versi
 
   try {
     await adminPool.query(`create schema "${schema}"`);
+    // This legacy shape predates session_control. Identity triggers may reference
+    // it only after the ordinary column migration has completed.
     await pools[0].query(`
       create table tenants (
         tenant_id text primary key,
@@ -71,7 +73,6 @@ test("PostgresStorage upgrades legacy schema and preserves pinned template versi
         theme jsonb not null default '{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb,
         guest_allowed boolean not null default true,
         avatar_config jsonb not null default '{"avatarsEnabled":true,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":true}'::jsonb,
-        session_control jsonb not null default '{}'::jsonb,
         personal_state jsonb not null default '{}'::jsonb
       );
       insert into tenants (tenant_id, name) values ('legacy-tenant', 'Legacy Tenant');

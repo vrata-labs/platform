@@ -11,4 +11,9 @@ export interface ControlPlaneActor {
   participantId?: string;
   sessionId?: string;
   permissions?: RoomPermission[];
+  identityProtocolVersion?: 2;
+  identityId?: string;
+  authEpoch?: number;
+  isOwner?: boolean;
+  expiresAtSeconds?: number;
 }

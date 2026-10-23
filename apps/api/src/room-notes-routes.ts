@@ -12,7 +12,7 @@ export function createRoomNotesRoutes(context: RoomNotesAccessContext) {
   const { metrics } = context;
   const {
     emptyRoomNote, writeRoomNotesAudit, noteWritePermission, resolveRoomNotesActor,
-    resolveAuthorizedRoomNoteOwner, roomNoteVisibleToActor
+    resolveAuthorizedRoomNoteOwner, roomNoteVisibleToActor, releaseRoomNotes
   } = createRoomNotesAccess(context);
 
   // An unmatched request falls through synchronously; only a matched route starts work.
@@ -43,13 +43,7 @@ export function createRoomNotesRoutes(context: RoomNotesAccessContext) {
         })));
         const exportedAt = new Date().toISOString();
         const payload = { schemaVersion: 1, exportedAt, roomId, notes: items };
-        incrementCounter(metrics.notesExportsTotal, `${format}:saved`);
-        writeRoomNotesAudit({ request, action: "notes.export", roomId, scope: "shared", result: "allowed", actor });
-        if (format === "markdown") {
-          return attachment(response, 200, formatRoomNotesMarkdown(roomId, items), noteExportFilename(roomId, "room", "md"), "text/markdown; charset=utf-8");
-        }
-        if (format === "zip") {
-          const zip = createStoredZip([
+        const body = format === "markdown" ? formatRoomNotesMarkdown(roomId, items) : format === "zip" ? createStoredZip([
             { name: "room-notes.json", content: JSON.stringify(payload, null, 2) },
             { name: "room-notes.md", content: formatRoomNotesMarkdown(roomId, items) },
             { name: "board.json", content: JSON.stringify({ status: "not_included", reason: "board_state_is_realtime_only", followUp: "VRATA-FEAT-023-board-history" }, null, 2) },
@@ -57,10 +51,12 @@ export function createRoomNotesRoutes(context: RoomNotesAccessContext) {
               name: `notes/${note.scope}${note.ownerParticipantId ? `-${note.ownerParticipantId}` : ""}.md`,
               content: formatNoteMarkdown(note, versions)
             }))
-          ]);
-          return attachment(response, 200, zip, noteExportFilename(roomId, "room", "zip"), "application/zip");
-        }
-        return attachment(response, 200, JSON.stringify(payload, null, 2), noteExportFilename(roomId, "room", "json"), "application/json; charset=utf-8");
+          ]) : JSON.stringify(payload, null, 2);
+        await releaseRoomNotes(request, storage, actor, room, "shared", "notes.export", () => {
+          attachment(response, 200, body, noteExportFilename(roomId, "room", format === "markdown" ? "md" : format),
+            format === "markdown" ? "text/markdown; charset=utf-8" : format === "zip" ? "application/zip" : "application/json; charset=utf-8");
+        });
+        incrementCounter(metrics.notesExportsTotal, `${format}:saved`);
       })();
     }
 
@@ -78,7 +74,7 @@ export function createRoomNotesRoutes(context: RoomNotesAccessContext) {
         if (ownerParticipantId === undefined) return;
         const limit = Number.parseInt(url.searchParams.get("limit") ?? "20", 10);
         const versions = await storage.listRoomNoteVersions(roomId, scope, ownerParticipantId, Number.isFinite(limit) ? limit : 20);
-        json(response, 200, { items: versions });
+        await releaseRoomNotes(request, storage, actor, room, scope, "notes.versions", () => { json(response, 200, { items: versions }); });
         return;
       })();
     }
@@ -107,7 +103,9 @@ export function createRoomNotesRoutes(context: RoomNotesAccessContext) {
           incrementCounter(metrics.notesRestoresTotal, `${scope}:failed`);
           return json(response, 400, { error: "invalid_note_version" });
         }
-        const restored = await storage.restoreRoomNoteVersion(roomId, scope, ownerParticipantId, payload.versionId.trim(), actor.actorId);
+        const versionId = payload.versionId.trim();
+        const restored = await context.runGuardedRoomEffect(storage, actor, room, permission,
+          scoped => scoped.restoreRoomNoteVersion(roomId, scope, ownerParticipantId, versionId, actor.actorId));
         if (!restored) {
           incrementCounter(metrics.notesRestoresTotal, `${scope}:failed`);
           return json(response, 404, { error: "note_version_not_found" });
@@ -141,11 +139,12 @@ export function createRoomNotesRoutes(context: RoomNotesAccessContext) {
         }
         const note = await storage.getRoomNote(roomId, scope, ownerParticipantId) ?? emptyRoomNote(roomId, scope, ownerParticipantId);
         const versions = await storage.listRoomNoteVersions(roomId, scope, ownerParticipantId, 100);
+        const body = format === "json" ? JSON.stringify(noteExportJson(note, versions), null, 2) : formatNoteMarkdown(note, versions);
+        await releaseRoomNotes(request, storage, actor, room, scope, "notes.export", () => {
+          attachment(response, 200, body, noteExportFilename(roomId, scope, format === "json" ? "json" : "md"),
+            format === "json" ? "application/json; charset=utf-8" : "text/markdown; charset=utf-8");
+        });
         incrementCounter(metrics.notesExportsTotal, `${format}:saved`);
-        if (format === "json") {
-          return attachment(response, 200, JSON.stringify(noteExportJson(note, versions), null, 2), noteExportFilename(roomId, scope, "json"), "application/json; charset=utf-8");
-        }
-        return attachment(response, 200, formatNoteMarkdown(note, versions), noteExportFilename(roomId, scope, "md"), "text/markdown; charset=utf-8");
       })();
     }
 
@@ -166,12 +165,14 @@ export function createRoomNotesRoutes(context: RoomNotesAccessContext) {
 
         if (method === "GET") {
           const note = await storage.getRoomNote(roomId, scope, ownerParticipantId);
-          json(response, 200, { note: note && !note.deletedAt ? note : emptyRoomNote(roomId, scope, ownerParticipantId) });
+          const result = note && !note.deletedAt ? note : emptyRoomNote(roomId, scope, ownerParticipantId);
+          await releaseRoomNotes(request, storage, actor, room, scope, "notes.read", () => { json(response, 200, { note: result }); });
           return;
         }
 
         if (method === "DELETE") {
-          const deleted = await storage.deleteRoomNote(roomId, scope, ownerParticipantId, actor.actorId);
+          const deleted = await context.runGuardedRoomEffect(storage, actor, room, permission,
+            scoped => scoped.deleteRoomNote(roomId, scope, ownerParticipantId, actor.actorId));
           if (!deleted) return json(response, 404, { error: "note_not_found" });
           metrics.notesVersionsCreatedTotal += 1;
           json(response, 200, { note: deleted });
@@ -190,14 +191,15 @@ export function createRoomNotesRoutes(context: RoomNotesAccessContext) {
           return json(response, 413, { error: "note_too_large" });
         }
 
+        const content = payload.content;
         const existing = await storage.getRoomNote(roomId, scope, ownerParticipantId);
-        const note = await storage.upsertRoomNote({
+        const note = await context.runGuardedRoomEffect(storage, actor, room, permission, scoped => scoped.upsertRoomNote({
           roomId,
           scope,
           ownerParticipantId,
-          content: payload.content,
+          content,
           updatedBy: actor.actorId
-        });
+        }));
         if (!existing) incrementCounter(metrics.notesCreatedTotal, scope);
         metrics.notesVersionsCreatedTotal += 1;
         incrementCounter(metrics.notesSavedTotal, `${scope}:saved`);

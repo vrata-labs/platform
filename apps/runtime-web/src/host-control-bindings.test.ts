@@ -17,6 +17,8 @@ function createBindingsHarness(t: TestContext) {
   const context: HostControlBindingsContext = {
     ...h.elements, apiBaseUrl: "https://example.invalid", roomId: "room", debugState: h.state.debugState,
     get roomStateAccessToken() { return h.state.roomStateAccessToken; },
+    canManageHostControls: h.runtime.canManageHostControls, authorityRevision: h.runtime.authorityRevision, participantLabel: h.runtime.participantLabel,
+    transferRoomOwner: service("owner"),
     renderHostControls(this: unknown) { assert.equal(this, undefined); renders += 1; },
     async runHostControlAction(this: unknown, action, status) {
       assert.equal(this, undefined); queued.push({ action, status });
@@ -42,6 +44,19 @@ test("the eight host event handlers register once in their original order", (t) 
   assert.deepEqual(h.queued, []); assert.deepEqual(h.calls, []); assert.equal(h.renders, 0);
 });
 
+test("Owner transfer captures the clicked revision and participant while reading the current token at dispatch", async (t) => {
+  const h = createBindingsHarness(t); h.state.activeIdentityProtocolVersion = 2;
+  h.state.debugState.personalRoom = { roomType: "personal", isOwner: true, ownerParticipantId: "self" };
+  h.state.latestRealtimeParticipants = [makeHostParticipant("a"), makeHostParticipant("b")];
+  await h.respond({ state: {}, authorityRevision: 7, ownerParticipantId: "self" }); bindHostControls(h.context);
+  h.elements.hostParticipantSelect.value = "a"; h.elements.transferOwnerButton.dispatchEvent(new Event("click"));
+  assert.equal(h.queued.length, 1);
+  await h.respond({ state: {}, authorityRevision: 8, ownerParticipantId: "self" });
+  h.elements.hostParticipantSelect.value = "b"; h.state.roomStateAccessToken = "fresh-token";
+  await h.queued[0]!.action();
+  assert.deepEqual(h.calls, [{ name: "owner", args: ["https://example.invalid", "room", "fresh-token", "a", 7] }]);
+});
+
 for (const [button, action, status] of [
   ["lockRoomButton", "lock", "Room locked"],
   ["unlockRoomButton", "unlock", "Room unlocked"],
@@ -56,10 +71,10 @@ for (const [button, action, status] of [
 }
 
 for (const [button, serviceName, status] of [
-  ["removeParticipantButton", "remove", "Removed a"],
-  ["transferHostButton", "transfer", "Transferred host to a"],
-  ["grantPresenterButton", "grant", "Granted presenter to a"],
-  ["revokePresenterButton", "revoke", "Revoked presenter from a"]] as const) {
+  ["removeParticipantButton", "remove", "Removed “a”"],
+  ["transferHostButton", "transfer", "Transferred host to “a”"],
+  ["grantPresenterButton", "grant", "Granted presenter to “a”"],
+  ["revokePresenterButton", "revoke", "Revoked presenter from “a”"]] as const) {
   test(`${serviceName} ignores empty selection, captures the clicked participant and reads the current token`, async (t) => {
     const h = createBindingsHarness(t); bindHostControls(h.context);
     h.elements[button].dispatchEvent(new Event("click")); assert.equal(h.queued.length, 0);
@@ -86,4 +101,13 @@ test("selection change updates diagnostics before rendering, including an empty 
   h.elements.hostParticipantSelect.value = "missing";
   h.elements.hostParticipantSelect.dispatchEvent(new Event("change"));
   assert.deepEqual(observed, ["b", null]); assert.deepEqual(h.queued, []);
+});
+
+test("visible action messages use names while the API still receives opaque routing IDs", async t => {
+  const h = createBindingsHarness(t), id = "opaque-routing-id-not-a-display-name";
+  h.state.latestRealtimeParticipants = [makeHostParticipant(id, "")]; h.runtime.renderHostControls();
+  bindHostControls(h.context); h.elements.hostParticipantSelect.value = id;
+  h.elements.grantPresenterButton.dispatchEvent(new Event("click"));
+  assert.equal(h.queued[0]!.status, "Granted presenter to “Participant”");
+  await h.queued[0]!.action(); assert.equal(h.calls[0]!.args[3], id);
 });

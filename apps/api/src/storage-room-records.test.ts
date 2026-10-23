@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 
-import type { RoomTemplateVersionSnapshotV1 } from "@vrata/shared-types";
+import type { RoomTemplateVersionContractV1, RoomTemplateVersionSnapshotV1 } from "@vrata/shared-types";
+import { listProductRoomTemplateVersionContracts, referenceTemplateContract, resolveLockedRoomTemplateAssetUrl } from "@vrata/templates";
+import { assertRoomTemplatePatch } from "./room-template-policy.js";
 import {
   bindRoomTemplateMetadata,
   defaultAvatarConfig,
@@ -54,6 +56,120 @@ function row(overrides: Partial<RoomRow> = {}): RoomRow {
     template_version_snapshot: stored.snapshot, template_version_content_hash: stored.content_hash,
     ...overrides };
 }
+
+function referenceContract(templateId: string): RoomTemplateVersionContractV1 {
+  return listProductRoomTemplateVersionContracts().find(contract => contract.templateId === templateId)!;
+}
+const personalReference = referenceContract("personal-room-basic");
+const lockedScene = (contract: RoomTemplateVersionContractV1) =>
+  resolveLockedRoomTemplateAssetUrl(contract.assetLock, contract.assetLock.sceneManifest.path);
+
+function personalRoom(overrides: Partial<RoomRecordWithoutTemplateMetadata> = {}): RoomRecordWithoutTemplateMetadata {
+  return room({ templateId: personalReference.templateId, roomType: "personal", visibility: "private", guestAllowed: false,
+    sceneBundleUrl: lockedScene(personalReference), ...overrides });
+}
+
+function personalRow(overrides: Partial<RoomRow> = {}): RoomRow {
+  const stored = storedVersion(personalReference);
+  return row({ template_id: stored.template_id, room_type: "personal", visibility: "private", guest_allowed: false,
+    scene_bundle_url: lockedScene(personalReference), template_version_template_id: stored.template_id,
+    template_version_resolved: stored.version, template_version_snapshot: stored.snapshot,
+    template_version_content_hash: stored.content_hash, ...overrides });
+}
+
+test("personal reference binding accepts a NULL or absent owner but still rejects an empty owner", () => {
+  for (const owner of [{}, { ownerParticipantId: null }, { ownerParticipantId: "owner-123" }]) {
+    const source = personalRoom(owner);
+    const result = bindRoomTemplateMetadata(source, personalReference);
+    assert.equal(result.ownerParticipantId, source.ownerParticipantId);
+    assert.equal(result.templateVersion, "2.0.0");
+    assert.deepEqual(result.templateSnapshot.roomConfig, { roomType: "personal", visibility: "private", guestAllowed: false,
+      sceneBundleUrl: lockedScene(personalReference), features: source.features,
+      theme: { primaryColor: "#5fc8ff", accentColor: "#163354" }, avatarConfig: avatarDefaults });
+  }
+  assert.throws(() => bindRoomTemplateMetadata(personalRoom({ ownerParticipantId: "" }), personalReference),
+    { message: "invalid_reference_personal_configuration" });
+});
+
+test("personal reference binding rejects guest access, non-private exposure and a wrong room type for any owner", () => {
+  const cases: Array<[Partial<RoomRecordWithoutTemplateMetadata>, string]> = [
+    [{ visibility: "public" }, "invalid_reference_personal_configuration"],
+    [{ visibility: "unlisted" }, "invalid_reference_personal_configuration"],
+    [{ guestAllowed: true }, "invalid_reference_personal_configuration"],
+    [{ roomType: "standard" }, "invalid_reference_room_configuration"],
+    [{ sceneBundleUrl: "" }, "invalid_reference_room_configuration"]
+  ];
+  for (const ownerParticipantId of [null, "owner-123"]) {
+    for (const [overrides, message] of cases) {
+      assert.throws(() => bindRoomTemplateMetadata(personalRoom({ ownerParticipantId, ...overrides }), personalReference), { message });
+    }
+  }
+  const meeting = referenceContract("meeting-room-basic");
+  assert.throws(() => bindRoomTemplateMetadata(personalRoom({ templateId: meeting.templateId, ownerParticipantId: null,
+    sceneBundleUrl: lockedScene(meeting) }), meeting), { message: "invalid_reference_room_configuration" });
+});
+
+test("reference binding copies the version assetLock and ignores the room's resolved scene URL", () => {
+  const before = structuredClone(personalReference);
+  const pinnedHash = templateVersionContentHash(personalReference);
+  const mirrored = resolveLockedRoomTemplateAssetUrl(personalReference.assetLock, personalReference.assetLock.sceneManifest.path,
+    { mirrorBaseUrl: "https://mirror.example/assets" });
+  for (const sceneBundleUrl of [lockedScene(personalReference), mirrored]) {
+    const result = bindRoomTemplateMetadata(personalRoom({ ownerParticipantId: null, sceneBundleUrl }), personalReference);
+    assert.deepEqual(result.templateSnapshot.assetLock, before.assetLock);
+    assert.notEqual(result.templateSnapshot.assetLock, personalReference.assetLock);
+    assert.equal(templateVersionContentHash(referenceTemplateContract(result.templateSnapshot)!), pinnedHash);
+    result.templateSnapshot.assetLock!.sceneManifest.sha256 = "0".repeat(64);
+    assert.deepEqual(personalReference, before);
+  }
+});
+
+test("persisted personal reference rows map a NULL or absent owner and keep rejecting unsafe rows", () => {
+  for (const overrides of [{}, { owner_participant_id: null }]) {
+    const result = mapRoomRow(personalRow(overrides));
+    assert.equal(result.ownerParticipantId, null);
+    assert.equal(result.templateVersion, "2.0.0");
+    assert.deepEqual(result.templateSnapshot.assetLock, personalReference.assetLock);
+    assert.equal(result.templateSnapshot.roomConfig.guestAllowed, false);
+  }
+  assert.equal(mapRoomRow(personalRow({ owner_participant_id: "owner-123" })).ownerParticipantId, "owner-123");
+  const cases: Array<[Partial<RoomRow>, string]> = [
+    [{ owner_participant_id: "" }, "invalid_reference_personal_configuration"],
+    [{ guest_allowed: true }, "invalid_reference_personal_configuration"],
+    [{ visibility: "unlisted" }, "invalid_reference_personal_configuration"],
+    [{ room_type: "standard" }, "invalid_reference_room_configuration"],
+    [{ scene_bundle_url: null }, "invalid_reference_room_configuration"]
+  ];
+  for (const [overrides, message] of cases) {
+    assert.throws(() => mapRoomRow(personalRow({ owner_participant_id: null, ...overrides })), { message });
+  }
+  // Stored personal rows have always normalized public to private before binding.
+  assert.equal(mapRoomRow(personalRow({ owner_participant_id: null, visibility: "public" })).visibility, "private");
+});
+
+test("compatibility metadata PATCH keeps an ownerless personal reference ownerless and pinned", () => {
+  const existing = bindRoomTemplateMetadata(personalRoom({ ownerParticipantId: null }), personalReference);
+  type Patch = Parameters<typeof assertRoomTemplatePatch>[1];
+  const allowed: Patch[] = [{ name: "Renamed" }, { theme: { primaryColor: "#111111", accentColor: "#222222" } },
+    { ownerParticipantId: null }, { visibility: "private", guestAllowed: false }];
+  for (const input of allowed) assertRoomTemplatePatch(existing, input);
+  const rejected: Array<[Patch, string]> = [
+    [{ ownerParticipantId: "owner-123" }, "personal_room_owner_immutable"],
+    [{ ownerParticipantId: "" }, "personal_room_owner_immutable"],
+    [{ visibility: "public" }, "personal_room_must_be_private"],
+    [{ guestAllowed: true }, "personal_room_guest_access_forbidden"],
+    [{ roomType: "standard" }, "template_room_type_conflict"],
+    [{ sceneBundleUrl: existing.sceneBundleUrl }, "reference_scene_override_not_allowed"]
+  ];
+  for (const [input, message] of rejected) assert.throws(() => assertRoomTemplatePatch(existing, input), { message });
+  const { templateVersion: _version, templateSnapshot: _snapshot, ...stored } = existing;
+  const updated = bindRoomTemplateMetadata({ ...stored, name: "Renamed",
+    theme: { primaryColor: "#111111", accentColor: "#222222" } }, personalReference);
+  assert.equal(updated.ownerParticipantId, null);
+  assert.equal(updated.templateSnapshot.roomConfig.theme.primaryColor, "#111111");
+  assert.equal(templateVersionContentHash(referenceTemplateContract(updated.templateSnapshot)!),
+    templateVersionContentHash(personalReference));
+});
 
 test("avatar defaults preserve explicit false and empty strings", () => {
   assert.deepEqual(defaultAvatarConfig(), avatarDefaults);

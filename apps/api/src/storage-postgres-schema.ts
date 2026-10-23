@@ -5,7 +5,7 @@ export const DEFAULT_SESSION_CONTROL_JSON = '{"hostParticipantId":null,"presente
 export const DEFAULT_PERSONAL_STATE_JSON = '{}' as const;
 
 // Keep the SQL text and execution order compatible with existing installations.
-export async function ensurePostgresStorageSchema(client: PoolClient): Promise<void> {
+export async function ensurePostgresStorageSchema(client: PoolClient, installRoomExtensions: (client: PoolClient) => Promise<void>): Promise<void> {
   await client.query(`
       create table if not exists tenants (tenant_id text primary key, name text not null);
       create table if not exists templates (
@@ -193,6 +193,7 @@ export async function ensurePostgresStorageSchema(client: PoolClient): Promise<v
   await client.query(`alter table rooms alter column session_control set default '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb`);
   await client.query(`update rooms set session_control = '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb where session_control is null`);
   await client.query(`update rooms set session_control = '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb || session_control`);
+  await installRoomExtensions(client);
   await client.query(`alter table scene_bundles add column if not exists status text not null default 'active'`);
   await client.query(`alter table scene_bundles add column if not exists is_current boolean not null default true`);
   await client.query(`alter table scene_bundles add column if not exists schema_version integer`);

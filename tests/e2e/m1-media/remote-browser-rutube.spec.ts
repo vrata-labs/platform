@@ -572,10 +572,12 @@ async function expectNoFrameBacklog(page: Page, sampleSeconds: number[]): Promis
 test("@staging @private-assets @rutube-canary real Rutube remote browser connects media and keeps frames flowing", async ({ page, request }) => {
   test.setTimeout(210000);
   let roomId: string | null = null;
+  // A real Host invitation, not the floor-1 role query; it is revoked with the room.
+  let host: Awaited<ReturnType<typeof enterStagingRoomAsHost>> | undefined;
 
   try {
     roomId = await createTemporaryBlueOfficeRoom(request);
-    await page.goto(`/rooms/${roomId}?role=host&debug=1&scenefit=0`, { waitUntil: "domcontentloaded" });
+    host = await enterStagingRoomAsHost(page, request, roomId, { "x-vrata-admin-token": stagingAdminToken }, "Remote browser Host", { debug: "1", scenefit: "0" });
     await waitForBlueOfficeKernel(page, 45000);
 
     await openRemoteBrowserUrl(page, rutubePrimaryUrl);
@@ -584,6 +586,7 @@ test("@staging @private-assets @rutube-canary real Rutube remote browser connect
     const previousFrameCount = (await readDebug(page))?.remoteBrowser?.externalVideoFrameCount ?? 0;
     await waitForFreshExternalVideoFrame(page, previousFrameCount);
   } finally {
+    await host?.revoke();
     if (roomId) {
       await deleteTemporaryRoom(request, roomId);
     }
@@ -593,10 +596,12 @@ test("@staging @private-assets @rutube-canary real Rutube remote browser connect
 test("@staging @private-assets @rutube-full real Rutube remote browser keeps hover UI, video transport, and switching responsive", async ({ page, request }) => {
   test.setTimeout(420000);
   let roomId: string | null = null;
+  // A real Host invitation, not the floor-1 role query; it is revoked with the room.
+  let host: Awaited<ReturnType<typeof enterStagingRoomAsHost>> | undefined;
 
   try {
     roomId = await createTemporaryBlueOfficeRoom(request);
-    await page.goto(`/rooms/${roomId}?role=host&debug=1&scenefit=0`, { waitUntil: "domcontentloaded" });
+    host = await enterStagingRoomAsHost(page, request, roomId, { "x-vrata-admin-token": stagingAdminToken }, "Remote browser Host", { debug: "1", scenefit: "0" });
     await waitForBlueOfficeKernel(page);
 
     await openRemoteBrowserUrl(page, rutubePrimaryUrl);
@@ -614,6 +619,7 @@ test("@staging @private-assets @rutube-full real Rutube remote browser keeps hov
     await expectVisibleHoverResponse(page);
     await expectNoFrameBacklog(page, [0, 20, 40]);
   } finally {
+    await host?.revoke();
     if (roomId) {
       await deleteTemporaryRoom(request, roomId);
     }
@@ -623,10 +629,12 @@ test("@staging @private-assets @rutube-full real Rutube remote browser keeps hov
 test("@staging @private-assets remote browser default demo renders visible viewport and receives input", async ({ page, request }) => {
   test.setTimeout(180000);
   let roomId: string | null = null;
+  // A real Host invitation, not the floor-1 role query; it is revoked with the room.
+  let host: Awaited<ReturnType<typeof enterStagingRoomAsHost>> | undefined;
 
   try {
     roomId = await createTemporaryBlueOfficeRoom(request);
-    await page.goto(`/rooms/${roomId}?role=host&debug=1&scenefit=0`, { waitUntil: "domcontentloaded" });
+    host = await enterStagingRoomAsHost(page, request, roomId, { "x-vrata-admin-token": stagingAdminToken }, "Remote browser Host", { debug: "1", scenefit: "0" });
     await waitForBlueOfficeKernel(page);
 
     const expectedUrl = await openDefaultRemoteBrowserUrl(page);
@@ -644,9 +652,10 @@ test("@staging @private-assets remote browser default demo renders visible viewp
       intervals: [250, 500]
     }).toContain("button#increment");
   } finally {
+    await host?.revoke();
     if (roomId) {
       await deleteTemporaryRoom(request, roomId);
     }
   }
 });
-import { createLegacyStagingRoom, releaseLegacyStagingRoom } from "../staging-legacy-room";
+import { createLegacyStagingRoom, enterStagingRoomAsHost, releaseLegacyStagingRoom } from "../staging-legacy-room";

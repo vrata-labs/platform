@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DISABLED_EXTENSION_CARD_TYPE, EXTENSION_TEST_CARD_TYPE, IMAGE_VIEWER_OBJECT_TYPE, MARKDOWN_BOARD_OBJECT_TYPE, MISSING_CAPABILITY_EXTENSION_CARD_TYPE, PDF_PRESENTATION_OBJECT_TYPE, VIDEO_PLAYER_OBJECT_TYPE, type VideoPlayerState } from "@vrata/shared-types";
+import { DISABLED_EXTENSION_CARD_TYPE, EXTENSION_TEST_CARD_TYPE, IMAGE_VIEWER_OBJECT_TYPE, MARKDOWN_BOARD_OBJECT_TYPE, MISSING_CAPABILITY_EXTENSION_CARD_TYPE, PDF_PRESENTATION_OBJECT_TYPE, VIDEO_PLAYER_OBJECT_TYPE, WHITEBOARD_OBJECT_TYPE, type VideoPlayerState } from "@vrata/shared-types";
 
 import {
   claimSeat,
@@ -890,6 +890,35 @@ test("whiteboard object appends strokes and enforces draw and clear permissions"
   assert.deepEqual((cleared.room.mediaObjects.objects["board-1"]?.state as { strokes?: unknown[] } | undefined)?.strokes, []);
 });
 
+test("revisioned stop preserves a sticky board edited after replacement consent", () => {
+  const host = joinRoom(createRoomState("revisioned-stop"), "host", { role: "host" });
+  const created = createMediaObject(host, "host", { commandId: "create", surfaceId: "debug-main",
+    objectType: MARKDOWN_BOARD_OBJECT_TYPE, objectId: "board", nowMs: 1 });
+  const member = joinRoom(created.room, "member", { role: "member" });
+  const edited = patchMediaObjectState(member, "member", { commandId: "edit", surfaceId: "debug-main", objectId: "board",
+    expectedRevision: 0, nowMs: 2, patch: { type: "create-note", inputEventId: "new-note", noteId: "decision",
+      text: "New decision after the dialog opened", x: .2, y: .3, width: .3, height: .22, color: "#bfdbfe" } });
+  assert.equal(edited.result.accepted, true);
+  for (const expectedRevision of [0, -1, 1.5, NaN, Infinity, "1", null, false, {}]) {
+    const stopped = stopMediaObject(edited.room, "host", { commandId: "stale-stop", surfaceId: "debug-main", objectId: "board", expectedRevision });
+    assert.equal(stopped.result.accepted, false); assert.equal(stopped.result.blockedReason, "revision-mismatch");
+    assert.equal(stopped.result.revision, 1); assert.equal(stopped.room, edited.room);
+    assert.deepEqual(stopped.room.mediaObjects.objects.board?.state, edited.room.mediaObjects.objects.board?.state);
+  }
+  const denied = stopMediaObject(edited.room, "member", { commandId: "member-stop", surfaceId: "debug-main", objectId: "board", expectedRevision: 1 });
+  assert.equal(denied.result.blockedReason, "missing-permission");
+  const stopped = stopMediaObject(edited.room, "host", { commandId: "confirmed-stop", surfaceId: "debug-main", objectId: "board", expectedRevision: 1 });
+  assert.equal(stopped.result.accepted, true); assert.equal(stopped.room.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
+  assert.equal(stopped.room.mediaObjects.objects.board, undefined);
+});
+
+test("legacy stop without a revision retains its original behavior", () => {
+  const room = joinRoom(createRoomState("legacy-stop"), "host", { role: "host" });
+  const created = createMediaObject(room, "host", { commandId: "create", surfaceId: "debug-main", objectType: WHITEBOARD_OBJECT_TYPE, objectId: "board", nowMs: 1 });
+  const stopped = stopMediaObject(created.room, "host", { commandId: "stop", surfaceId: "debug-main", objectId: "board" });
+  assert.equal(stopped.result.accepted, true);
+});
+
 test("markdown board object persists sticky notes and enforces edit permissions", () => {
   const hostRoom = joinRoom(createRoomState("demo"), "host", { role: "host" });
   const created = createMediaObject(hostRoom, "host", {
@@ -1091,7 +1120,7 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
   assert.equal(openedState?.status, "loading");
   assert.equal(openedState?.controllerParticipantId, "host");
   assert.equal(openedState?.executorSessionId, "remote-browser:browser-1");
-  assert.equal(openedState?.executorInstanceId, "remote-browser:browser-1:instance:host:open:1");
+  assert.equal(openedState?.executorInstanceId, "remote-browser:browser-1:instance:1");
   assert.equal(openedState?.frameStreamId, undefined);
   assert.equal(openedState?.mediaParticipantId, "remote-browser:browser-1");
   assert.equal(openedState?.mediaTrackSid, undefined);
@@ -1115,7 +1144,7 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
     surfaceId: "debug-main",
     objectId: "browser-1",
     executorSessionId: "remote-browser:browser-1",
-    executorInstanceId: "remote-browser:browser-1:instance:host:open:1",
+    executorInstanceId: "remote-browser:browser-1:instance:1",
     patch: {
       type: "mark-publishing",
       mediaParticipantId: "remote-browser:browser-1",
@@ -1132,7 +1161,7 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
     surfaceId: "debug-main",
     objectId: "browser-1",
     executorSessionId: "remote-browser:browser-1",
-    executorInstanceId: "remote-browser:browser-1:instance:host:open:1",
+    executorInstanceId: "remote-browser:browser-1:instance:1",
     patch: {
       type: "mark-active",
       mediaParticipantId: "remote-browser:browser-1",
@@ -1192,7 +1221,7 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
     surfaceId: "debug-main",
     objectId: "browser-1",
     executorSessionId: "remote-browser:browser-1",
-    executorInstanceId: "remote-browser:browser-1:instance:host:open:1",
+    executorInstanceId: "remote-browser:browser-1:instance:1",
     patch: {
       type: "mark-input-applied",
       input: {
@@ -1287,7 +1316,7 @@ test("remote-browser executor failure stores sanitized diagnostic detail", () =>
     surfaceId: "debug-main",
     objectId: "browser-failed",
     executorSessionId: "remote-browser:browser-failed",
-    executorInstanceId: "remote-browser:browser-failed:instance:host:open-failed:1",
+    executorInstanceId: "remote-browser:browser-failed:instance:1",
     patch: {
       type: "mark-failed",
       errorCode: "viewport_capture_failed",
@@ -1304,6 +1333,91 @@ test("remote-browser executor failure stores sanitized diagnostic detail", () =>
   assert.equal(failedState?.errorDetail, "NotReadableError: Could not start video source");
 });
 
+test("remote-browser open-url binds the committed revision as a fresh executor instance, never the client event id", () => {
+  type Room = ReturnType<typeof createRoomState>;
+  const objectId = "browser-generation";
+  const sessionId = `remote-browser:${objectId}`;
+  const create = (): Room => createMediaObject(joinRoom(createRoomState("demo"), "host", { role: "host" }), "host", {
+    commandId: "cmd-create-browser-generation",
+    surfaceId: "debug-main",
+    objectType: "remote-browser",
+    objectId,
+    nowMs: 1
+  }).room;
+  const revisionOf = (room: Room) => room.mediaObjects.objects[objectId]?.revision;
+  const instanceOf = (room: Room) => (room.mediaObjects.objects[objectId]?.state as { executorInstanceId?: string } | undefined)?.executorInstanceId;
+  const open = (room: Room, inputEventId: string, nowMs: number) => patchMediaObjectState(room, "host", {
+    commandId: `cmd-open-generation-${nowMs}`,
+    surfaceId: "debug-main",
+    objectId,
+    expectedRevision: revisionOf(room) ?? -1,
+    patch: { type: "open-url", url: "https://example.com/remote-browser-demo.html", inputEventId },
+    nowMs
+  });
+  const callback = (room: Room, executorInstanceId: string | undefined, inputEventId: string, nowMs: number) => patchRemoteBrowserExecutorState(room, {
+    commandId: `cmd-callback-generation-${nowMs}`,
+    surfaceId: "debug-main",
+    objectId,
+    executorSessionId: sessionId,
+    executorInstanceId: executorInstanceId ?? "",
+    patch: { type: "mark-publishing", mediaParticipantId: sessionId, inputEventId },
+    nowMs
+  });
+
+  // A -> B -> A: the reused client id still opens a third generation, and both earlier ones go stale.
+  const openedA = open(create(), "host:open:A", 2);
+  const openedB = open(openedA.room, "host:open:B", 3);
+  const reopenedA = open(openedB.room, "host:open:A", 4);
+  const opens = [openedA, openedB, reopenedA];
+  assert.deepEqual(opens.map(({ result }) => result.accepted), [true, true, true]);
+  const generations = opens.map(({ room }) => instanceOf(room));
+  assert.equal(generations[0], `${sessionId}:instance:1`);
+  assert.deepEqual(generations, opens.map(({ result }) => `${sessionId}:instance:${result.revision}`));
+  assert.equal(new Set(generations).size, 3);
+  for (const stale of [generations[0], generations[1]]) {
+    const refused = callback(reopenedA.room, stale, "executor:stale:1", 5);
+    assert.equal(refused.result.accepted, false);
+    assert.equal(refused.result.blockedReason, "invalid-patch");
+    assert.equal(revisionOf(refused.room), revisionOf(reopenedA.room));
+  }
+  assert.equal(callback(reopenedA.room, generations[2], "executor:current:1", 5).result.accepted, true);
+
+  // A -> executor callback -> A with the same client id is accepted as a new open with its own generation.
+  const firstOpen = open(create(), "host:open:same", 2);
+  const published = callback(firstOpen.room, instanceOf(firstOpen.room), "executor:publishing:1", 3);
+  assert.equal(published.result.accepted, true);
+  const reopened = open(published.room, "host:open:same", 4);
+  assert.equal(reopened.result.accepted, true);
+  assert.equal(instanceOf(reopened.room), `${sessionId}:instance:${reopened.result.revision}`);
+  assert.notEqual(instanceOf(reopened.room), instanceOf(firstOpen.room));
+  assert.equal(callback(reopened.room, instanceOf(firstOpen.room), "executor:publishing:2", 5).result.accepted, false);
+
+  // An immediate A -> A stays a duplicate: no revision, no new instance.
+  const duplicate = open(firstOpen.room, "host:open:same", 3);
+  assert.equal(duplicate.result.accepted, false);
+  assert.equal(duplicate.result.blockedReason, "duplicate-input-event");
+  assert.equal(duplicate.room, firstOpen.room);
+
+  // The instance no longer grows with the client id.
+  const longId = open(create(), "x".repeat(4096), 2);
+  assert.equal(longId.result.accepted, true);
+  assert.equal(instanceOf(longId.room), `${sessionId}:instance:1`);
+
+  // A revision past the safe-integer range fails closed instead of repeating a generation.
+  const fresh = create();
+  const saturated: Room = {
+    ...fresh,
+    mediaObjects: {
+      ...fresh.mediaObjects,
+      objects: { ...fresh.mediaObjects.objects, [objectId]: { ...fresh.mediaObjects.objects[objectId]!, revision: Number.MAX_SAFE_INTEGER } }
+    }
+  };
+  const overflowed = open(saturated, "host:open:overflow", 2);
+  assert.equal(overflowed.result.accepted, false);
+  assert.equal(overflowed.result.blockedReason, "invalid-patch");
+  assert.equal(instanceOf(overflowed.room), undefined);
+});
+
 test("leaveRoom clears owned active screen-share object", () => {
   const hostRoom = joinRoom(createRoomState("demo"), "host", { role: "host" });
   const created = createMediaObject(hostRoom, "host", {
@@ -1316,4 +1430,43 @@ test("leaveRoom clears owned active screen-share object", () => {
   const left = leaveRoom(created.room, "host");
   assert.equal(left.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
   assert.equal(left.mediaObjects.objects["share-1"], undefined);
+});
+
+test("authority demotion retires only owned screen shares, frees surfaces and never resurrects them", () => {
+  let room = joinRoom(joinRoom(createRoomState("demo"), "speaker", { role: "presenter" }), "other", { role: "host" });
+  room = createMediaObject(room, "speaker", { commandId: "own", surfaceId: "debug-main", objectType: "screen-share", objectId: "own", nowMs: 1 }).room;
+  room = createMediaObject(room, "other", { commandId: "foreign", surfaceId: "laptop-screen", objectType: "screen-share", objectId: "foreign", nowMs: 2 }).room;
+  room = createMediaObject(room, "speaker", { commandId: "board", surfaceId: "whiteboard-wall", objectType: MARKDOWN_BOARD_OBJECT_TYPE, objectId: "board", nowMs: 3 }).room;
+  assert.equal(Object.keys(room.mediaObjects.objects).length, 3);
+  const next = joinRoom(room, "speaker", { role: "member" });
+  assert.equal(next.mediaObjects.objects.own, undefined);
+  assert.equal(next.mediaObjects.surfaces["debug-main"]!.activeObjectId, null);
+  assert.deepEqual(next.mediaObjects.objects.foreign, room.mediaObjects.objects.foreign);
+  assert.deepEqual(next.mediaObjects.objects.board, room.mediaObjects.objects.board);
+  assert.equal(room.mediaObjects.surfaces["debug-main"]!.activeObjectId, "own", "original snapshot is immutable");
+  assert.deepEqual(joinRoom(next, "speaker", { role: "member" }), next, "repeat reconciliation is idempotent");
+  assert.equal(joinRoom(next, "speaker", { role: "presenter" }).mediaObjects.objects.own, undefined);
+  assert.equal(createMediaObject(next, "speaker", { commandId: "denied", objectId: "denied", surfaceId: "debug-main", objectType: "screen-share", nowMs: 4 }).result.accepted, false);
+});
+
+for (const type of [PDF_PRESENTATION_OBJECT_TYPE, IMAGE_VIEWER_OBJECT_TYPE, VIDEO_PLAYER_OBJECT_TYPE, "remote-browser"]) {
+  test(`permission loss retains the participant's ${type} room content`, () => {
+    let room = joinRoom(createRoomState("demo"), "speaker", { role: "presenter" });
+    room.mediaObjects.surfaces["debug-main"]!.allowedObjectTypes.push(type);
+    const created = createMediaObject(room, "speaker", { commandId: "content", surfaceId: "debug-main", objectType: type, objectId: "content", nowMs: 1 });
+    assert.equal(created.result.accepted, true);
+    room = joinRoom(created.room, "speaker", { role: "member" });
+    assert.deepEqual(room.mediaObjects.objects.content, created.room.mediaObjects.objects.content);
+    assert.equal(room.mediaObjects.surfaces["debug-main"]!.activeObjectId, "content");
+  });
+}
+
+test("host access retains a live share while a downgraded reconnect removes a grace-period share", () => {
+  const room = createMediaObject(joinRoom(createRoomState("demo"), "speaker", { role: "host" }), "speaker",
+    { commandId: "own", surfaceId: "debug-main", objectType: "screen-share", objectId: "own", nowMs: 1 }).room;
+  assert.ok(joinRoom(room, "speaker", { role: "host" }).mediaObjects.objects.own);
+  const absent = { ...room, participants: [] };
+  const reconnected = joinRoom(absent, "speaker", { role: "member" });
+  assert.equal(reconnected.mediaObjects.objects.own, undefined);
+  assert.equal(reconnected.mediaObjects.surfaces["debug-main"]!.activeObjectId, null);
 });

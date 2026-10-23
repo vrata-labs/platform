@@ -4,9 +4,12 @@
   "version": "0.1.0",
   "type": "module",
   "dependencies": {
+    "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
+    "@vrata/room-plugin-sdk": "workspace:*",
     "@vrata/shared-types": "workspace:*",
     "livekit-client": "^2.15.6",
     "pdfjs-dist": "^6.1.200",
+    "quickjs-emscripten-core": "0.32.0",
     "three": "^0.176.0"
   },
   "devDependencies": {

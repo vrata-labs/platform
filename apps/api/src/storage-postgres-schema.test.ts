@@ -1,13 +1,27 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
-import { ensurePostgresStorageSchema, DEFAULT_PERSONAL_STATE_JSON, DEFAULT_SESSION_CONTROL_JSON } from "./storage-postgres-schema.js";
+import { ensurePostgresStorageSchema as runSchema, DEFAULT_PERSONAL_STATE_JSON, DEFAULT_SESSION_CONTROL_JSON } from "./storage-postgres-schema.js";
+import type { PoolClient } from "pg";
 import { createStorageInitHarness, deferred } from "./testing/storage-postgres-init-harness.js";
 
 // Captured from the original PostgresStorage.initWithClient on 4734791267932326f053b4d32d5bb1d186ec4d66.
 // Include raw SQL whitespace and values, not a normalized rendering of the new implementation.
 const schemaQueryCount = 41;
 const schemaQueriesSha256 = "cdbf7debef65bf61c5728f5217e537a0fdeb0e68450a251e1088eb79cba6a586";
+const ensurePostgresStorageSchema = (client: PoolClient) => runSchema(client, async () => {});
+
+test("room schema extensions are awaited once after session migration and before bundle migration", async () => {
+  const h = createStorageInitHarness(), reached = deferred(), resume = deferred(); let calls = 0;
+  const pending = runSchema(h.client, async client => {
+    assert.equal(client, h.client); calls++;
+    assert(h.queries.at(-1)!.sql.endsWith("::jsonb || session_control"));
+    reached.resolve(); await resume.promise;
+  });
+  try { await reached.promise; assert(!h.queries.some(query => query.sql.startsWith("alter table scene_bundles"))); }
+  finally { resume.resolve(); }
+  await pending; assert.equal(calls, 1);
+});
 
 test("Postgres schema preserves all original SQL strings, values and their order", async () => {
   const h = createStorageInitHarness();

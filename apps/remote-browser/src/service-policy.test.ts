@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canStartRemoteBrowserSession, resolveRemoteBrowserEnabled, resolveRemoteBrowserFrameTokenSecret, resolveRemoteBrowserServicePolicy, scheduleRemoteBrowserSessionExpiry, validateRemoteBrowserSessionIdentity } from "./service-policy.js";
+import { canStartRemoteBrowserSession, resolveRemoteBrowserEnabled, resolveRemoteBrowserFrameStreamId, resolveRemoteBrowserFrameTokenSecret, resolveRemoteBrowserServicePolicy, scheduleRemoteBrowserSessionExpiry, validateRemoteBrowserSessionIdentity } from "./service-policy.js";
 
 test("remote browser is disabled by default in production and explicit elsewhere", () => {
   assert.equal(resolveRemoteBrowserEnabled({ NODE_ENV: "production" }), false);
@@ -28,6 +28,17 @@ test("remote browser session identity is bound to its object", () => {
   assert.equal(validateRemoteBrowserSessionIdentity({ sessionId: "remote-browser:object-1", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId: "remote-browser:object-1", objectId: "object-1" }), true);
   assert.equal(validateRemoteBrowserSessionIdentity({ sessionId: "remote-browser:object-2", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId: "remote-browser:object-1", objectId: "object-1" }), false);
   assert.equal(validateRemoteBrowserSessionIdentity({ sessionId: "remote-browser:object-1", executorInstanceId: "remote-browser:other:instance:generation-1", mediaParticipantId: "remote-browser:object-1", objectId: "object-1" }), false);
+});
+
+test("remote browser session holds the frame stream derived from its validated session", () => {
+  const identity = { sessionId: "remote-browser:object-1", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId: "remote-browser:object-1", objectId: "object-1" };
+  for (const frameStreamId of [undefined, "", "remote-browser:object-1:frames"]) {
+    assert.equal(validateRemoteBrowserSessionIdentity({ ...identity, frameStreamId }), true);
+    assert.equal(resolveRemoteBrowserFrameStreamId({ ...identity, frameStreamId }), "remote-browser:object-1:frames");
+  }
+  for (const frameStreamId of ["remote-browser:object-1:frame", "remote-browser:object-2:frames", "object-1:frames", " remote-browser:object-1:frames"]) {
+    assert.equal(validateRemoteBrowserSessionIdentity({ ...identity, frameStreamId }), false);
+  }
 });
 
 test("remote browser frame secret fails closed in production", () => {

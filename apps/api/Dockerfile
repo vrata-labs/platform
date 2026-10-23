@@ -6,10 +6,15 @@ COPY . .
 
 RUN corepack enable
 RUN pnpm install --frozen-lockfile --config.node-linker=hoisted
-RUN pnpm --filter @vrata/shared-types build && pnpm --filter @vrata/templates build && pnpm --filter @vrata/asset-pipeline build && pnpm --filter @vrata/runtime-web build && pnpm --filter @vrata/control-plane build && pnpm --filter @vrata/api build
+RUN pnpm --filter @vrata/shared-types build && pnpm --filter @vrata/templates build && pnpm --filter @vrata/asset-pipeline build && pnpm --filter @vrata/room-plugin-sdk build && pnpm --filter @vrata/runtime-web build && pnpm --filter @vrata/control-plane build && pnpm --filter @vrata/api build
 RUN pnpm prune --prod --config.confirmModulesPurge=false --config.node-linker=hoisted
 
 FROM node:22-bookworm-slim AS runtime
+LABEL io.vrata.identity-protocol-floor-guard="1"
+LABEL io.vrata.room-record-reader="2"
+LABEL io.vrata.frame-token-codec="2"
+LABEL io.vrata.media-identity-codec="2"
+LABEL io.vrata.media-screen-reconciler="2"
 
 ENV NODE_ENV=production
 WORKDIR /app
@@ -32,6 +37,10 @@ COPY --from=build /app/packages/asset-pipeline/dist ./packages/asset-pipeline/di
 COPY --from=build /app/packages/asset-pipeline/package.json ./node_modules/@vrata/asset-pipeline/package.json
 COPY --from=build /app/packages/asset-pipeline/bin ./node_modules/@vrata/asset-pipeline/bin
 COPY --from=build /app/packages/asset-pipeline/dist ./node_modules/@vrata/asset-pipeline/dist
+COPY --from=build /app/packages/room-plugin-sdk/package.json ./packages/room-plugin-sdk/package.json
+COPY --from=build /app/packages/room-plugin-sdk/dist ./packages/room-plugin-sdk/dist
+COPY --from=build /app/packages/room-plugin-sdk/package.json ./node_modules/@vrata/room-plugin-sdk/package.json
+COPY --from=build /app/packages/room-plugin-sdk/dist ./node_modules/@vrata/room-plugin-sdk/dist
 COPY --from=build /app/apps/runtime-web/dist ./apps/runtime-web/dist
 COPY --from=build /app/apps/runtime-web/public ./apps/runtime-web/public
 COPY --from=build /app/apps/control-plane/dist ./apps/control-plane/dist

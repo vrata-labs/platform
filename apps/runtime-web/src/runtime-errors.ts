@@ -185,7 +185,7 @@ export function classifyMediaError(error: unknown): RuntimeIssue {
 
 export function classifyScreenShareError(error: unknown): RuntimeIssue {
   if (error instanceof Error) {
-    if (error.name === "NotAllowedError") {
+    if (error.name === "NotAllowedError" || error.name === "AbortError") {
       return getRuntimeIssue("screen_share_denied");
     }
     if (
@@ -203,6 +203,14 @@ export function classifyScreenShareError(error: unknown): RuntimeIssue {
   }
 
   return getRuntimeIssue("livekit_failed");
+}
+
+/** Only a definitive capture-stage result proves persistent lack of support.
+ * SDK/transport messages can mention capture while describing a retryable fault. */
+export function classifyScreenShareActionError(error: unknown, duringCapture: boolean): RuntimeIssue {
+  const issue = classifyScreenShareError(error);
+  if (issue.code !== "screen_share_unsupported" || duringCapture && error instanceof Error && error.name === "NotSupportedError") return issue;
+  return getRuntimeIssue(error instanceof Error && isMediaTransportError(error) ? "media_network_blocked" : "livekit_failed");
 }
 
 export function classifyRoomStateError(error: unknown): RuntimeIssue {

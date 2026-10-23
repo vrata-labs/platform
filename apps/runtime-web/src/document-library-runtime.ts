@@ -1,8 +1,11 @@
-import { hasRoomPermission } from "@vrata/shared-types";
+import { hasRoomPermission, type DocumentUploadPolicy } from "@vrata/shared-types";
 import type * as RuntimeApi from "./index.js";
 import type { RuntimeDocumentRecord } from "./index.js";
 import type { probeDocumentMedia } from "./document-media-probe.js";
 import type { createRuntimeDebugState } from "./runtime-debug-state.js";
+import { createDocumentFeedback, safeDocumentErrorCode, type DocumentOperation } from "./document-feedback.js";
+import { documentUploadPolicyView } from "./document-upload-policy.js";
+import { createDocumentLibraryActions } from "./document-library-actions.js";
 
 type RuntimeDebugState = ReturnType<typeof createRuntimeDebugState>;
 
@@ -14,19 +17,23 @@ export interface DocumentLibraryContext {
   readonly roomStateConnected: boolean;
   readonly roomStateAccessToken: string;
   readonly presentationActionInFlight: boolean;
+  readonly sessionControlBlocked: boolean;
   roomDocuments: RuntimeDocumentRecord[];
   selectedDocumentId: string;
   debugState: {
     access: Pick<RuntimeDebugState["access"], "permissions">;
     documents: RuntimeDebugState["documents"];
   };
-  documentsPanelEl: Pick<HTMLElement, "hidden">;
-  documentUploadInput: Pick<HTMLInputElement, "disabled" | "value"> & { files: ArrayLike<File> | null };
+  documentsPanelEl: Pick<HTMLElement, "hidden" | "setAttribute">;
+  documentUploadInput: Pick<HTMLInputElement, "disabled" | "value" | "setAttribute"> & { files: ArrayLike<File> | null };
+  documentUploadPolicyEl: Pick<HTMLElement, "textContent">;
+  documentOperationProgressEl: Pick<HTMLElement, "hidden" | "setAttribute">;
   documentUploadButton: Pick<HTMLButtonElement, "disabled">;
   documentSelect: Pick<HTMLSelectElement, "disabled" | "replaceChildren">;
   documentDownloadButton: Pick<HTMLButtonElement, "disabled">;
   documentSurfaceButton: Pick<HTMLButtonElement, "disabled">;
   documentDeleteButton: Pick<HTMLButtonElement, "disabled">;
+  documentRefreshButton: Pick<HTMLButtonElement, "disabled">;
   documentStatusEl: Pick<HTMLElement, "textContent">;
   renderPresentationControls: () => void;
   renderDocumentMediaControls: () => void;
@@ -40,8 +47,8 @@ export interface DocumentLibraryContext {
 export function createDocumentLibraryRuntime(context: DocumentLibraryContext) {
   const {
     apiBaseUrl, roomId, debugState, documentsPanelEl, documentUploadInput,
-    documentUploadButton, documentSelect, documentDownloadButton,
-    documentSurfaceButton, documentDeleteButton, documentStatusEl,
+    documentUploadButton, documentSelect, documentDownloadButton, documentUploadPolicyEl, documentOperationProgressEl,
+    documentSurfaceButton, documentDeleteButton, documentRefreshButton, documentStatusEl,
     renderPresentationControls, renderDocumentMediaControls,
     listRoomDocuments, uploadRoomDocument, downloadRoomDocument,
     deleteRoomDocument, probeDocumentMedia
@@ -49,9 +56,16 @@ export function createDocumentLibraryRuntime(context: DocumentLibraryContext) {
 
   let documentsLoading = false;
   let documentUploadInFlight = false;
+  const documentOperationsInFlight: Record<DocumentOperation, boolean> = { download: false, delete: false };
+  let uploadPolicy: DocumentUploadPolicy | null = null;
+  const documentFeedback = createDocumentFeedback();
+  const permissions = () => ({ view: canViewDocuments(), upload: canUploadDocuments(), download: canDownloadDocuments(), delete: canDeleteDocuments() });
+  let lastPermissions = permissions();
+  let libraryObserved = false;
+  let libraryLoadAttempted = false;
 
   function canViewDocuments(): boolean {
-    return context.runtimeFlags.documentsEnabled && hasRoomPermission(debugState.access.permissions, "document.view");
+    return !context.sessionControlBlocked && context.runtimeFlags.documentsEnabled && hasRoomPermission(debugState.access.permissions, "document.view");
   }
 
   function canUploadDocuments(): boolean {
@@ -75,11 +89,17 @@ export function createDocumentLibraryRuntime(context: DocumentLibraryContext) {
   }
 
   function documentErrorCode(error: unknown): string {
-    const message = error instanceof Error ? error.message : String(error);
-    return message.split(":").slice(0, 3).join(":") || "document_error";
+    return safeDocumentErrorCode(error);
   }
 
   function setDocumentStatus(message: string, errorCode: string | null = null): void {
+    documentFeedback.set(message, errorCode);
+    renderDocumentStatus();
+  }
+
+  function renderDocumentStatus(): void {
+    const { message, errorCode } = documentFeedback.read({ visible: canViewDocuments(), enabled: context.runtimeFlags.documentsEnabled,
+      uploading: documentUploadInFlight, loading: documentsLoading, count: context.roomDocuments.length });
     documentStatusEl.textContent = message;
     const selected = selectedDocument();
     debugState.documents = {
@@ -94,6 +114,27 @@ export function createDocumentLibraryRuntime(context: DocumentLibraryContext) {
   }
 
   function renderDocumentsUi(message?: string): void {
+    const next = permissions();
+    const previous = lastPermissions;
+    lastPermissions = next;
+    if (previous.view && !next.view) {
+      actions.invalidate();
+      documentFeedback.clear();
+      uploadPolicy = null; libraryObserved = false; libraryLoadAttempted = false;
+    } else {
+      for (const operation of ["download", "upload", "delete"] as const) if (previous[operation] && !next[operation]) actions.revokeOperation(operation);
+    }
+    if (message !== undefined) documentFeedback.keepOrSet(message);
+    const policy = documentUploadPolicyView(uploadPolicy);
+    documentUploadPolicyEl.textContent = uploadPolicy || libraryObserved ? policy.description
+      : documentsLoading || !libraryLoadAttempted ? "Checking server upload limits…"
+        : "Upload limits could not be loaded. Refresh the library to retry; the server validates files on upload.";
+    documentUploadInput.setAttribute("accept", policy.accept);
+    const busy = documentsLoading || documentUploadInFlight || documentOperationsInFlight.download || documentOperationsInFlight.delete;
+    documentsPanelEl.setAttribute("aria-busy", String(busy));
+    documentOperationProgressEl.hidden = !busy;
+    documentOperationProgressEl.setAttribute("aria-label", documentUploadInFlight ? "Uploading document" : documentsLoading ? "Loading documents"
+      : documentOperationsInFlight.download ? "Downloading document" : "Deleting document");
     const visible = canViewDocuments();
     documentsPanelEl.hidden = !visible;
     if (!visible) {
@@ -103,7 +144,8 @@ export function createDocumentLibraryRuntime(context: DocumentLibraryContext) {
       documentDownloadButton.disabled = true;
       documentSurfaceButton.disabled = true;
       documentDeleteButton.disabled = true;
-      setDocumentStatus(context.runtimeFlags.documentsEnabled ? "Documents permission required" : "Documents disabled");
+      documentRefreshButton.disabled = true;
+      renderDocumentStatus();
       return;
     }
 
@@ -129,121 +171,66 @@ export function createDocumentLibraryRuntime(context: DocumentLibraryContext) {
     documentUploadInput.disabled = !canUploadDocuments() || documentsLoading || documentUploadInFlight;
     documentUploadButton.disabled = !canUploadDocuments() || documentsLoading || documentUploadInFlight;
     documentSelect.disabled = documentsLoading || context.roomDocuments.length === 0;
-    documentDownloadButton.disabled = !selected || !canDownloadDocuments() || documentsLoading;
+    documentDownloadButton.disabled = !selected || !canDownloadDocuments() || documentsLoading || documentOperationsInFlight.download;
     documentSurfaceButton.disabled = !selected || !["pdf", "image", "video"].includes(selected.metadata?.kind ?? "") || !canPresentDocuments() || documentsLoading || context.presentationActionInFlight;
-    documentDeleteButton.disabled = !selected || !canDeleteDocuments() || documentsLoading;
-    setDocumentStatus(message ?? (context.roomDocuments.length > 0 ? `Documents ready: ${context.roomDocuments.length}` : "No room documents yet"));
+    documentDeleteButton.disabled = !selected || !canDeleteDocuments() || documentsLoading || documentOperationsInFlight.delete;
+    documentRefreshButton.disabled = documentsLoading;
+    renderDocumentStatus();
     renderPresentationControls();
     renderDocumentMediaControls();
   }
 
-  async function loadRoomDocuments(): Promise<void> {
-    if (!context.runtimeFlags.documentsEnabled || !canViewDocuments()) {
-      renderDocumentsUi();
-      return;
-    }
-    documentsLoading = true;
-    renderDocumentsUi("Documents loading...");
-    try {
-      context.roomDocuments = await listRoomDocuments(apiBaseUrl, roomId, context.roomStateAccessToken);
-      if (context.selectedDocumentId && !context.roomDocuments.some((document) => document.documentId === context.selectedDocumentId)) {
-        context.selectedDocumentId = "";
-        localStorage.removeItem(`vrata.documents.selected.${roomId}`);
-      }
-      renderDocumentsUi();
-    } catch (error) {
-      console.warn("documents_load_failed", error);
-      setDocumentStatus("Documents unavailable", documentErrorCode(error));
-    } finally {
-      documentsLoading = false;
-      renderDocumentsUi(documentStatusEl.textContent || undefined);
-    }
-  }
-
-  async function uploadSelectedDocument(): Promise<void> {
-    const file = documentUploadInput.files?.[0];
-    if (!file) {
-      setDocumentStatus("Choose a document first");
-      return;
-    }
-    if (!canUploadDocuments()) {
-      renderDocumentsUi("Document upload permission required");
-      return;
-    }
-    documentUploadInFlight = true;
-    renderDocumentsUi("Uploading document...");
-    try {
-      const mediaProbe = await probeDocumentMedia(file);
-      const uploadedDocument = await uploadRoomDocument(apiBaseUrl, roomId, context.roomStateAccessToken, file, mediaProbe ? {
-        widthPx: mediaProbe.widthPx,
-        heightPx: mediaProbe.heightPx,
-        durationMs: mediaProbe.durationMs
-      } : undefined);
-      context.roomDocuments = [uploadedDocument, ...context.roomDocuments.filter((item) => item.documentId !== uploadedDocument.documentId)];
-      context.selectedDocumentId = uploadedDocument.documentId;
-      localStorage.setItem(`vrata.documents.selected.${roomId}`, context.selectedDocumentId);
-      documentUploadInput.value = "";
-      renderDocumentsUi(`Document uploaded: ${uploadedDocument.filename}`);
-    } catch (error) {
-      console.warn("document_upload_failed", error);
-      setDocumentStatus(`Document upload failed: ${documentErrorCode(error)}`, documentErrorCode(error));
-    } finally {
-      documentUploadInFlight = false;
-      renderDocumentsUi(documentStatusEl.textContent || undefined);
-    }
-  }
-
-  async function downloadSelectedDocument(): Promise<void> {
-    const selected = selectedDocument();
-    if (!selected) return;
-    try {
-      setDocumentStatus("Downloading document...");
-      const download = await downloadRoomDocument(apiBaseUrl, selected, context.roomStateAccessToken);
-      const objectUrl = URL.createObjectURL(download.blob);
+  const actions = createDocumentLibraryActions({
+    apiBaseUrl, roomId, canViewDocuments, canUploadDocuments, canDownloadDocuments, canDeleteDocuments, selectedDocument,
+    selectedFile: () => documentUploadInput.files?.[0], clearFile: () => { documentUploadInput.value = ""; },
+    setDocumentStatus, renderDocumentsUi,
+    listRoomDocuments: (...args) => listRoomDocuments(...args),
+    uploadRoomDocument: (...args) => uploadRoomDocument(...args),
+    downloadRoomDocument: (...args) => downloadRoomDocument(...args),
+    deleteRoomDocument: (...args) => deleteRoomDocument(...args),
+    saveDownload(download) {
       const link = document.createElement("a");
-      link.href = objectUrl;
-      link.download = download.filename;
-      document.body.append(link);
-      link.click();
-      link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-      setDocumentStatus(`Document downloaded: ${download.filename}`);
-    } catch (error) {
-      console.warn("document_download_failed", error);
-      setDocumentStatus(`Document download failed: ${documentErrorCode(error)}`, documentErrorCode(error));
-    }
-  }
-
-  async function deleteSelectedDocument(): Promise<void> {
-    const selected = selectedDocument();
-    if (!selected) return;
-    try {
-      setDocumentStatus("Deleting document...");
-      await deleteRoomDocument(apiBaseUrl, roomId, selected.documentId, context.roomStateAccessToken);
-      context.roomDocuments = context.roomDocuments.filter((item) => item.documentId !== selected.documentId);
-      context.selectedDocumentId = context.roomDocuments[0]?.documentId ?? "";
-      if (context.selectedDocumentId) {
-        localStorage.setItem(`vrata.documents.selected.${roomId}`, context.selectedDocumentId);
-      } else {
-        localStorage.removeItem(`vrata.documents.selected.${roomId}`);
+      const objectUrl = URL.createObjectURL(download.blob);
+      try {
+        link.href = objectUrl; link.download = download.filename;
+        document.body.append(link); link.click();
+      } finally {
+        link.remove(); window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
       }
-      renderDocumentsUi(`Document deleted: ${selected.filename}`);
-    } catch (error) {
-      console.warn("document_delete_failed", error);
-      setDocumentStatus(`Document delete failed: ${documentErrorCode(error)}`, documentErrorCode(error));
-    }
-  }
+    },
+    probeDocumentMedia: (...args) => probeDocumentMedia(...args),
+    get roomStateAccessToken() { return context.roomStateAccessToken; },
+    get roomDocuments() { return context.roomDocuments; }, set roomDocuments(value) { context.roomDocuments = value; },
+    get selectedDocumentId() { return context.selectedDocumentId; },
+    set selectedDocumentId(value) {
+      context.selectedDocumentId = value;
+      if (value) localStorage.setItem(`vrata.documents.selected.${roomId}`, value);
+      else localStorage.removeItem(`vrata.documents.selected.${roomId}`);
+    },
+    get documentsLoading() { return documentsLoading; }, set documentsLoading(value) {
+      if (documentsLoading && !value) libraryLoadAttempted = true;
+      documentsLoading = value;
+    },
+    get documentUploadInFlight() { return documentUploadInFlight; }, set documentUploadInFlight(value) { documentUploadInFlight = value; },
+    documentOperationsInFlight,
+    get uploadPolicy() { return uploadPolicy; }, set uploadPolicy(value) { uploadPolicy = value; libraryObserved = true; }
+  });
 
   return {
     canViewDocuments,
+    canUploadDocuments,
     canPresentDocuments,
     selectedDocument,
     documentErrorCode,
     setDocumentStatus,
     renderDocumentsUi,
-    loadRoomDocuments,
-    uploadSelectedDocument,
-    downloadSelectedDocument,
-    deleteSelectedDocument
+    loadRoomDocuments: actions.loadRoomDocuments,
+    uploadSelectedDocument: actions.uploadSelectedDocument,
+    invalidate: actions.invalidate,
+    clearFeedback: () => documentFeedback.clear(),
+    downloadSelectedDocument: actions.downloadSelectedDocument,
+    deleteSelectedDocument: actions.deleteSelectedDocument,
+    onPageHide() { actions.invalidate(); documentFeedback.clear(); renderDocumentsUi(); },
+    async onPageShow(event: Pick<PageTransitionEvent, "persisted">) { if (event.persisted && canViewDocuments()) await actions.loadRoomDocuments(); }
   };
 }

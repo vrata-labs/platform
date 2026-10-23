@@ -4,6 +4,9 @@ import test from "node:test";
 import { Pool } from "pg";
 import { initializePostgresStorage } from "./storage-postgres-init.js";
 import { PostgresStorage } from "./storage.js";
+import { installRoomIdentitySchema } from "./identity/postgres-schema.js";
+import { installRoomPluginSchema } from "./plugins/postgres-schema.js";
+const installRoomExtensions = async (client: import("pg").PoolClient) => { await installRoomIdentitySchema(client); await installRoomPluginSchema(client); };
 
 const postgresUrl = process.env.VRATA_TEST_POSTGRES_URL;
 
@@ -19,6 +22,7 @@ test("Postgres initialization rolls back schema/data changes, unlocks and permit
   try {
     await admin.query(`create schema "${schema}"`);
     await assert.rejects(initializePostgresStorage(pool, {
+      installRoomExtensions,
       async seed(client) {
         await client.query("insert into tenants (tenant_id, name) values ('rolled-back', 'Uncommitted')");
         throw failure;
@@ -36,6 +40,7 @@ test("Postgres initialization rolls back schema/data changes, unlocks and permit
     const room = await storage.createRoom({ roomId: "preserved-room", name: "Preserved" });
     const tenantBefore = (await pool.query("select name from tenants where tenant_id = 'demo-tenant'")).rows[0].name;
     await assert.rejects(initializePostgresStorage(pool, {
+      installRoomExtensions,
       async seed(client) { await client.query("update tenants set name = 'Uncommitted' where tenant_id = 'demo-tenant'"); },
       async validateStoredTemplateVersions() { throw failure; },
       async synchronizeTemplateCatalog() { assert.fail("must not synchronize after failed validation"); }

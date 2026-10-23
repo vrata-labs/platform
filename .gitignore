@@ -7,6 +7,10 @@ build/
 .scene-assets/
 .reference-scene-assets/
 .template-rollback/
+.identity-rollback/
+.identity-boundary-rollback/
+.room-record-reader-rollback/
+.plugin-rollback/
 infra/docker/.template-wave2-rollback-sha
 .DS_Store
 .env
@@ -16,6 +20,7 @@ coverage/
 test-results/
 playwright-report/
 backups/
+.local/public-demo/
 infra/docker/.env.staging
 __pycache__/
 *.py[cod]

@@ -1,11 +1,21 @@
-import type { RoomCreateInput, TemplateRecord } from "./index.js";
+import type { RoomCreateInput, RoomRecord, TemplateRecord } from "./index.js";
 
-export function templateCreationFields(template: TemplateRecord | undefined, ownerId: string): Partial<RoomCreateInput> {
+export const personalOwnerHandoffHint = "Owner is assigned only after a v2 member invite and an explicit owner transfer.";
+
+export function displayOwnerParticipantId(room: Pick<RoomRecord, "ownerParticipantId" | "currentOwnerParticipantId">): string | null {
+  return room.currentOwnerParticipantId !== undefined ? room.currentOwnerParticipantId : room.ownerParticipantId ?? null;
+}
+
+export function personalRoomInviteFields(room: Pick<RoomRecord, "roomType" | "ownerParticipantId" | "currentOwnerParticipantId">): { role?: "member" } {
+  return room.roomType === "personal" && displayOwnerParticipantId(room) == null ? { role: "member" } : {};
+}
+
+export function templateCreationFields(template: TemplateRecord | undefined, ownerId: string, identityFloor: 1 | 2 = 1): Partial<RoomCreateInput> {
   if (!template?.defaults) return {};
   return {
     templateVersion: template.currentVersion,
     roomType: template.defaults.roomType,
-    ...(template.defaults.roomType === "personal" ? { ownerParticipantId: ownerId.trim() } : {})
+    ...(template.defaults.roomType === "personal" ? { ownerParticipantId: identityFloor === 2 ? null : ownerId.trim() } : {})
   };
 }
 

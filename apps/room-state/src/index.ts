@@ -1,13 +1,15 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 
-import { WebSocketServer, type WebSocket } from "ws";
+import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { applyRoomTemplateContext } from "./template-context.js";
 import {
   IMAGE_VIEWER_OBJECT_TYPE,
   REMOTE_BROWSER_OBJECT_TYPE,
   PDF_PRESENTATION_OBJECT_TYPE,
   VIDEO_PLAYER_OBJECT_TYPE,
+  SCREEN_SHARE_OBJECT_TYPE,
+  IDENTITY_UPGRADE_CLOSE_CODE,
   getRoomPermissions,
   hasRoomPermission,
   parseRoomRole,
@@ -18,7 +20,10 @@ import {
   type RoomPermission,
   type RoomRole
 } from "@vrata/shared-types";
-import { verifyRoomSessionToken } from "@vrata/shared-types/session-token";
+import { getRoomSessionTokenSecret, isRotatedDevelopmentSession, verifyRoomSessionToken } from "@vrata/shared-types/session-token";
+import { createIdentityProtocolReader, guardLegacySocket, SocketAuthorityError, type ReadIdentityProtocolPolicy } from "./identity-boundary.js";
+import { createRoomSessionV2Verifier, latestVerifiedRoomSession, latestVerifiedParticipantAuthority,
+  type VerifiedParticipantAuthority, type VerifiedRoomSessionV2 } from "./identity-v2-session.js";
 
 import type { PresenceState } from "./schema.js";
 import {
@@ -68,6 +73,8 @@ export interface RoomStateServer {
   avatarReliableStates: Map<string, Map<string, AvatarReliableStatePayload>>;
   socketParticipants: Map<WebSocket, { roomId: string; participantId: string; access: ParticipantAccessState }>;
   pendingDisconnects: Map<string, Map<string, ReturnType<typeof setTimeout>>>;
+  participantAuthorities: Map<string, Map<string, VerifiedParticipantAuthority>>;
+  v2Connections: Map<WebSocket, { roomId: string; participantId: string }>;
 }
 
 const DISCONNECT_GRACE_MS = 1500;
@@ -83,7 +90,8 @@ const metrics = {
   videoPlayersStartedTotal: 0,
   documentMediaPermissionDeniedTotal: new Map<string, number>(),
   videoPlaybackCommandsTotal: new Map<string, number>(),
-  remoteBrowserDeniedTotal: new Map<string, number>()
+  remoteBrowserDeniedTotal: new Map<string, number>(),
+  screenShareRetiredTotal: 0
 };
 
 export interface SeatClaimResultPayload {
@@ -91,6 +99,15 @@ export interface SeatClaimResultPayload {
   accepted: boolean;
   occupantId: string | null;
   previousSeatId: string | null;
+  /** Echoed only when the claim carried a valid commandId. */
+  commandId?: string;
+}
+
+/** Targeted acknowledgement of a correlated release; sent after any resulting room broadcast. */
+export interface SeatReleaseResultPayload {
+  commandId: string;
+  seatId: string | null;
+  releasedSeatId: string | null;
 }
 
 export interface PrivilegedRoomCommandResultPayload {
@@ -200,6 +217,9 @@ function roomStateMetricsText(authority: RoomStateServer): string {
     "# HELP vrata_room_state_disconnects_total Websocket disconnects observed by room-state.",
     "# TYPE vrata_room_state_disconnects_total counter",
     formatMetricLine("vrata_room_state_disconnects_total", metrics.socketDisconnectsTotal),
+    "# HELP vrata_room_state_screen_share_retired_total Screen-share objects retired after permission loss.",
+    "# TYPE vrata_room_state_screen_share_retired_total counter",
+    formatMetricLine("vrata_room_state_screen_share_retired_total", metrics.screenShareRetiredTotal, { reason: "permission_lost" }),
     "# HELP vrata_presentations_started_total Accepted PDF presentation object creations.",
     "# TYPE vrata_presentations_started_total counter",
     formatMetricLine("vrata_presentations_started_total", metrics.presentationsStartedTotal),
@@ -340,7 +360,7 @@ function safeEqual(left: string, right: string): boolean {
 }
 
 function getStateTokenSecret(env: NodeJS.ProcessEnv = process.env): string {
-  return env.STATE_TOKEN_SECRET ?? "dev-state-secret";
+  return getRoomSessionTokenSecret(env);
 }
 
 function resolveConnectionAccess(url: URL, roomId: string, participantId: string, env: NodeJS.ProcessEnv = process.env): ParticipantAccessState | null {
@@ -363,7 +383,10 @@ export function createRoomStateServer(): RoomStateServer {
     clients: new Map<string, Set<WebSocket>>(),
     avatarReliableStates: new Map<string, Map<string, AvatarReliableStatePayload>>(),
     socketParticipants: new Map<WebSocket, { roomId: string; participantId: string; access: ParticipantAccessState }>(),
-    pendingDisconnects: new Map<string, Map<string, ReturnType<typeof setTimeout>>>()
+    pendingDisconnects: new Map<string, Map<string, ReturnType<typeof setTimeout>>>(),
+    participantAuthorities: new Map<string, Map<string, VerifiedParticipantAuthority>>(),
+    // Includes initial verifications, before the socket becomes an admitted participant.
+    v2Connections: new Map<WebSocket, { roomId: string; participantId: string }>()
   };
 }
 
@@ -486,7 +509,7 @@ function ensureRoom(server: RoomStateServer, roomId: string): RoomState {
 
 function broadcastRoom(server: RoomStateServer, roomId: string): void {
   const room = server.rooms.get(roomId);
-  const payload = JSON.stringify({ type: "room_state", serverTimeMs: Date.now(), room: room ? serializeRoomState(room) : null });
+  const payload = JSON.stringify({ type: "room_state", serverTimeMs: Date.now(), capabilities: { surfaceStopRevision: 1, seatCommandCorrelation: 1 }, room: room ? serializeRoomState(room) : null });
   for (const client of server.clients.get(roomId) ?? []) {
     if (client.readyState === client.OPEN) {
       client.send(payload);
@@ -516,14 +539,58 @@ function broadcastToRoom(server: RoomStateServer, roomId: string, payload: unkno
   }
 }
 
+function joinWithAccess(room: RoomState, participantId: string, access: ParticipantAccessState): RoomState {
+  const next = joinRoom(room, participantId, access);
+  metrics.screenShareRetiredTotal += Object.values(room.mediaObjects.objects).filter(object =>
+    object.type === SCREEN_SHARE_OBJECT_TYPE && object.ownerParticipantId === participantId && !next.mediaObjects.objects[object.objectId]).length;
+  return next;
+}
+
+export function releaseVerifiedParticipantSocket(server: RoomStateServer, socket: WebSocket): void {
+  const closing = server.v2Connections.get(socket);
+  if (!closing) return;
+  server.v2Connections.delete(socket);
+  for (const connection of server.v2Connections.values()) {
+    if (connection.roomId === closing.roomId && connection.participantId === closing.participantId) return;
+  }
+  // No still-open initial verification can deliver an older grant. A fresh
+  // reconnect must read API authority again; a closed socket cannot repopulate this cache.
+  const records = server.participantAuthorities.get(closing.roomId);
+  records?.delete(closing.participantId);
+  if (records?.size === 0) server.participantAuthorities.delete(closing.roomId);
+}
+
+export function applyVerifiedParticipantAccess(server: RoomStateServer, current: VerifiedRoomSessionV2): ParticipantAccessState {
+  const records = server.participantAuthorities.get(current.roomId) ?? new Map<string, VerifiedParticipantAuthority>();
+  const effective = latestVerifiedParticipantAuthority(records.get(current.participantId), current);
+  records.set(current.participantId, effective);
+  server.participantAuthorities.set(current.roomId, records);
+  const access: ParticipantAccessState = { role: effective.role, permissions: [...effective.permissions],
+    sceneMediaSurfaces: current.sceneMediaSurfaces, roomTemplate: current.roomTemplate };
+  for (const metadata of server.socketParticipants.values()) {
+    if (metadata.roomId === current.roomId && metadata.participantId === current.participantId) {
+      metadata.access = { ...metadata.access, role: access.role, permissions: [...effective.permissions] };
+    }
+  }
+  const room = server.rooms.get(current.roomId);
+  const previous = room?.participants.find(participant => participant.participantId === current.participantId);
+  if (room && previous && (previous.role !== access.role || JSON.stringify(previous.permissions) !== JSON.stringify(access.permissions))) {
+    server.rooms.set(current.roomId, joinWithAccess(room, current.participantId, access));
+    broadcastRoom(server, current.roomId);
+  }
+  return access;
+}
+
 export function connectParticipant(server: RoomStateServer, roomId: string, participantId: string, socket: WebSocket, access: ParticipantAccessState = defaultAccess()): void {
+  const latest = server.participantAuthorities.get(roomId)?.get(participantId);
+  if (latest) access = { ...access, role: latest.role, permissions: [...latest.permissions] };
   const room = ensureRoom(server, roomId);
   const bound = applyRoomTemplateContext(room, access.roomTemplate);
   const configured = !access.roomTemplate && access.sceneMediaSurfaces
     ? { ...bound, mediaObjects: registerSceneMediaSurfaces(bound.mediaObjects, roomId, access.sceneMediaSurfaces) }
     : bound;
   cancelPendingDisconnect(server, roomId, participantId);
-  server.rooms.set(roomId, joinRoom(configured, participantId, access));
+  server.rooms.set(roomId, joinWithAccess(configured, participantId, access));
   const set = server.clients.get(roomId) ?? new Set<WebSocket>();
   set.add(socket);
   server.clients.set(roomId, set);
@@ -622,6 +689,7 @@ export function applyMediaObjectStopCommand(server: RoomStateServer, roomId: str
   commandId?: string;
   surfaceId?: string;
   objectId?: string;
+  expectedRevision?: unknown;
 }): MediaObjectCommandResultPayload {
   const room = ensureRoom(server, roomId);
   const objectId = input.objectId?.trim() || "";
@@ -629,7 +697,8 @@ export function applyMediaObjectStopCommand(server: RoomStateServer, roomId: str
   const result = stopMediaObject(room, participantId, {
     commandId: input.commandId?.trim() || randomUUID(),
     surfaceId: input.surfaceId?.trim() || "debug-main",
-    objectId
+    objectId,
+    expectedRevision: input.expectedRevision
   });
   server.rooms.set(roomId, result.room);
   if (result.result.accepted) {
@@ -794,6 +863,30 @@ export function applySeatClaim(server: RoomStateServer, roomId: string, particip
   };
 }
 
+const SEAT_COMMAND_ID = /^[A-Za-z0-9:_-]{1,64}$/;
+
+/** Seat claim/release from the participant's own socket. A valid commandId is an additive correlation:
+ * commands without it keep exactly the legacy replies, and it never carries authority. */
+export function handleSeatCommand(server: RoomStateServer, roomId: string, participantId: string,
+  payload: { type?: string; seatId?: unknown; commandId?: unknown }, reply: (message: unknown) => void): boolean {
+  const commandId = typeof payload.commandId === "string" && SEAT_COMMAND_ID.test(payload.commandId) ? payload.commandId : undefined;
+  if (payload.type === "seat_claim") {
+    const result = applySeatClaim(server, roomId, participantId, typeof payload.seatId === "string" ? payload.seatId : "");
+    reply({ type: "seat_claim_result", seatClaimResult: commandId ? { ...result, commandId } : result });
+    return true;
+  }
+  if (payload.type === "seat_release") {
+    const seatId = typeof payload.seatId === "string" ? payload.seatId : undefined;
+    const releasedSeatId = applySeatRelease(server, roomId, participantId, seatId);
+    if (commandId) {
+      const result: SeatReleaseResultPayload = { commandId, seatId: seatId?.trim() || null, releasedSeatId };
+      reply({ type: "seat_release_result", seatReleaseResult: result });
+    }
+    return true;
+  }
+  return false;
+}
+
 export function applySeatRelease(server: RoomStateServer, roomId: string, participantId: string, seatId?: string): string | null {
   if (seatId !== undefined && (typeof seatId !== "string" || seatId.trim().length === 0)) {
     throw new Error("invalid_seat_release");
@@ -834,6 +927,11 @@ function getRemoteBrowserObjectState(server: RoomStateServer, roomId: string, ob
   return object.state as RemoteBrowserObjectState;
 }
 
+// Open-url leaves frameStreamId unset, so the executor and frame credentials bind the one stream derived from the session.
+function remoteBrowserFrameStreamId(state: RemoteBrowserObjectState): string | undefined {
+  return state.frameStreamId ?? (state.executorSessionId ? `${state.executorSessionId}:frames` : undefined);
+}
+
 export function verifyRemoteBrowserBinding(server: RoomStateServer, input: Required<Pick<RemoteBrowserBindingRequest, "roomId" | "objectId" | "executorSessionId" | "executorInstanceId">> & Pick<RemoteBrowserBindingRequest, "mediaParticipantId" | "frameStreamId">): boolean {
   const room = server.rooms.get(input.roomId);
   const object = room?.mediaObjects.objects[input.objectId];
@@ -846,7 +944,7 @@ export function verifyRemoteBrowserBinding(server: RoomStateServer, input: Requi
     && state.executorSessionId === input.executorSessionId
     && state.executorInstanceId === input.executorInstanceId
     && (input.mediaParticipantId === undefined || state.mediaParticipantId === input.mediaParticipantId)
-    && (input.frameStreamId === undefined || state.frameStreamId === input.frameStreamId));
+    && (input.frameStreamId === undefined || remoteBrowserFrameStreamId(state) === input.frameStreamId));
 }
 
 function forwardRemoteBrowserPatch(server: RoomStateServer, roomId: string, objectId: string | null | undefined, patch: unknown): void {
@@ -866,7 +964,7 @@ function forwardRemoteBrowserPatch(server: RoomStateServer, roomId: string, obje
       body: JSON.stringify({
         sessionId: state.executorSessionId,
         executorInstanceId: state.executorInstanceId,
-        frameStreamId: state.frameStreamId,
+        frameStreamId: remoteBrowserFrameStreamId(state),
         mediaParticipantId: state.mediaParticipantId,
         roomId,
         objectId,
@@ -927,7 +1025,17 @@ function stopRemoteBrowserSession(sessionId: string | null | undefined): void {
   });
 }
 
-export function startRoomStateService(port = Number.parseInt(process.env.ROOM_STATE_PORT ?? "2567", 10)) {
+export function startRoomStateService(port = Number.parseInt(process.env.ROOM_STATE_PORT ?? "2567", 10), dependencies: { readIdentityPolicy?: ReadIdentityProtocolPolicy } = {}) {
+  getStateTokenSecret();
+  if (!dependencies.readIdentityPolicy && process.env.NODE_ENV === "production"
+    && (!process.env.API_INTERNAL_URL?.trim() || !getInternalServiceToken())) throw new Error("identity_authority_configuration_required");
+  const readIdentityPolicy = dependencies.readIdentityPolicy ?? createIdentityProtocolReader({
+    baseUrl: process.env.API_INTERNAL_URL?.trim() || "http://127.0.0.1:4000", internalToken: getInternalServiceToken()
+  });
+  const verifyV2Session = createRoomSessionV2Verifier({
+    baseUrl: process.env.API_INTERNAL_URL?.trim() || "http://127.0.0.1:4000",
+    internalToken: getInternalServiceToken(), readPolicy: readIdentityPolicy
+  });
   const authority = createRoomStateServer();
   const httpServer = createServer((request, response) => {
     void (async () => {
@@ -1061,18 +1169,16 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `localhost:${port}`}`);
     const roomId = url.searchParams.get("roomId") ?? "demo-room";
     const participantId = url.searchParams.get("participantId") ?? randomUUID();
-    const access = resolveConnectionAccess(url, roomId, participantId);
-    if (!access) {
-      socket.close(1008, "invalid_session_token");
+    const token = url.searchParams.get("accessToken");
+    const v2 = Boolean(token?.startsWith("rs2."));
+    const access = v2 ? null : resolveConnectionAccess(url, roomId, participantId);
+    if (!v2 && !access) {
+      if (isRotatedDevelopmentSession(token, getStateTokenSecret())) socket.close(IDENTITY_UPGRADE_CLOSE_CODE, "identity_upgrade_required");
+      else socket.close(1008, "invalid_session_token");
       return;
     }
 
-    try { connectParticipant(authority, roomId, participantId, socket, access); } catch {
-      socket.close(1008, "room_template_context_mismatch");
-      return;
-    }
-
-    socket.on("message", (raw) => {
+    const dispatch = (raw: RawData) => {
       try {
         const payload = JSON.parse(String(raw)) as {
           type?: string;
@@ -1107,16 +1213,7 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
           relayAvatarPoseFrame(authority, roomId, participantId, payload.poseFrame);
           return;
         }
-        if (payload.type === "seat_claim") {
-          const result = applySeatClaim(authority, roomId, participantId, typeof payload.seatId === "string" ? payload.seatId : "");
-          sendToSocket(socket, {
-            type: "seat_claim_result",
-            seatClaimResult: result
-          });
-          return;
-        }
-        if (payload.type === "seat_release") {
-          applySeatRelease(authority, roomId, participantId, typeof payload.seatId === "string" ? payload.seatId : undefined);
+        if (handleSeatCommand(authority, roomId, participantId, payload, message => sendToSocket(socket, message))) {
           return;
         }
         if (payload.type === "surface_create_object") {
@@ -1137,7 +1234,8 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
           const result = applyMediaObjectStopCommand(authority, roomId, participantId, {
             commandId: typeof payload.commandId === "string" ? payload.commandId : undefined,
             surfaceId: typeof payload.surfaceId === "string" ? payload.surfaceId : undefined,
-            objectId: typeof payload.objectId === "string" ? payload.objectId : undefined
+            objectId: typeof payload.objectId === "string" ? payload.objectId : undefined,
+            expectedRevision: payload.expectedRevision
           });
           sendToSocket(socket, {
             type: result.accepted ? "surface_command_result" : "access_denied",
@@ -1182,11 +1280,38 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
           timestamp: new Date().toISOString()
         });
       }
-    });
+    };
+    const onDenied = (event: { code: number; reason: string; queuedMessages: number; queuedBytes: number; errorKind?: string }) =>
+      logEvent({ service: "room-state", event: "identity_boundary_denied", roomId, participantId, ...event });
+    if (v2) {
+      authority.v2Connections.set(socket, { roomId, participantId });
+      let verifiedAccess: ParticipantAccessState | null = null;
+      let lastVerified: VerifiedRoomSessionV2 | null = null;
+      guardLegacySocket({ socket, roomId, onDenied, dispatch,
+        // Reuse the bounded ordered socket bridge; v2 authorization is checked
+        // against the real floor AND fresh API authority before every effect.
+        readPolicy: async () => {
+          const current = latestVerifiedRoomSession(lastVerified, await verifyV2Session(roomId, participantId, token!,
+            !authority.socketParticipants.has(socket)));
+          if (socket.readyState !== socket.OPEN) throw new SocketAuthorityError(1008, "invalid_session_token");
+          lastVerified = current;
+          verifiedAccess = applyVerifiedParticipantAccess(authority, { ...current,
+            sceneMediaSurfaces: current.sceneMediaSurfaces ?? verifiedAccess?.sceneMediaSurfaces,
+            roomTemplate: current.roomTemplate ?? verifiedAccess?.roomTemplate });
+          return { minimumProtocolVersion: 1, roomRequiresV2: false };
+        },
+        admit: () => {
+          if (!verifiedAccess) throw new Error("identity_authority_unavailable");
+          connectParticipant(authority, roomId, participantId, socket, verifiedAccess);
+        }
+      });
+    } else guardLegacySocket({ socket, roomId, readPolicy: readIdentityPolicy, onDenied,
+      admit: () => connectParticipant(authority, roomId, participantId, socket, access!), dispatch });
 
     socket.on("close", () => {
       metrics.socketDisconnectsTotal += 1;
-      disconnectParticipant(authority, roomId, participantId, socket);
+      releaseVerifiedParticipantSocket(authority, socket);
+      if (authority.socketParticipants.has(socket)) disconnectParticipant(authority, roomId, participantId, socket);
     });
 
     socket.on("error", (error) => {

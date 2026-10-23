@@ -1,6 +1,11 @@
 export type MediaRoomIdleAction = "schedule-disconnect" | "keep-room" | "ignore-stale-room";
 export type PassiveMediaOwnershipEvent = "startup-requested" | "startup-succeeded" | "startup-failed";
 
+export async function disconnectMediaRoomWithCleanup(cleanup: () => void, disconnect: () => Promise<void>): Promise<void> {
+  try { cleanup(); }
+  finally { await disconnect(); }
+}
+
 export interface MediaRoomIdleScheduler<Room> {
   clear(): void;
   reconcile(room: Room, action: MediaRoomIdleAction, onDeadline: () => void): void;
@@ -155,11 +160,12 @@ export function planMediaRoomIdleAction(input: {
   audioSessionJoined: boolean;
   hasPhysicalConsumer: boolean;
   passiveMediaRequired: boolean;
+  pendingPublication?: boolean;
 }): MediaRoomIdleAction {
   if (!input.roomIsCurrent) {
     return "ignore-stale-room";
   }
-  return input.passiveMediaRequired || input.audioSessionJoined || input.hasPhysicalConsumer
+  return input.passiveMediaRequired || input.audioSessionJoined || input.hasPhysicalConsumer || input.pendingPublication
     ? "keep-room"
     : "schedule-disconnect";
 }

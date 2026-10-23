@@ -64,7 +64,6 @@ export function createDocumentSurfaceActions(context: DocumentSurfaceActionsCont
   const {
     apiBaseUrl,
     roomId,
-    participantId,
     selectedDocument,
     canPresentDocuments,
     setDocumentStatus,
@@ -89,35 +88,45 @@ export function createDocumentSurfaceActions(context: DocumentSurfaceActionsCont
     documentMediaStatusEl
   } = context;
 
-  async function selectDocumentForSurface(): Promise<void> {
-    const selected = selectedDocument();
-    if (!selected) return;
+  async function selectDocumentForSurface(): Promise<void> { await selectDocumentForSurfaceAt(); }
+
+  async function selectDocumentForSurfaceAt(input?: { surfaceId: string; documentId: string; checksum?: string; assertActive: () => void }): Promise<boolean> {
+    const selected = input ? context.roomDocuments.find(document => document.documentId === input.documentId) : selectedDocument();
+    if (!selected) return false;
+    const surfaceId = () => input?.surfaceId ?? context.selectedMediaSurfaceId;
+    const assertActive = () => {
+      input?.assertActive();
+      if (input && (!canPresentDocuments() || !context.roomDocuments.some(document => document.documentId === input.documentId
+        && (input.checksum === undefined || document.checksum === input.checksum)))) throw new Error("document_context_changed");
+    };
     const kind = selected.metadata?.kind;
     if (!canPresentDocuments() || !kind || !["pdf", "image", "video"].includes(kind)) {
       setDocumentStatus("Presentable document and presenter role required", "document_not_presentable");
-      return;
+      return false;
     }
     context.presentationActionInFlight = true;
     let createdObject: { objectId: string; surfaceId: string; kind: "pdf" | "image" | "video" } | null = null;
     let metadataLinked = false;
     let previousDocumentId: string | null = null;
     try {
+      assertActive();
       setDocumentStatus("Selecting document for surface...");
-      const occupied = activeMediaObjectForSurface(context.selectedMediaSurfaceId);
+      const occupied = activeMediaObjectForSurface(surfaceId());
       let mediaObject: MediaObjectInstance<PdfPresentationState | ImageViewerState | VideoPlayerState> | null = kind === "pdf"
-        ? activePdfPresentationObjectForSurface(context.selectedMediaSurfaceId)
-        : kind === "image" ? activeImageViewerObjectForSurface(context.selectedMediaSurfaceId) : activeVideoPlayerObjectForSurface(context.selectedMediaSurfaceId);
+        ? activePdfPresentationObjectForSurface(surfaceId())
+        : kind === "image" ? activeImageViewerObjectForSurface(surfaceId()) : activeVideoPlayerObjectForSurface(surfaceId());
       if (occupied && !mediaObject) {
         throw new Error("surface-occupied");
       }
       if (!mediaObject) {
         const createResult = kind === "pdf"
-          ? await mediaSurfaceCommands.createPdfPresentationObjectOnSurface(context.selectedMediaSurfaceId)
-          : kind === "image" ? await mediaSurfaceCommands.createImageViewerObjectOnSurface(context.selectedMediaSurfaceId) : await mediaSurfaceCommands.createVideoPlayerObjectOnSurface(context.selectedMediaSurfaceId);
+          ? await mediaSurfaceCommands.createPdfPresentationObjectOnSurface(surfaceId())
+          : kind === "image" ? await mediaSurfaceCommands.createImageViewerObjectOnSurface(surfaceId()) : await mediaSurfaceCommands.createVideoPlayerObjectOnSurface(surfaceId());
         if (!createResult.accepted || !createResult.objectId) {
           throw new Error(createResult.blockedReason ?? "document_media_create_rejected");
         }
-        createdObject = { objectId: createResult.objectId, surfaceId: context.selectedMediaSurfaceId, kind };
+        createdObject = { objectId: createResult.objectId, surfaceId: surfaceId(), kind };
+        assertActive();
         const idleState: PdfPresentationState | ImageViewerState | VideoPlayerState = kind === "pdf"
           ? { status: "idle" as const, documentId: null, filename: null, checksum: null, pageCount: 0, currentPage: 1, displayMode: "normal" as const, lastInputEventId: null }
           : kind === "image"
@@ -127,8 +136,8 @@ export function createDocumentSurfaceActions(context: DocumentSurfaceActionsCont
           objectId: createResult.objectId,
           type: kind === "pdf" ? PDF_PRESENTATION_OBJECT_TYPE : kind === "image" ? IMAGE_VIEWER_OBJECT_TYPE : VIDEO_PLAYER_OBJECT_TYPE,
           roomId,
-          surfaceId: context.selectedMediaSurfaceId,
-          ownerParticipantId: participantId,
+          surfaceId: surfaceId(),
+          ownerParticipantId: context.participantId,
           state: idleState,
           status: "active",
           revision: createResult.revision ?? 0,
@@ -139,11 +148,12 @@ export function createDocumentSurfaceActions(context: DocumentSurfaceActionsCont
         previousDocumentId = mediaObject.state.documentId;
       }
       if (!mediaObject) throw new Error("document_media_object_missing");
-      const updated = await selectRoomDocumentSurface(apiBaseUrl, roomId, selected.documentId, context.selectedMediaSurfaceId, context.roomStateAccessToken);
+      const updated = await selectRoomDocumentSurface(apiBaseUrl, roomId, selected.documentId, surfaceId(), context.roomStateAccessToken);
       metadataLinked = true;
+      assertActive();
       context.roomDocuments = context.roomDocuments.map((item) => item.documentId === updated.documentId
         ? updated
-        : item.linkedSurfaceId === context.selectedMediaSurfaceId ? { ...item, linkedSurfaceId: null } : item);
+        : item.linkedSurfaceId === surfaceId() ? { ...item, linkedSurfaceId: null } : item);
       const patchResult = kind === "pdf"
         ? await mediaSurfaceCommands.patchPdfPresentationObject(mediaObject.objectId, mediaObject.surfaceId, mediaObject.revision, {
           type: "select-document",
@@ -178,7 +188,10 @@ export function createDocumentSurfaceActions(context: DocumentSurfaceActionsCont
       if (!patchResult.accepted) {
         throw new Error(patchResult.blockedReason ?? "presentation_select_rejected");
       }
+      // The accepted patch is the transaction commit. A later role/selection
+      // change cannot justify unlinking metadata for content already on screen.
       renderDocumentsUi(`Document selected for surface: ${updated.filename}`);
+      return true;
     } catch (error) {
       if (createdObject) {
         const stopPromise = createdObject.kind === "pdf"
@@ -192,18 +205,27 @@ export function createDocumentSurfaceActions(context: DocumentSurfaceActionsCont
         await selectRoomDocumentSurface(apiBaseUrl, roomId, selected.documentId, null, context.roomStateAccessToken).catch(() => undefined);
         context.roomDocuments = context.roomDocuments.map((item) => item.documentId === selected.documentId ? { ...item, linkedSurfaceId: null } : item);
         if (previousDocumentId && previousDocumentId !== selected.documentId) {
-          const restored = await selectRoomDocumentSurface(apiBaseUrl, roomId, previousDocumentId, context.selectedMediaSurfaceId, context.roomStateAccessToken).catch(() => null);
+          const restored = await selectRoomDocumentSurface(apiBaseUrl, roomId, previousDocumentId, surfaceId(), context.roomStateAccessToken).catch(() => null);
           if (restored) {
             context.roomDocuments = context.roomDocuments.map((item) => item.documentId === restored.documentId ? restored : item);
           }
         }
       }
-      console.warn("document_surface_select_failed", error);
+      console.warn("document_surface_select_failed", documentErrorCode(error));
       setDocumentStatus(`Document surface selection failed: ${documentErrorCode(error)}`, documentErrorCode(error));
+      return false;
     } finally {
       context.presentationActionInFlight = false;
       renderDocumentsUi(documentStatusEl.textContent || undefined);
     }
+  }
+
+  async function unlinkStoppedDocument(object: MediaObjectInstance): Promise<void> {
+    if (![PDF_PRESENTATION_OBJECT_TYPE, IMAGE_VIEWER_OBJECT_TYPE, VIDEO_PLAYER_OBJECT_TYPE].includes(object.type)) return;
+    const documentId = (object.state as PdfPresentationState | ImageViewerState | VideoPlayerState).documentId;
+    if (!documentId) return;
+    const updated = await selectRoomDocumentSurface(apiBaseUrl, roomId, documentId, null, context.roomStateAccessToken);
+    context.roomDocuments = context.roomDocuments.map(document => document.documentId === updated.documentId ? updated : document);
   }
 
   async function patchCurrentPresentation(patch: PdfPresentationPatch): Promise<void> {
@@ -322,6 +344,8 @@ export function createDocumentSurfaceActions(context: DocumentSurfaceActionsCont
 
   return {
     selectDocumentForSurface,
+    selectDocumentForSurfaceAt,
+    unlinkStoppedDocument,
     patchCurrentPresentation,
     goToPresentationPage,
     togglePresentationDisplayMode,

@@ -19,6 +19,7 @@ export function mapRoomInviteRow(row: {
   room_id: string;
   token_hash: string;
   role: RoomInviteRecord["role"];
+  protocol_version?: 1 | 2;
   waiting_room_enabled: boolean;
   created_at: string | Date;
   expires_at: string | Date;
@@ -31,6 +32,7 @@ export function mapRoomInviteRow(row: {
     roomId: row.room_id,
     tokenHash: row.token_hash,
     role: row.role,
+    ...(row.protocol_version === undefined ? {} : { protocolVersion: row.protocol_version }),
     waitingRoomEnabled: row.waiting_room_enabled,
     createdAt: isoString(row.created_at) ?? new Date().toISOString(),
     expiresAt: isoString(row.expires_at) ?? new Date().toISOString(),

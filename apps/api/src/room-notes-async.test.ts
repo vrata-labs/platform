@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { RoomNoteRecord, RoomRecord } from "./storage.js";
 import { createRoomNotesHarness, deferred } from "./testing/room-notes-harness.js";
+import { PassThrough } from "node:stream";
+import type { IncomingMessage } from "node:http";
+import { makeNotesExchange } from "./testing/room-notes-harness.js";
+import { createRoomEffectFacade } from "./identity/effect-facade.js";
 
 const root = "/api/rooms/demo-room/notes";
 
@@ -66,4 +70,49 @@ test("captured routers observe feature changes and do not share storage or count
   assert.equal((await first.send("PUT", `${root}/shared`, { content: "first" })).status, 201);
   assert.deepEqual((await second.send("GET", `${root}/shared`)).json(), { note: second.access.emptyRoomNote("demo-room", "shared") });
   assert.equal(first.metrics.notesVersionsCreatedTotal, 1); assert.equal(second.metrics.notesVersionsCreatedTotal, 0);
+});
+
+test("a role or epoch revoked while the notes body is pending prevents the guarded write", async (t) => {
+  const h = createRoomNotesHarness(t); h.actor.identityProtocolVersion = 2;
+  const entered = deferred<void>(), failure = new Error("identity_recovery_required"); let revoked = false;
+  Object.defineProperty(h.actor, "permissions", { configurable: true,
+    get() { entered.resolve(); return ["notes.view", "notes.edit"]; } });
+  h.context.runGuardedRoomEffect = async (_storage, _actor, _room, _permission, effect) => {
+    if (revoked) throw failure;
+    return effect(createRoomEffectFacade(h.storage, { roomWrite: true, check: () => {} }));
+  };
+  const write = t.mock.method(h.storage, "upsertRoomNote");
+  const body = Object.assign(new PassThrough(), { headers: {} }) as unknown as IncomingMessage;
+  const exchange = makeNotesExchange("PUT", `${root}/shared`);
+  const pending = h.route(body, exchange.response, "PUT", exchange.url, h.storage)!;
+  await entered.promise; (body as unknown as PassThrough).write('{"content":'); revoked = true;
+  (body as unknown as PassThrough).end('"stale"}');
+  await assert.rejects(pending, error => error === failure);
+  assert.equal(write.mock.callCount(), 0); assert.equal(exchange.output.writes, 0);
+});
+
+test("v2 private-note refusal releases no bytes and writes only a denied read audit", async (t) => {
+  const h = createRoomNotesHarness(t); h.actor.identityProtocolVersion = 2;
+  await h.storage.upsertRoomNote({ roomId: "demo-room", scope: "private", ownerParticipantId: "member-1", content: "private bytes" });
+  const failure = new Error("identity_recovery_required");
+  h.context.runGuardedRoomEffect = async () => { throw failure; };
+  const exchange = h.dispatch("GET", `${root}/private`);
+  await assert.rejects(exchange.pending!, error => error === failure);
+  assert.equal(exchange.output.writes, 0);
+  assert.deepEqual(h.logs.map(event => [event.action, event.result, event.reason]), [["notes.read", "denied", "identity_recovery_required"]]);
+});
+
+test("v2 read is audited on release and not reclassified as denied after a late fence completion error", async (t) => {
+  const h = createRoomNotesHarness(t); h.actor.identityProtocolVersion = 2;
+  const completionFailure = new Error("late_read_completion");
+  h.context.runGuardedRoomEffect = async (_storage, _actor, _room, _permission, effect) => {
+    assert.equal(h.logs.length, 0);
+    await effect(createRoomEffectFacade(h.storage, { roomWrite: true, check: () => {} }));
+    assert.equal(h.logs.length, 1, "allowed accounts for the already-released bytes");
+    throw completionFailure;
+  };
+  const exchange = h.dispatch("GET", `${root}/private`);
+  await assert.rejects(exchange.pending!, error => error === completionFailure);
+  assert.equal(exchange.output.writes, 1); assert.equal(exchange.output.status, 200);
+  assert.deepEqual(h.logs.map(event => [event.action, event.result]), [["notes.read", "allowed"]]);
 });

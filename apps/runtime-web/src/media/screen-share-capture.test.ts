@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { Track, type Room } from "livekit-client";
 
-import { captureAndPublishScreenShareStream, createMockShareStream } from "./screen-share-capture.js";
+import { captureAndPublishScreenShareStream, createMockShareStream, withScreenCaptureBeforeUpgrade } from "./screen-share-capture.js";
 
 type Publication = { trackSid?: string; sid?: string };
 type PublishOptions = { name?: string; source?: Track.Source | string };
@@ -43,6 +43,7 @@ function captureHarness(t: TestContext) {
   };
   replaceProperty(t, globalThis, "navigator", { mediaDevices });
   const publications: Array<{ track: MediaStreamTrack; options: PublishOptions | undefined }> = [];
+  const unpublished: MediaStreamTrack[] = [];
   const behavior = {
     publish: async (value: MediaStreamTrack): Promise<Publication> => ({ trackSid: `published-${value.id}` })
   };
@@ -52,16 +53,36 @@ function captureHarness(t: TestContext) {
       events.push(`publish:${value.id}`);
       publications.push({ track: value, options });
       return behavior.publish(value);
-    }
+    },
+    async unpublishTrack(track: MediaStreamTrack) { unpublished.push(track); }
   };
   const room = { localParticipant } as unknown as Room;
   return {
     events, stopped, track, video, audio, videoTracks, audioTracks, stream,
-    captures, mediaDevices, publications, behavior, room,
+    captures, mediaDevices, publications, unpublished, behavior, room,
     capture: (mediaAudioEnabled = false, objectId = "screen-1") =>
       captureAndPublishScreenShareStream(room, { mediaAudioEnabled, objectId })
   };
 }
+
+test("promotion captures during activation before connection work and publishes the same stream without a second prompt", async t => {
+  const h = captureHarness(t);
+  const result = await withScreenCaptureBeforeUpgrade(true, async stream => {
+    h.events.push("upgrade");
+    return captureAndPublishScreenShareStream(h.room, { objectId: "promoted-share", mediaAudioEnabled: true, stream });
+  });
+  assert.equal(result.stream, h.stream);
+  assert.equal(h.captures.length, 1);
+  assert.ok(h.events.indexOf("capture") < h.events.indexOf("upgrade"));
+  assert.deepEqual(h.stopped, []);
+});
+
+test("denied upgrade stops every pre-captured track without publishing", async t => {
+  const h = captureHarness(t);
+  await assert.rejects(withScreenCaptureBeforeUpgrade(true, async () => { throw new Error("upgrade_denied"); }), /upgrade_denied/);
+  assert.deepEqual(h.stopped, [...h.videoTracks, ...h.audioTracks].map(track => track.id));
+  assert.deepEqual(h.publications, []);
+});
 
 for (const navigatorValue of [{}, { mediaDevices: {} }]) {
   test(`capture rejects unsupported browser: ${JSON.stringify(navigatorValue)}`, async (t) => {
@@ -179,6 +200,7 @@ for (const kind of ["video", "audio"] as const) {
     assert.deepEqual(h.stopped, [...h.videoTracks, ...h.audioTracks].map((track) => track.id));
     assert.equal(h.publications.length, kind === "video" ? 1 : 2);
     assert.equal(h.events.includes("audio-tracks"), kind === "audio");
+    assert.deepEqual(h.unpublished, kind === "audio" ? [h.video, h.audio] : [h.video]);
   });
 }
 

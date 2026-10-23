@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { OWNERLESS_REFERENCE_PERSONAL_SQL, ROOM_RECORD_SCHEMA_SQL } from "./identity-rollback-guard.mjs";
 
 test("catalog rollout rejects incompatible images and preserves the verified baseline", () => {
   const output = execFileSync("python3", ["-B", "-c", `
@@ -24,6 +25,18 @@ rejects(lambda: m.assert_target_allowed(None, {"state":"active", "referenceRoomC
 rejects(lambda: m.assert_target_allowed(None, {"state":"wave2", "referenceRoomCount":1}, None, baseline), "reference_capable")
 rejects(lambda: m.assert_target_allowed(baseline, None, None, current), "below_wave2")
 m.assert_target_allowed(baseline, {"state":"active", "referenceRoomCount":3}, contract, current)
+rejects(lambda: m.assert_target_allowed(baseline, None, contract, current, 2), "identity_rollback_below_boundary")
+boundary = dict(contract, identityProtocolFloorGuard=1)
+reader = dict(boundary, roomRecordReader=2)
+frame = dict(reader, frameTokenCodec=2, mediaIdentityCodec=2, mediaScreenReconciler=2)
+m.assert_target_allowed(baseline, {"state":"active", "referenceRoomCount":3}, frame, current, 2)
+rejects(lambda: m.assert_target_allowed(baseline, None, boundary, current, 2), "room_record_rollback_requires_reader2")
+rejects(lambda: m.assert_target_allowed(baseline, None, contract, current, 1, True), "identity_rollback_below_boundary")
+m.assert_target_allowed(baseline, None, dict(boundary, frameTokenCodec=2), current, 1, True)
+for invalid in (None, True, "1", 0):
+    rejects(lambda: m.assert_target_allowed(None, None, dict(contract, identityProtocolFloorGuard=invalid), current, 2), "identity_rollback_below_boundary")
+for invalid in (0, True, None):
+    rejects(lambda: m.assert_target_allowed(None, None, boundary, current, invalid), "invalid_protocol_floor")
 with tempfile.TemporaryDirectory() as directory:
     host = m.CatalogHost(Path(directory) / "checkout")
     host.root.mkdir()
@@ -40,6 +53,10 @@ with tempfile.TemporaryDirectory() as directory:
     host.cli = cli
     host.run = lambda args: json.dumps(status)
     host.contract = lambda target: contract
+    host.minimum_identity_protocol = lambda: 1
+    host.identity_bound = lambda: False
+    host.ownerless_reference_personal = lambda: False
+    host.validate_identity_database = lambda: None
     rejects(lambda: host.mutate("activate", baseline), "verified_wave2")
     rejects(lambda: host.verify_wave2(baseline, None), "successful_gate")
     proof = Path(directory) / "gate.json"
@@ -101,6 +118,239 @@ with tempfile.TemporaryDirectory() as directory:
 print("catalog rollout assertions passed")
 `], { encoding: "utf8", input: "remaining deployment commands" });
   assert.match(output, /assertions passed/);
+});
+
+test("identity rollout reads the persistent floor while the API is down and rejects missing rows", () => {
+  execFileSync("python3", ["-B", "-c", `
+import importlib.util, tempfile
+spec = importlib.util.spec_from_file_location("catalog", ${JSON.stringify(fileURLToPath(new URL("./staging-template-catalog.py", import.meta.url)))})
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+with tempfile.TemporaryDirectory() as root:
+    host = m.CatalogHost(root)
+    answers = iter(["f"]); host.run = lambda args: next(answers)
+    assert host.minimum_identity_protocol() == 1
+    answers = iter(["t", "2"])
+    assert host.minimum_identity_protocol() == 2
+    for values in (["t", ""], ["t", "0"], ["t", "1\\n2"], ["unexpected"]):
+        answers = iter(values)
+        try: host.minimum_identity_protocol()
+        except ValueError as error: assert "invalid_protocol_floor" in str(error)
+        else: raise AssertionError("missing/corrupt floor must fail closed")
+    answers = iter(["t", "t"])
+    assert host.identity_bound() is True
+    answers = iter(["f"])
+    assert host.identity_bound() is False
+    import json
+    def model(api, state): return json.dumps({"services":{"api":{"environment":{"STATE_TOKEN_SECRET":api}},"room-state":{"environment":{"STATE_TOKEN_SECRET":state}}}})
+    signing = "configured-state-signing-secret-of-32-bytes"
+    for a, b in ((None,None),("dev-state-secret","dev-state-secret"),(signing,"different-secret")):
+        host.run = lambda args: model(a,b)
+        try: host.validate_identity_configuration()
+        except ValueError as error:
+            assert "identity_rollout_state_secret" in str(error)
+            assert "configured-secret" not in str(error) and "different-secret" not in str(error) and signing not in str(error)
+        else: raise AssertionError("bad, short or drifting signing secret accepted")
+    host.run = lambda args: model("configured-secret","configured-secret")
+    try: host.validate_identity_configuration()
+    except ValueError as error: assert str(error) == "identity_rollout_state_secret_too_short"
+    else: raise AssertionError("a signing secret shorter than the v2 codec minimum was accepted")
+    host.run = lambda args: model(signing, signing)
+    from pathlib import Path
+    env_file = Path(root)/"infra/docker/.env.staging"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text("VRATA_INTERNAL_SERVICE_TOKEN="+"x"*48+"\\n")
+    host.validate_identity_configuration()
+    def database(url): return json.dumps({"services":{"api":{"environment":{"POSTGRES_URL":url}},"postgres":{"environment":{"POSTGRES_USER":"vrata","POSTGRES_DB":"vrata"}}}})
+    host.run = lambda args: database("postgres://vrata:test-only@postgres:5432/vrata")
+    host.validate_identity_database()
+    for url in ("postgres://vrata:test-only@external/vrata", "postgres://vrata:test-only@postgres/other", "postgres://vrata:test-only@postgres/vrata?options=custom"):
+        host.run = lambda args: database(url)
+        try: host.validate_identity_database()
+        except ValueError as error: assert str(error) == "identity_rollout_requires_matching_bundled_database"
+        else: raise AssertionError("probed an unrelated database")
+`], { encoding: "utf8" });
+});
+
+test("staging rejects missing, placeholder or development internal credentials before compatible rollout", () => {
+  execFileSync("python3", ["-B", "-c", `
+import importlib.util,json,tempfile
+from pathlib import Path
+spec=importlib.util.spec_from_file_location("catalog",${JSON.stringify(fileURLToPath(new URL("./staging-template-catalog.py", import.meta.url)))})
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+with tempfile.TemporaryDirectory() as root:
+    host=m.CatalogHost(root)
+    host.run=lambda args:json.dumps({"services":{name:{"environment":{"STATE_TOKEN_SECRET":"configured-state-signing-secret-of-32-bytes"}} for name in ("api","room-state")}})
+    path=Path(root)/"infra/docker/.env.staging";path.parent.mkdir(parents=True)
+    for value in ("","dev-internal-service-token","REPLACE_WITH_"+"x"*48,"short-private-value","unconfigured-read-only-preflight"):
+        path.write_text("VRATA_INTERNAL_SERVICE_TOKEN="+value+"\\n")
+        try:host.validate_identity_configuration()
+        except ValueError as error:assert str(error)=="identity_rollout_internal_service_token_required"
+        else:raise AssertionError("unsafe internal credential accepted")
+    path.write_text("VRATA_INTERNAL_SERVICE_TOKEN="+"x"*48+"\\n")
+    host.validate_identity_configuration()
+    path.write_text("VRATA_INTERNAL_SERVICE_TOKEN=REPLACE_WITH_"+"x"*48+"\\n")
+    assert host.read_only_compose_environment()["VRATA_INTERNAL_SERVICE_TOKEN"]=="unconfigured-read-only-preflight"
+`], { encoding: "utf8" });
+});
+
+test("room-record reader two is required at floor two or with ownerless personal references", () => {
+  execFileSync("python3", ["-B", "-c", `
+import importlib.util, tempfile
+spec = importlib.util.spec_from_file_location("catalog", ${JSON.stringify(fileURLToPath(new URL("./staging-template-catalog.py", import.meta.url)))})
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+assert m.ROOM_RECORD_SCHEMA_SQL == ${JSON.stringify(ROOM_RECORD_SCHEMA_SQL)}, "stage and production schema probes drifted"
+assert m.OWNERLESS_REFERENCE_PERSONAL_SQL == ${JSON.stringify(OWNERLESS_REFERENCE_PERSONAL_SQL)}, "stage and production predicates drifted"
+def rejects(fn, code):
+    try: fn()
+    except (ValueError, RuntimeError) as e: assert str(e) == code, str(e)
+    else: raise AssertionError("expected " + code)
+current = "a"*40
+boundary = {"schemaVersion":1, "templateSchema":2, "referenceTemplateVersions":["1.0.0", "2.0.0"], "identityProtocolFloorGuard":1}
+reader = dict(boundary, roomRecordReader=2)
+codec = dict(boundary, frameTokenCodec=2)
+frame = dict(reader, frameTokenCodec=2, mediaIdentityCodec=2, mediaScreenReconciler=2)
+rejects(lambda: m.assert_target_allowed(None, None, boundary, current, 2), "room_record_rollback_requires_reader2")
+rejects(lambda: m.assert_target_allowed(None, None, boundary, current, 1, False, True), "room_record_rollback_requires_reader2")
+rejects(lambda: m.assert_target_allowed(None, None, None, current, 1, False, True), "room_record_rollback_requires_reader2")
+m.assert_target_allowed(None, None, None, current, 1, False, False)
+m.assert_target_allowed(None, None, codec, current, 1, True, False)
+m.assert_target_allowed(None, None, {"schemaVersion":1, "roomRecordReader":2}, current, 1, False, True)
+m.assert_target_allowed(None, None, frame, current, 2, True, True)
+m.assert_target_allowed(None, None, dict(frame, roomRecordReader=3), current, 2)
+for invalid in (None, True, "2", 1, 0, -2, 2.0):
+    rejects(lambda: m.assert_target_allowed(None, None, dict(reader, roomRecordReader=invalid), current, 2), "room_record_rollback_requires_reader2")
+for invalid in (None, "t", 0, 1):
+    rejects(lambda: m.assert_target_allowed(None, None, reader, current, 1, False, invalid), "room_record_rollout_invalid_reference_state")
+with tempfile.TemporaryDirectory() as root:
+    host = m.CatalogHost(root)
+    seen = []
+    def answering(*values):
+        answers = iter(values)
+        def run(args):
+            seen.append(args)
+            return next(answers)
+        host.run = run
+    answering("f", "f"); assert host.ownerless_reference_personal() is False
+    answering("t", "t", "t"); assert host.ownerless_reference_personal() is True
+    assert seen[-1][-1] == m.OWNERLESS_REFERENCE_PERSONAL_SQL
+    answering("t", "t", "f"); assert host.ownerless_reference_personal() is False
+    for values in (("f", "t"), ("f", ""), ("t", "f"), ("t", ""), ("t", "t", ""), ("t", "t", "private-room-id"), ("unexpected",)):
+        answering(*values)
+        rejects(host.ownerless_reference_personal, "room_record_rollout_invalid_reference_state")
+    prefix = host.compose + ["exec", "-T", "postgres"]
+    assert all(args[:len(prefix)] == prefix for args in seen), "probes only query the bundled database"
+    def api_down(*args, **kwargs): raise AssertionError("prepare must not require a running API")
+    host.cli = api_down
+    host.run = lambda args: '{"state":"wave2","referenceRoomCount":0}'
+    host.validate_identity_database = lambda: None
+    host.validate_identity_configuration = lambda: None
+    host.minimum_identity_protocol = lambda: 1
+    host.identity_bound = lambda: False
+    passed, original = [], m.assert_target_allowed
+    def spy(*args, **kwargs):
+        passed.append(kwargs.get("ownerless_reference_personal"))
+        return original(*args, **kwargs)
+    m.assert_target_allowed = spy
+    host.contract = lambda target: boundary
+    host.ownerless_reference_personal = lambda: True
+    rejects(lambda: host.prepare(current), "room_record_rollback_requires_reader2")
+    host.ownerless_reference_personal = lambda: False
+    assert host.prepare(current)["ownerlessReferencePersonal"] is False
+    host.contract = lambda target: reader
+    host.ownerless_reference_personal = lambda: True
+    assert host.prepare(current)["ownerlessReferencePersonal"] is True
+    assert passed == [True, False, True]
+`], { encoding: "utf8" });
+});
+
+test("frame-token codec two is required for activated or bound identity targets", () => {
+  execFileSync("python3", ["-B", "-c", `
+import importlib.util, tempfile
+spec = importlib.util.spec_from_file_location("catalog", ${JSON.stringify(fileURLToPath(new URL("./staging-template-catalog.py", import.meta.url)))})
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+def rejects(fn, code):
+    try: fn()
+    except (ValueError, RuntimeError) as e: assert str(e) == code, str(e)
+    else: raise AssertionError("expected " + code)
+current = "a"*40
+codec = {"schemaVersion":1, "templateSchema":2, "referenceTemplateVersions":["1.0.0", "2.0.0"], "identityProtocolFloorGuard":1,
+         "roomRecordReader":2, "frameTokenCodec":2, "mediaIdentityCodec":2, "mediaScreenReconciler":2}
+legacy = {key: value for key, value in codec.items() if key != "frameTokenCodec"}
+for floor, bound in ((2, False), (1, True), (2, True)):
+    m.assert_target_allowed(None, None, codec, current, floor, bound)
+    rejects(lambda: m.assert_target_allowed(None, None, legacy, current, floor, bound), "frame_rollback_requires_codec2")
+    for invalid in (None, True, False, 0, 1, 3, -2, "2", 2.0, [2]):
+        rejects(lambda: m.assert_target_allowed(None, None, dict(codec, frameTokenCodec=invalid), current, floor, bound), "frame_rollback_requires_codec2")
+for invalid in (None, True, False, 0, 1, 3, "2", 2.0):
+    rejects(lambda: m.assert_target_allowed(None, None, dict(codec, mediaIdentityCodec=invalid), current, 2), "media_rollback_requires_identity_codec2")
+    m.assert_target_allowed(None, None, dict(codec, mediaIdentityCodec=invalid), current, 1, True)
+for invalid in (None, True, False, 0, 1, 3, "2", 2.0):
+    rejects(lambda: m.assert_target_allowed(None, None, dict(codec, mediaScreenReconciler=invalid), current, 2), "media_rollback_requires_screen_reconciler2")
+    m.assert_target_allowed(None, None, dict(codec, mediaScreenReconciler=invalid), current, 1, True)
+# Boundary and reader failures keep their own codes.
+rejects(lambda: m.assert_target_allowed(None, None, dict(legacy, identityProtocolFloorGuard=None), current, 1, True), "identity_rollback_below_boundary_forbidden")
+rejects(lambda: m.assert_target_allowed(None, None, dict(legacy, roomRecordReader=1), current, 2), "room_record_rollback_requires_reader2")
+rejects(lambda: m.assert_target_allowed(None, None, dict(legacy, roomRecordReader=1), current, 1, True, True), "room_record_rollback_requires_reader2")
+# Unbound floor one keeps ordinary paired-tag compatibility; that is not frame-token acceptance.
+m.assert_target_allowed(None, None, None, current, 1, False, False)
+m.assert_target_allowed(None, None, legacy, current, 1, False, True)
+m.assert_target_allowed(None, None, dict(codec, frameTokenCodec=1), current, 1, False, True)
+with tempfile.TemporaryDirectory() as root:
+    host = m.CatalogHost(root)
+    def api_down(*args, **kwargs): raise AssertionError("prepare must not require a running API")
+    host.cli = api_down
+    host.run = lambda args: '{"state":"wave2","referenceRoomCount":0}'
+    host.validate_identity_database = lambda: None
+    host.validate_identity_configuration = lambda: None
+    host.minimum_identity_protocol = lambda: 1
+    host.ownerless_reference_personal = lambda: False
+    host.identity_bound = lambda: True
+    host.contract = lambda target: legacy
+    rejects(lambda: host.prepare(current), "frame_rollback_requires_codec2")
+    host.contract = lambda target: codec
+    assert host.prepare(current)["identityAuthorityBound"] is True
+    host.identity_bound = lambda: False
+    host.contract = lambda target: legacy
+    assert host.prepare(current)["identityAuthorityBound"] is False
+`], { encoding: "utf8" });
+});
+
+test("read-only preflight survives a failed checkout's missing Caddy key without starting services", () => {
+  execFileSync("python3", ["-B", "-c", `
+import importlib.util, os, subprocess, tempfile
+from pathlib import Path
+from unittest.mock import patch
+spec = importlib.util.spec_from_file_location("catalog", ${JSON.stringify(fileURLToPath(new URL("./staging-template-catalog.py", import.meta.url)))})
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+with tempfile.TemporaryDirectory() as root:
+    env_file = Path(root)/"infra/docker/.env.staging"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text("STATE_TOKEN_SECRET=configured-state-signing-key\\n")
+    host = m.CatalogHost(root)
+    seen = []
+    def run(args, **kwargs):
+        seen.append((args, kwargs))
+        return subprocess.CompletedProcess(args, 0, "read-only-ok", "")
+    with patch.dict(os.environ, {"VRATA_INTERNAL_SERVICE_TOKEN": ""}), patch.object(m.subprocess, "run", side_effect=run):
+        assert host.run(host.compose+["exec", "-T", "postgres", "true"]) == "read-only-ok"
+        assert seen[-1][1]["env"]["VRATA_INTERNAL_SERVICE_TOKEN"] == "unconfigured-read-only-preflight"
+        assert seen[-1][1]["env"]["VRATA_IDENTITY_PROXY_TOKEN"] == "unconfigured-read-only-preflight"
+        assert host.run(host.compose+["config"]) == "read-only-ok"
+        assert host.run(["git", "status"]) == "read-only-ok"
+        assert seen[-1][1]["env"] is None
+        env_file.write_text("VRATA_INTERNAL_SERVICE_TOKEN=configured-internal-key\\n")
+        assert "VRATA_INTERNAL_SERVICE_TOKEN" not in host.read_only_compose_environment()
+    env_file.write_text("STATE_TOKEN_SECRET=configured-state-signing-key\\n")
+    host.contract = lambda target: {"schemaVersion":1,"templateSchema":2,"identityProtocolFloorGuard":1}
+    host.validate_identity_database = lambda: None
+    host.run = lambda args: '{"state":"wave2","referenceRoomCount":0}'
+    host.minimum_identity_protocol = lambda: 2
+    host.identity_bound = lambda: False
+    with patch.dict(os.environ, {"VRATA_INTERNAL_SERVICE_TOKEN": ""}):
+        try: host.prepare("a"*40)
+        except ValueError as error: assert str(error) == "identity_rollout_internal_service_token_required"
+        else: raise AssertionError("floor two accepted an unconfigured service credential")
+`], { encoding: "utf8" });
 });
 
 test("bootstrap schema probe distinguishes absent, empty, initialized and broken state", () => {

@@ -107,11 +107,34 @@ test("seat claim and release send envelopes", () => {
   assert.equal(JSON.parse(sent[0]!).type, "seat_claim");
   assert.equal(JSON.parse(sent[0]!).seatId, "seat-a");
   assert.equal(JSON.parse(sent[1]!).type, "seat_release");
+  assert.equal(Object.hasOwn(JSON.parse(sent[0]!), "commandId"), false, "manual legacy envelopes are unchanged");
+  sendSeatClaim(client, "seat-b", "plugin:1"); sendSeatRelease(client, "seat-b", "release:1"); sendSeatClaim(client, "seat-c", "bad id");
+  assert.deepEqual(sent.slice(2).map(raw => JSON.parse(raw)), [{ type: "seat_claim", seatId: "seat-b", commandId: "plugin:1" },
+    { type: "seat_release", seatId: "seat-b", commandId: "release:1" }, { type: "seat_claim", seatId: "seat-c" }]);
 });
 
 test("room-state url includes access token when provided", () => {
   const url = createRoomStateUrl("ws://example.test/state", "room-1", "p-1", "token.123");
   assert.equal(url, "ws://example.test/state?roomId=room-1&participantId=p-1&accessToken=token.123");
+});
+
+test("identity close is delivered before reconnect handling without exposing arbitrary server text", t => {
+  let close!: (event: { code: number; reason: string }) => void;
+  class FakeSocket {
+    addEventListener(type: string, listener: typeof close) { if (type === "close") close = listener; }
+  }
+  const original = globalThis.WebSocket;
+  globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
+  t.after(() => { globalThis.WebSocket = original; });
+  const events: string[] = [];
+  connectRoomState("ws://room.test", "room", "self", {
+    onRoomState() {}, onError() {}, onIdentityRequired: reason => events.push(reason), onClose: () => events.push("close")
+  });
+  close({ code: 4406, reason: "identity_upgrade_required" });
+  assert.deepEqual(events, ["identity_upgrade_required", "close"]);
+  events.length = 0;
+  close({ code: 4409, reason: "sensitive arbitrary reason" });
+  assert.deepEqual(events, ["close"]);
 });
 
 test("surface create command sends privileged envelope", () => {
@@ -145,6 +168,32 @@ test("media object commands send object lifecycle envelopes", () => {
   assert.equal(JSON.parse(sent[3]!).type, "surface_patch_object_state");
   assert.equal(JSON.parse(sent[3]!).expectedRevision, 0);
   assert.equal(JSON.parse(sent[4]!).type, "surface_stop_object");
+});
+
+test("revisioned stop is additive and preserves the legacy wire envelope", () => {
+  const sent: string[] = [], client = createClient(sent);
+  sendSurfaceStopObjectCommand(client, { commandId: "legacy", surfaceId: "wall", objectId: "board" });
+  sendSurfaceStopObjectCommand(client, { commandId: "confirmed", surfaceId: "wall", objectId: "board", expectedRevision: 3 });
+  assert.deepEqual(JSON.parse(sent[0]!), { type: "surface_stop_object", commandId: "legacy", surfaceId: "wall", objectId: "board" });
+  assert.equal(JSON.parse(sent[1]!).expectedRevision, 3);
+});
+
+test("safe replacement capability requires the explicit versioned server advertisement", t => {
+  let receive!: (event: { data: string }) => void;
+  class FakeSocket { addEventListener(type: string, listener: typeof receive) { if (type === "message") receive = listener; } }
+  const previous = globalThis.WebSocket; globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
+  t.after(() => { globalThis.WebSocket = previous; });
+  const advertised: Array<boolean | undefined> = [], seats: Array<boolean | undefined> = [], releases: unknown[] = [];
+  connectRoomState("ws://room.test", "room", "self", { onRoomState: snapshot => { advertised.push(snapshot.capabilities?.surfaceStopRevision); seats.push(snapshot.capabilities?.seatCommandCorrelation); },
+    onSeatReleaseResult: result => releases.push(result), onError: error => { throw error; } });
+  for (const capabilities of [undefined, { surfaceStopRevision: true }, { surfaceStopRevision: "1" }, { surfaceStopRevision: 1 },
+    { seatCommandCorrelation: true }, { surfaceStopRevision: 1, seatCommandCorrelation: 1 }]) {
+    receive({ data: JSON.stringify({ type: "room_state", room: { roomId: "room", participants: [], seatOccupancy: {} }, capabilities }) });
+  }
+  assert.deepEqual(advertised, [undefined, undefined, undefined, true, undefined, true]);
+  assert.deepEqual(seats, [undefined, undefined, undefined, undefined, undefined, true]);
+  receive({ data: JSON.stringify({ type: "seat_release_result", seatReleaseResult: { commandId: "release:1", seatId: "seat-a", releasedSeatId: null } }) });
+  assert.deepEqual(releases, [{ commandId: "release:1", seatId: "seat-a", releasedSeatId: null }]);
 });
 
 test("connectRoomState routes inbound avatar reliable state, pose frame and seat claim result", async () => {

@@ -73,6 +73,13 @@ Compose pull/up → public HTTPS health → authenticated seed → единст�
 patch → staging/Rutube gate → verify-wave2 → atomic accepted JSON → legacy marker →
 Wave 2 baseline. Сервисы запускаются только из опубликованных SHA images.
 
+Общий бюджет verification gate — 70 минут, job — 200 минут с запасом на rollback.
+Это суммарный бюджет всего последовательного каталога и обязательного Rutube, а не
+разрешённая задержка пользовательского действия: лимиты отдельных сценариев не
+увеличиваются. При расширении каталога бюджет сверяется с фактическим полным прогоном
+и оставляет время на запись отчёта. Истечение внешнего deadline до финального отчёта
+не считается зелёной проверкой даже при успешных отдельных сценариях.
+
 Authoritative JSON содержит image SHA, asset SHA, snapshot ID, foundation digests и
 run ID/attempt. `.staging-successful-image-tag` — производный файл совместимости.
 `IMAGE_TAG` в env может быть кандидатом и не является доказательством прохождения gate.

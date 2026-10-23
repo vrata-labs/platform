@@ -4,7 +4,7 @@ import type { createDocumentSurfaceView } from "./document-surface-view.js";
 import type { createMediaObjectQueries } from "./media/media-object-queries.js";
 
 type LibraryActions = Pick<ReturnType<typeof createDocumentLibraryRuntime>,
-  "renderDocumentsUi" | "uploadSelectedDocument" | "downloadSelectedDocument" | "deleteSelectedDocument"
+  "renderDocumentsUi" | "uploadSelectedDocument" | "downloadSelectedDocument" | "deleteSelectedDocument" | "loadRoomDocuments"
 >;
 type SurfaceActions = Pick<ReturnType<typeof createDocumentSurfaceActions>,
   "selectDocumentForSurface" | "goToPresentationPage" | "togglePresentationDisplayMode" |
@@ -23,6 +23,7 @@ export interface DocumentControlBindingsContext extends LibraryActions, SurfaceA
   documentDownloadButton: Button;
   documentSurfaceButton: Button;
   documentDeleteButton: Button;
+  documentRefreshButton: Button;
   presentationPrevButton: Button;
   presentationNextButton: Button;
   presentationLargeButton: Button;
@@ -42,7 +43,7 @@ export function bindDocumentControls(context: DocumentControlBindingsContext): v
     documentMediaPlayButton, documentMediaFitButton, documentMediaLoopInput,
     documentMediaSeekInput, documentMediaStopButton, renderDocumentsUi,
     uploadSelectedDocument, downloadSelectedDocument, selectDocumentForSurface,
-    deleteSelectedDocument, currentPdfPresentationObject, goToPresentationPage,
+    deleteSelectedDocument, documentRefreshButton, loadRoomDocuments, currentPdfPresentationObject, goToPresentationPage,
     togglePresentationDisplayMode, stopCurrentPresentation,
     toggleDocumentMediaPlayback, toggleDocumentMediaFit,
     patchCurrentDocumentMedia, documentMediaInputEventId, stopCurrentDocumentMedia
@@ -73,6 +74,7 @@ export function bindDocumentControls(context: DocumentControlBindingsContext): v
   documentDeleteButton.addEventListener("click", () => {
     void deleteSelectedDocument();
   });
+  documentRefreshButton.addEventListener("click", () => { void loadRoomDocuments(); });
 
   presentationPrevButton.addEventListener("click", () => {
     const object = currentPdfPresentationObject();

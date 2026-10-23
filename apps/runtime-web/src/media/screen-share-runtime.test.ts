@@ -350,3 +350,43 @@ test("reconciliation traverses an entry snapshot, not entries inserted by cleanu
   controls.syncScreenShareRuntimeWithObjects();
   assert.equal(h.entries.has("one"), false); assert.equal(h.entries.get("inserted")?.stopping, false);
 });
+
+test("retired local objects unpublish both screen sources before stopping capture without touching the microphone", async () => {
+  const h = harness(), video = h.mediaTrack("screen-video"), audio = h.mediaTrack("screen-audio");
+  const entry = h.entry("one", { remote: false, publishedTracks: [video, audio] });
+  let finish!: () => void;
+  const pending = new Promise<void>(done => { finish = done; });
+  h.state.room = snapshot();
+  h.state.livekit = { localParticipant: { unpublishTrack(track: MediaStreamTrack, stop: boolean) {
+    h.events.push(["unpublish", track.id, stop]); return pending;
+  } } } as unknown as Room;
+  h.controls.syncScreenShareRuntimeWithObjects();
+  assert.deepEqual(h.events.slice(0, 2), [["unpublish", "screen-video", true], ["unpublish", "screen-audio", true]]);
+  assert.equal(h.events.some(([event, id]) => event === "stop" && id === "screen-video"), true);
+  assert.equal(h.events.some(([event, id]) => event === "stop" && id === "screen-audio"), true);
+  assert.equal(entry.stopping, true); assert.equal(h.entries.size, 0); assert.equal(h.debug.screenShareState, "stopped");
+  const replacement = h.entry("one", { remote: false }); h.state.room = snapshot(share());
+  h.controls.syncScreenShareRuntimeWithObjects();
+  finish(); await pending; await Promise.resolve();
+  assert.equal(h.entries.get("one"), replacement, "late unpublish completion cannot detach a newer entry");
+  assert.equal(replacement.stopping, false);
+  assert.equal(h.events.filter(([event]) => event === "unpublish").length, 2);
+});
+
+test("object reconciliation does not duplicate an explicit stop or unpublish remote tracks", () => {
+  const h = harness(); h.state.room = snapshot(); let calls = 0;
+  h.state.livekit = { localParticipant: { unpublishTrack() { calls++; } } } as unknown as Room;
+  h.entry("stopping-local", { remote: false, stopping: true, publishedTracks: [h.mediaTrack("video")] });
+  h.entry("remote", { publishedTracks: [h.mediaTrack("remote")] });
+  h.controls.syncScreenShareRuntimeWithObjects();
+  assert.equal(calls, 0); assert.equal(h.entries.size, 0);
+});
+
+test("failed local unpublish still stops capture and leaves no stale runtime entry", async () => {
+  const h = harness(); h.state.room = snapshot();
+  const track = h.mediaTrack("video"); h.entry("one", { remote: false, publishedTracks: [track] });
+  h.state.livekit = { localParticipant: { unpublishTrack() { throw new Error("transport_failed"); } } } as unknown as Room;
+  h.controls.syncScreenShareRuntimeWithObjects(); await Promise.resolve();
+  assert.equal(h.entries.size, 0); assert.equal(h.debug.screenShareState, "stopped");
+  assert.equal(h.events.some(([event, id]) => event === "stop" && id === "video"), true);
+});

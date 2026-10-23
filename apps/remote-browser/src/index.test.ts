@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { once } from "node:events";
+import { request as httpRequest } from "node:http";
 
 import {
   createRemoteBrowserAudioCaptureOptions,
@@ -142,6 +144,41 @@ test("remote browser production service requires auth and bound session identity
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
+});
+
+function rawRequest(port: number, path: string, headers: Record<string, string>): Promise<string> {
+  return new Promise((resolve) => {
+    const request = httpRequest({ host: "127.0.0.1", port, path, headers, setHost: false, agent: false });
+    request.on("upgrade", (_response, socket) => { socket.destroy(); resolve("upgraded"); });
+    request.on("response", (response) => { response.resume(); resolve(`status:${response.statusCode}`); });
+    request.on("error", () => resolve("dropped"));
+    request.end();
+  });
+}
+
+test("malformed Host drops frame upgrades and request failure logs omit the query", async () => {
+  const server = startRemoteBrowserService(4044, { NODE_ENV: "development" });
+  const written: string[] = [];
+  const write = process.stdout.write;
+  process.stdout.write = function (this: NodeJS.WriteStream, chunk: string | Uint8Array, ...rest: unknown[]) {
+    written.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+    return (write as (...args: unknown[]) => boolean).call(this, chunk, ...rest);
+  } as typeof process.stdout.write;
+  try {
+    if (!server.listening) await once(server, "listening");
+    const upgrade = await rawRequest(4044, "/frames?token=private-frame-query", { host: "bad host[", connection: "Upgrade", upgrade: "websocket",
+      "sec-websocket-version": "13", "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==" });
+    assert.equal(upgrade, "dropped");
+    const failed = await rawRequest(4044, "/health/live?token=private-request-query", { host: "bad host[" });
+    assert.equal(failed, "status:500");
+    assert.equal((await fetch("http://127.0.0.1:4044/health/live")).ok, true);
+  } finally {
+    process.stdout.write = write;
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+  const failureLog = written.find((line) => line.includes("\"request_failed\""));
+  assert.equal(failureLog?.includes("\"path\":\"/health/live\""), true);
+  assert.equal(written.some((line) => line.includes("private-frame-query") || line.includes("private-request-query")), false);
 });
 
 test("remote browser maps surface UV to browser viewport coordinates", () => {

@@ -3,10 +3,11 @@ import test from "node:test";
 import type { RuntimeNoteRecord, RuntimeNoteVersionRecord } from "./index.js";
 import { deferred, note, notesHarness, settle, version } from "./testing/notes-runtime-harness.js";
 
-for (const deniedBy of ["flag", "permission"] as const) {
+for (const deniedBy of ["flag", "permission", "blocked-session"] as const) {
   test(`load/save/export do not call the API when denied by ${deniedBy}`, async (t) => {
     const h = notesHarness(t);
     if (deniedBy === "flag") h.controls.flags = { notesEnabled: false };
+    else if (deniedBy === "blocked-session") h.context.isSessionBlocked = () => true;
     else h.setPermissions();
     await h.runtime.loadActiveNote();
     await h.runtime.saveActiveNote();
@@ -19,7 +20,83 @@ for (const deniedBy of ["flag", "permission"] as const) {
   });
 }
 
-test("load exposes loading state before awaiting, then reads current scope/token for history", async (t) => {
+test("session block cancels autosave and protects the unsaved editor from late load/restore responses", async t => {
+  const h = notesHarness(t);
+  const pending = deferred<RuntimeNoteRecord>();
+  h.handlers.fetchRoomNote = () => pending.promise;
+  h.handlers.restoreRoomNoteVersion = () => pending.promise;
+  h.elements.notesVersionSelect.value = "v1";
+  h.state.notesVersions = [version()];
+  const load = h.runtime.loadActiveNote();
+  const restore = h.runtime.restoreSelectedNoteVersion();
+  h.elements.notesEditor.value = "unsaved draft";
+  h.runtime.scheduleNotesAutosave();
+  h.context.isSessionBlocked = () => true;
+  h.runtime.cancelPendingNotes();
+  h.runtime.syncNotesAccessUi();
+  assert.equal(h.timers.size, 0);
+  assert.equal(h.elements.notesEditor.disabled, true);
+  pending.resolve(note("late saved server text"));
+  await Promise.all([load, restore]);
+  assert.equal(h.elements.notesEditor.value, "unsaved draft");
+  assert.equal(h.calls.some(call => call.name === "saveRoomNote"), false);
+});
+
+test("scope changes save dirty text under its original scope before fetching the next note", async t => {
+  const h = notesHarness(t);
+  await h.runtime.loadActiveNote();
+  h.calls.length = 0;
+  h.elements.notesEditor.value = "shared changes";
+  h.runtime.scheduleNotesAutosave();
+  await h.runtime.changeNotesScope("private");
+  assert.equal(h.timers.size, 0);
+  assert.equal(h.calls[0]?.name, "saveRoomNote");
+  assert.equal(h.calls[0]?.args[2], "shared");
+  assert.equal(h.calls[0]?.args[4], "shared changes");
+  assert.equal(h.state.activeNotesScope, "private");
+  assert.equal(h.runtime.getUnsavedNote(), null);
+});
+
+test("denial while switching scope neither relabels nor publishes the dirty draft", async t => {
+  const h = notesHarness(t);
+  await h.runtime.loadActiveNote();
+  h.elements.notesEditor.value = "private-to-be but still shared changes";
+  h.handlers.saveRoomNote = async () => {
+    assert.deepEqual(h.runtime.getUnsavedNote(), { scope: "shared", content: h.elements.notesEditor.value });
+    h.context.isSessionBlocked = () => true;
+    h.runtime.cancelPendingNotes();
+    throw new Error("identity_upgrade_required");
+  };
+  await h.runtime.changeNotesScope("private");
+  assert.equal(h.state.activeNotesScope, "shared");
+  assert.deepEqual(h.runtime.getUnsavedNote(), { scope: "shared", content: h.elements.notesEditor.value });
+});
+
+test("saved text from the old scope is not a dirty draft when the next scope fails to load", async t => {
+  const h = notesHarness(t);
+  await h.runtime.loadActiveNote();
+  h.handlers.fetchRoomNote = async () => { throw new Error("identity_recovery_required"); };
+  await h.runtime.changeNotesScope("private");
+  assert.equal(h.runtime.getUnsavedNote(), null);
+  assert.equal(h.elements.notesEditor.disabled, true);
+});
+
+test("revoked edit permission preserves a local draft and still allows changing to private notes", async t => {
+  const h = notesHarness(t);
+  await h.runtime.loadActiveNote();
+  h.elements.notesEditor.value = "unsaved shared note";
+  h.setPermissions("notes.view");
+  const drafts: unknown[] = [];
+  h.context.preserveDraft = draft => { drafts.push(draft); return true; };
+  h.calls.length = 0;
+  assert.equal(await h.runtime.changeNotesScope("private"), true);
+  assert.deepEqual(drafts, [{ scope: "shared", content: "unsaved shared note" }]);
+  assert.equal(h.calls.some(call => call.name === "saveRoomNote"), false);
+  assert.equal(h.state.activeNotesScope, "private");
+  assert.equal(h.elements.notesEditor.disabled, false);
+});
+
+test("a scope changed during loading cannot edit the previous scope's content", async (t) => {
   const h = notesHarness(t);
   const pending = deferred<RuntimeNoteRecord>();
   h.handlers.fetchRoomNote = () => pending.promise;
@@ -38,7 +115,8 @@ test("load exposes loading state before awaiting, then reads current scope/token
   assert.equal(h.state.notesLastUpdatedAt, note().updatedAt);
   assert.equal(h.state.notesSaveState, "ready");
   assert.equal(h.state.notesVersions, versions);
-  assert.equal(h.elements.notesStatusEl.textContent, "Notes saved");
+  assert.equal(h.elements.notesStatusEl.textContent, "Notes read-only");
+  assert.equal(h.elements.notesEditor.disabled, true);
   assert.deepEqual(h.calls[1].args, ["https://example.test", "room", "private", "token-2"]);
   assert.ok(h.calls.every((call) => call.receiver === undefined));
 });

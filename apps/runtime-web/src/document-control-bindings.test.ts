@@ -18,6 +18,7 @@ function harness(t: TestContext) {
     documentSelect: new DocumentTestElement(), documentUploadButton: new DocumentTestElement(),
     documentDownloadButton: new DocumentTestElement(), documentSurfaceButton: new DocumentTestElement(),
     documentDeleteButton: new DocumentTestElement(), presentationPrevButton: new DocumentTestElement(),
+    documentRefreshButton: new DocumentTestElement(), loadRoomDocuments: action("refresh"),
     presentationNextButton: new DocumentTestElement(), presentationLargeButton: new DocumentTestElement(),
     presentationStopButton: new DocumentTestElement(), documentMediaPlayButton: new DocumentTestElement(),
     documentMediaFitButton: new DocumentTestElement(), documentMediaLoopInput: new DocumentTestElement(),
@@ -39,9 +40,9 @@ function harness(t: TestContext) {
 test("binding is lazy and routes each document/media button exactly once", (t) => {
   const h = harness(t); assert.deepEqual(h.events, []); assert.deepEqual(h.dom.storage.writes, []);
   for (const button of [h.context.documentUploadButton, h.context.documentDownloadButton, h.context.documentSurfaceButton,
-    h.context.documentDeleteButton, h.context.presentationLargeButton, h.context.presentationStopButton,
+    h.context.documentDeleteButton, h.context.documentRefreshButton, h.context.presentationLargeButton, h.context.presentationStopButton,
     h.context.documentMediaPlayButton, h.context.documentMediaFitButton, h.context.documentMediaStopButton]) button.click();
-  assert.deepEqual(h.events, ["upload", "download", "selectSurface", "delete", "display", "stopPdf", "play", "fit", "stopMedia"]
+  assert.deepEqual(h.events, ["upload", "download", "selectSurface", "delete", "refresh", "display", "stopPdf", "play", "fit", "stopMedia"]
     .map((name) => ({ name, args: [] })));
 });
 

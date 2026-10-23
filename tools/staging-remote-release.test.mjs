@@ -92,3 +92,84 @@ with tempfile.TemporaryDirectory() as directory:
     assert calls==[first,feature]
 `], { encoding: "utf8" });
 });
+
+test("read-only host preflight refuses an accepted rollback target incompatible with the live identity boundary", () => {
+  const file = fileURLToPath(new URL("./staging-remote-release.py", import.meta.url));
+  execFileSync("python3", ["-B", "-c", `
+import importlib.util,tempfile
+from contextlib import nullcontext
+spec=importlib.util.spec_from_file_location("remote",${JSON.stringify(file)})
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+with tempfile.TemporaryDirectory() as root:
+    host=m.ReleaseHost(root);calls=[]
+    host.env=lambda:{"LIVEKIT_NODE_IP":"203.0.113.10","VRATA_STAGING_PUBLIC_IP":"203.0.113.10"}
+    host.state.locked=lambda **kwargs:nullcontext()
+    host.state.preflight=lambda *args:{"release":{"imageSha":"a"*40}}
+    host.state.binding=lambda image:None
+    host.catalog.guard_accepted=lambda image:calls.append(("accepted",image))
+    def refused(image):
+        calls.append(("rollback-preflight",image))
+        raise ValueError("room_record_rollback_requires_reader2")
+    host.catalog.prepare=refused
+    try:host.preflight("b"*40)
+    except ValueError as error:assert str(error)=="room_record_rollback_requires_reader2"
+    else:raise AssertionError("unsafe recovery target accepted")
+    assert calls==[("accepted","a"*40),("rollback-preflight","a"*40)]
+`], { encoding: "utf8" });
+});
+
+test("identity activation requires the running candidate and its rollback target to carry every floor-2 capability", () => {
+  const file = fileURLToPath(new URL("./staging-remote-release.py", import.meta.url));
+  const output = execFileSync("python3", ["-B", "-c", `
+import importlib.util,tempfile,json
+from pathlib import Path
+spec=importlib.util.spec_from_file_location("remote",${JSON.stringify(file)})
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+def rejects(fn,code):
+    try:fn()
+    except (ValueError,RuntimeError,OSError) as e:assert code in str(e),str(e)
+    else:raise AssertionError("expected "+code)
+a,b,x="a"*40,"b"*40,"c"*40
+full={"schemaVersion":1,"identityProtocolFloorGuard":1,"roomRecordReader":2,"frameTokenCodec":2,"mediaIdentityCodec":2,"mediaScreenReconciler":2}
+record={"schemaVersion":1,"imageSha":a,"assetSha":x,"snapshotId":a+"-"+x,
+        "foundationDigests":{n:"example/"+n+"@sha256:"+"d"*64 for n in m.accepted.FOUNDATIONS},"runId":"1","runAttempt":1}
+with tempfile.TemporaryDirectory() as directory:
+    root=Path(directory)/"checkout";(root/"infra/docker").mkdir(parents=True)
+    (root/"infra/docker/.env.staging").write_text("API_IMAGE_REPO=reg/api\\nROOM_STATE_IMAGE_REPO=reg/rs\\nREMOTE_BROWSER_IMAGE_REPO=reg/rb\\n")
+    host=m.ReleaseHost(root); calls=[]; contracts={a:dict(full),b:dict(full)}; state={"image":b,"cli":{"ok":True,"before":1,"after":2,"raised":True,"audit":{"rooms":3}},"floor":2}
+    def run(args,quiet=False):
+        calls.append(args)
+        if args[-2:]==["-q","api"] or args[-2:]==["-q","room-state"] or args[-2:]==["-q","remote-browser"]: return args[-1]+"-container"
+        if args[:2]==["docker","inspect"]:
+            repo={"api-container":"reg/api","room-state-container":"reg/rs","remote-browser-container":"reg/rb"}[args[-1]]
+            return repo+":"+state["image"]
+        if "activate-v2.js" in " ".join(args): return json.dumps(state["cli"])
+        raise AssertionError(args)
+    host.run=run
+    host.catalog.contract=lambda sha:contracts[sha]
+    host.catalog.validate_identity_database=lambda:calls.append(["db"])
+    host.catalog.validate_identity_configuration=lambda:calls.append(["secrets"])
+    host.catalog.minimum_identity_protocol=lambda:state["floor"]
+    host.state.directory.mkdir(parents=True,exist_ok=True); (host.state.directory/".state.lock").write_text("")
+    (host.state.directory/"accepted-release.json").write_text(json.dumps(record))
+    result=host.activate_identity_v2(b)
+    assert result=={"identityProtocol":{"before":1,"after":2,"raised":True,"audit":{"rooms":3}},"rollbackTarget":a},result
+    cli=[args for args in calls if "activate-v2.js" in " ".join(args)]
+    assert len(cli)==1 and cli[0][-1]=="--confirm-irreversible" and ["db"] in calls and ["secrets"] in calls
+    state["image"]=a; calls.clear()
+    rejects(lambda:host.activate_identity_v2(b),"runtime_image_mismatch")
+    assert not any("activate-v2.js" in " ".join(args) for args in calls),"never raise for a different running image"
+    state["image"]=b
+    contracts[b]=dict(full,mediaScreenReconciler=1)
+    rejects(lambda:host.activate_identity_v2(b),"candidate_incompatible:media_rollback_requires_screen_reconciler2")
+    contracts[b]=dict(full); contracts[a]={k:v for k,v in full.items() if k!="mediaIdentityCodec"}
+    rejects(lambda:host.activate_identity_v2(b),"rollback_target_incompatible:media_rollback_requires_identity_codec2")
+    contracts[a]=dict(full); calls.clear()
+    state["cli"]={"ok":False,"error":"identity_protocol_policy_missing"}
+    rejects(lambda:host.activate_identity_v2(b),"identity_activation_unconfirmed")
+    state["cli"]={"ok":True,"before":1,"after":2,"raised":True,"audit":{}}; state["floor"]=1
+    rejects(lambda:host.activate_identity_v2(b),"identity_activation_unconfirmed")
+print("identity activation assertions passed")
+`], { encoding: "utf8" });
+  assert.match(output, /identity activation assertions passed/);
+});

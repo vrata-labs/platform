@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { classifyMediaError, classifyScreenShareError, createFaultError, getRuntimeIssue, shouldRetryConnection } from "./runtime-errors.js";
+import { classifyMediaError, classifyScreenShareError, classifyScreenShareActionError, createFaultError, getRuntimeIssue, shouldRetryConnection } from "./runtime-errors.js";
 
 test("classifyMediaError maps NotAllowedError to mic_denied", () => {
   const issue = classifyMediaError(createFaultError("NotAllowedError", "user blocked microphone"));
@@ -48,6 +48,20 @@ test("shouldRetryConnection only retries transport issues", () => {
   assert.equal(shouldRetryConnection("screen_share_unsupported"), false);
   assert.equal(shouldRetryConnection("xr_unavailable"), false);
   assert.equal(shouldRetryConnection("xr_enter_failed"), false);
+});
+
+test("only capture-stage NotSupportedError establishes unsupported screen capture", () => {
+  const unsupported = createFaultError("NotSupportedError", "screen capture unavailable");
+  assert.equal(classifyScreenShareActionError(unsupported, true).code, "screen_share_unsupported");
+  assert.equal(classifyScreenShareActionError(unsupported, false).code, "livekit_failed");
+  assert.equal(classifyScreenShareActionError(createFaultError("Error", "getDisplayMedia failed"), true).code, "livekit_failed");
+  assert.equal(classifyScreenShareActionError(createFaultError("TimeoutError", "screen capture transport timed out"), false).code, "media_network_blocked");
+});
+
+test("AbortError text mentioning screen capture remains cancellation, never unsupported", () => {
+  const aborted = createFaultError("AbortError", "Error starting screen capture");
+  assert.equal(classifyScreenShareError(aborted).code, "screen_share_denied");
+  assert.equal(classifyScreenShareActionError(aborted, true).code, "screen_share_denied");
 });
 
 test("runtime issue catalog exposes user-facing copy", () => {

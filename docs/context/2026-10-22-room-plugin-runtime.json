@@ -1,0 +1,250 @@
+{
+  "schema": 1,
+  "goal": "T07: подключить изолированный room-plugin runtime после авторизованного входа с async SDK responses, native lease/generation fences и отдельным plain-text status; не включать публичный floor2 и не подменять T09 seat adapter.",
+  "scope": "Vrata platform: packages/room-plugin-sdk, apps/runtime-web/src/plugins, композиция main.ts и неизменность advertised TTL в API identity admission. План уже согласован; T14 принят отдельно. Данные внешних корпоративных трекеров и чужие БД в задаче не используются.",
+  "sources": [
+    {
+      "id": "S1",
+      "system": "approved-plan",
+      "locator": "2026-09-25-working-meeting-and-room-plugins.md:5.2-5.5,T07-T10,T17",
+      "version": "canonical plan sha256:726ac7a5d14ce6f1818f49df99cf4040dba7a39951484939a270d72e6a5f60f2",
+      "checked_at": "2026-10-22T08:16:35+00:00",
+      "status": "available",
+      "summary": "Пользователь поручил продолжить после T14. T07 требует after-auth lifecycle, bounded broker/status и отсутствие Worker/WASM при нуле bindings. T08 author UI и revision hint, T09 real seating/arrival-veto и T10 external auto-seat остаются отдельными этапами. Общий floor1 сохраняется, положительные v2 проверки только в собственных disposable schemas."
+    },
+    {
+      "id": "S2",
+      "system": "git",
+      "locator": "AGENTS.md; docs/reviews/2026-09-26-working-meeting-implementation.md:D-006-D-010",
+      "version": "base e5e25aa08cb3567a2b4be8fe330f8355d27186ba; AGENTS sha256:134161c2f7f42dda842cb27b4bed2058a9b9bfaf6e189ec6fb4f9a56d936948b; working journal amended",
+      "checked_at": "2026-10-22T08:16:35+00:00",
+      "status": "available",
+      "summary": "Main остаётся composition root; feature не пишет pose. Для T07 вновь обязательны focused package/browser checks, final full local и exact-SHA CI/Docker/staging. Пользовательское исключение из повторного local относилось только к четырём CI/tools/docs файлам c87292a, не к новому T07 runtime."
+    },
+    {
+      "id": "S3",
+      "system": "workflow-contract",
+      "locator": "workflow-rules resolver: common contract.md, без SQL domain",
+      "version": "contract sha256:86b60d767123bc63d6221ce57cc3fd9bebb8350a0fb958d52090ea6a6606a349",
+      "checked_at": "2026-10-22T08:16:35+00:00",
+      "status": "available",
+      "summary": "Один критерий для реализации и ревью, failed/skipped не равны passed, внешние gates подтверждаются версиями и наблюдением. T07 не меняет SQL/schema, предметные MSSQL правила не применяются."
+    },
+    {
+      "id": "S4",
+      "system": "git",
+      "locator": "packages/room-plugin-sdk/src/contracts.ts,manifest.ts,artifact.ts; tools/room-plugin-sdk-distribution.test.mjs",
+      "version": "base e5e25aa + uncommitted T07; contracts sha256:8e3ec5d833960d106eb373c5d889972f9a06f5f254ca96cc74d996a3bf97da20; manifest sha256:ea06e9a81af4772d5c8d1000a17e9bc0465bb8a6835fa9a15a2f688f476db34e",
+      "checked_at": "2026-10-22T08:16:35+00:00",
+      "status": "available",
+      "summary": "SDK API/schema остаются v1; envelope/manifest parsing вынесен в browser-safe root без Node crypto/Acorn. Node artifact entry сохраняет hash и AST validation. Изменение SDK требует новой immutable версии, текущий pack должен совпасть с архивом; 0.1.0 не перезаписывается."
+    },
+    {
+      "id": "S5",
+      "system": "local-artifact",
+      "locator": "apps/runtime-web/public/assets/plugin-sdk/releases.json; SDK0.2.0 archive",
+      "version": "prepared 0.2.0 sha256:22789546969b069aa48b690558609c85ddd17107ed7f25c0359452c466995d89; unchanged 0.1.0 sha256:c301002fb1fdbd3eb1c4aad396adef4e0160d450051f1a3ee5e9ae84b66a7896",
+      "checked_at": "2026-10-22T08:16:35+00:00",
+      "status": "available",
+      "summary": "Новый архив подготовлен локально, distribution2/2 и точное совпадение pack проверены. Публично T07/SDK0.2.0 ещё не опубликованы. Author E2E на0.1.0 сохранён как проверка совместимости."
+    },
+    {
+      "id": "S6",
+      "system": "git",
+      "locator": "apps/api/src/plugins/http-dto.ts:69; plugins/access.ts:119; identity/http-admission.ts; packages/shared-types/src/room-session-v2.ts",
+      "version": "base e5e25aa + uncommitted TTL constant deduplication; runtime DTO sha256:1e48fb35fa36be04930551e52a871e496acab23c0985e553d3c960fff6a7f3d9",
+      "checked_at": "2026-10-22T08:16:35+00:00",
+      "status": "available",
+      "summary": "Runtime snapshot содержит exact bindings/revision и server-epoch leaseExpiresAtMs, fenced release ограничен5s и оригинальным session expiry. Codec использует exp=floor(now/1000)+TTL; API advertised TTL и signer теперь берутся из одной константы900, четыре admission paths проверены на0/999ms. Нового API duration field нет."
+    },
+    {
+      "id": "S7",
+      "system": "git-and-local-tests",
+      "locator": "apps/runtime-web/src/plugins/vm.ts,vm-async.test.ts,lease.ts,token-bound.ts; local focused reports",
+      "version": "uncommitted T07 at2026-10-22T11:46:16Z; supervisor sha256:b3ed2b91a97be6159dc8bde87e36772c0d53d3364137c2cce6d6f53d8230e33a",
+      "checked_at": "2026-10-22T11:46:16+00:00",
+      "status": "available",
+      "summary": "VM/Worker/Supervisor реализуют pending/fulfilled и bounded request/response/resume, raw async/replay/outstanding/handle tests. Each compute50ms, command500ms, boot3s, logical5s; нейтральный lifecycle_timeout отличается от native host_error. Full content lease fingerprint и launch-time broker binding проверяются совместно. Latest parallel Node run237/238 остановился на real-clock warmup execution_timeout; отдельный последовательный run238/238 passed. Ни один не является full runtime/e2e gate."
+    },
+    {
+      "id": "S8",
+      "system": "git",
+      "locator": "apps/runtime-web/src/plugins/controller.ts; broker.ts; host.ts; main.ts; session-control-poller.ts",
+      "version": "uncommitted T07 at2026-10-22T11:46:16Z; controller sha256:fc4e0c234fc0a1f63a5c1ae00e394fed8fbc93364534f236c9c7334f08f271c5; main sha256:8b7dad9177eb52ceb96a1d096aaf3da8d9fecc548250fda6a8c210487a74caf0",
+      "checked_at": "2026-10-22T11:46:16+00:00",
+      "status": "available",
+      "summary": "Main подключает native token tickets before boot/renew и paired writers, after-auth controller, pagehide/sessionblock/visibility/offline hooks. Discovery работает с0bindings и не создаёт Worker/WASM; status broker и отдельный plain-text UI реализованы. Config update получает новый instance с cached verified code, stale generations fenced, failure sticky. Room-ready/seating snapshots и seat effects пока не выдаются. Наличие композиции не означает принятую real-room работу."
+    },
+    {
+      "id": "S9",
+      "system": "github-staging",
+      "locator": "https://github.com/vrata-labs/platform/actions/runs/39727462254",
+      "version": "accepted c87292a6d317bcc1d4718dc34a4d7285b481467f, attempt1; final readback2026-10-22T06:34:11Z",
+      "checked_at": "2026-10-22T06:34:11+00:00",
+      "status": "available",
+      "summary": "Это отдельная принятая поставка T14:79/79+Rutube1/1, accepted record/images/public200 совпали. Не является проверкой новых uncommitted T07 changes."
+    },
+    {
+      "id": "S11",
+      "system": "local-browser-and-build",
+      "locator": "tests/e2e/room-plugin-runtime.spec.ts; plugins/kernel-client.ts,supervisor-worker.ts,kernel-protocol.ts; apps/api/src/http-responses.ts; vite.config.ts",
+      "version": "uncommitted T07 at2026-10-22T11:46:16Z; client sha256:ead9bc0a3b5d695623af734fcf127dc60caba71cb0c8deb95785ae5469093560; worker sha256:679048d35e5ac43fbebe8fce8a489eae77a87a5c0b9512910f432d23a3f8cde5",
+      "checked_at": "2026-10-22T11:46:16+00:00",
+      "status": "available",
+      "summary": "Полная legacy-room прошла с0plugin traffic/Worker/WASM. Прежний isolated-v2 room lifecycle падал worker_boot_timeout при main long tasks0.7–1.95s; одна попытка init/config прошла, re-enable упал. Перенос существующего Supervisor в trusted Worker с nested VM сохраняет guards, parent action window и final canCommit. Terminate использует child-stop ACK/fallback. Самостоятельный Chromium145 diagnostic наблюдал уничтожение двух targets, но не CPU/GC/cross-browser гарантию. Vite/tsc и35API focused checks прошли; self-contained kernel/guest22/82KB без imports, отдельные CSP. Новые6facade tests прошли. Реальный off-main room и hostile/resource повтор ещё не приняты; прежние Chromium11/11 не удостоверяют новый код."
+    },
+    {
+      "id": "S12",
+      "system": "local-code-and-observation",
+      "locator": "plugins/kernel-client.ts,supervisor-worker.ts,controller.ts,host.ts,limits.ts; room-plugin-runtime.spec.ts; latest focused logs and CPU observation",
+      "version": "uncommitted at2026-10-22T12:10:43Z; client sha256:e0e104fe0abd8b4da9003c3f7ef8a8c0d1351fe3af03cb9e0dc2545a61d3b3b6; worker sha256:a42fa9a3412ba59e28da896652f78b854dbf28f4dbf6725058e2d49f940ef361; controller sha256:08655338e73e9eb0ee99e5c524a0acbf21e3a8c8e30c687ab5d103d06d59c585",
+      "checked_at": "2026-10-22T12:10:43+00:00",
+      "status": "available",
+      "summary": "Startup numeric timing проходит через failure cleanup к debug.plugins, отдельная instance failure не теряется из-за network refresh. Abort прекращает native ожидание и игнорирует поздние rejects, success dispose ждёт child-stop ACK. Idle failure сообщается kernel владельцу; discovery не перезапускает failed instance. Последняя сборка и последовательные plugin units252/252 прошли, включая direct kernel ownership и late-content/start tests. Последний реальный room run красный ещё до свежего config, startupTiming=null/instances0, loaded scene/WSconnected; ранее был execution_timeout/respond. На8CPU наблюдались load84.54/61.42/42.31, CPUpressure88.34% без cgroup throttling. Сильная конкуренция CPU подтверждена, её исключительность как причины не доказана. Чужие процессы/renderer/guards не изменялись. T07 gate BLOCKED; full final local, exact publish и staging не выполнялись."
+    },
+    {
+      "id": "S13",
+      "system": "user-decision-and-current-plan",
+      "locator": "Текущий диалог; canonical план: точка остановки2026-10-22; журнал D-014/D-015",
+      "version": "2026-10-22: разовый пропуск local browser/e2e, затем явное поручение обновить план/документы и остановиться",
+      "checked_at": "2026-10-22T13:48:52+00:00",
+      "status": "available",
+      "summary": "Пользователь разрешил не повторять заблокированную локальную проверку текущего T07 и продолжить, затем остановил выполнение на обновлении плана/документов. Исключение не отменяет CI/staging и не делает красный local зелёным. Все T07 изменения без коммита/push/deploy, новых workflows нет; T08–T10 не начаты. Никаких дальнейших действий до явного возобновления."
+    },
+    {
+      "id": "S14",
+      "system": "staging-readback-and-github",
+      "locator": "accepted-release.json; https://github.com/vrata-labs/platform/actions/runs/39766861132",
+      "version": "image c87292a6d317bcc1d4718dc34a4d7285b481467f; asset0a3b492e788bad82bf20a92476a628bf30c6dfbe; run39766861132/attempt1; workflow head e5e25aa08cb3567a2b4be8fe330f8355d27186ba",
+      "checked_at": "2026-10-22T13:46:53+00:00",
+      "status": "available",
+      "summary": "Свежий read-only readback подтвердил прежнюю исполняемую T14-версию c87292a, не T07. GitHub run39766861132 завершён success; workflow revision e5e25aa отличается от принятого image c87292a. Публикация T07 в текущей работе не выполнялась."
+    },
+    {
+      "id": "S15",
+      "system": "local-checks",
+      "locator": "pnpm lint/typecheck/build/test; tests/e2e/room-plugin-runtime.spec.ts; tests/e2e/plugin-{sandbox,resource-probe,author,sdk-distribution}.spec.ts",
+      "version": "uncommitted T07 candidate on e5e25aa08cb3567a2b4be8fe330f8355d27186ba, source unchanged since D-015",
+      "checked_at": "2026-10-22T14:13:22+00:00",
+      "status": "available",
+      "summary": "Package gate green: runtime 1456/1456, API 1743 passed + 4 optional skips, SDK 68/68, tools 313 passed + 2 optional skips. Focused room-plugin-runtime 3/3 и plugin specs 14/14 при CPU pressure avg10 7-31% (прежде 88%); guards/renderer/DPR не менялись. Полный local не запускался (D-014)."
+    },
+    {
+      "id": "S10",
+      "system": "external-trackers-and-production-database",
+      "locator": "Jira/Confluence/GitLab/Graylog/Consul/production SQL schema",
+      "version": "not applicable to this approved GitHub/local-plan slice",
+      "checked_at": "2026-10-22T08:16:35+00:00",
+      "status": "not_applicable",
+      "summary": "В задаче нет ключа внешнего трекера или SQL/schema change. Требования заданы согласованным планом и кодом Vrata. Общий поиск по корпоративным системам или production БД не нужен; отсутствие такого поиска не объявляется отсутствием реализации там."
+    }
+  ],
+  "claims": [
+    {
+      "id": "F1",
+      "status": "confirmed",
+      "text": "T07 выполняется на основном runtime path, но публичный floor2 не включается; author UI и реальный seat adapter остаются T08/T09.",
+      "sources": [
+        "S1",
+        "S2"
+      ]
+    },
+    {
+      "id": "F2",
+      "status": "confirmed",
+      "text": "Нулевой enabled catalog должен сохранять discovery и не создавать Worker/не скачивать VM; broker обязан иметь независимый <=5s lease до первого эффекта.",
+      "sources": [
+        "S1",
+        "S6"
+      ]
+    },
+    {
+      "id": "F3",
+      "status": "confirmed",
+      "text": "Artifact source никогда не исполняется через native eval/import; shared browser parser сам не удостоверяет hash, WebCrypto сверяет exact raw и entry bytes до QuickJS.",
+      "sources": [
+        "S1",
+        "S4",
+        "S7"
+      ]
+    },
+    {
+      "id": "F4",
+      "status": "confirmed",
+      "text": "SDK0.2.0 подготовлен отдельно; прежний0.1.0 archive и protocol-v1 contract сохранены, публикация ещё не выполнялась.",
+      "sources": [
+        "S4",
+        "S5"
+      ]
+    },
+    {
+      "id": "F5",
+      "status": "confirmed",
+      "text": "Token bound выводится от начала auth request, config lease ограничен собственным sent-token bound; обновление текущего токена не растягивает старое разрешение.",
+      "sources": [
+        "S6",
+        "S7"
+      ]
+    },
+    {
+      "id": "F6",
+      "status": "confirmed",
+      "text": "Generic async protocol, native status broker/controller/main подключены; выбран off-main Supervisor. Последняя схема собрана и прошла252focused units, но T07 не принят и не опубликован. Работа приостановлена по просьбе пользователя после обновления документов.",
+      "sources": [
+        "S7",
+        "S8",
+        "S11",
+        "S12",
+        "S13"
+      ]
+    },
+    {
+      "id": "F7",
+      "status": "confirmed",
+      "text": "Для текущего T07 пользователь разово разрешил пропустить локальную browser/e2e-проверку и повторный full local (D-014), не отменяя exact-SHA CI/Docker/staging. Старое четырёхфайловое исключение T14 не расширялось; failed/skipped не равны passed.",
+      "sources": [
+        "S2",
+        "S3",
+        "S13"
+      ]
+    },
+    {
+      "id": "F8",
+      "status": "hypothesis",
+      "text": "Конкуренция за CPU является единственной причиной оставшихся real-room отказов. Для подтверждения нужен тот же сценарий и source state в разгруженной среде без изменения guards/renderer; текущие наблюдения этого не доказывают.",
+      "sources": [
+        "S12"
+      ]
+    },
+    {
+      "id": "F9",
+      "status": "confirmed",
+      "text": "Последний readback стенда по-прежнему указывает на imagec87292a, accepted run39766861132/attempt1. Все T07 изменения uncommitted, новых T07 CI/Docker/staging runs нет; T08–T10 не начаты.",
+      "sources": [
+        "S13",
+        "S14"
+      ]
+    },
+    {
+      "id": "F10",
+      "status": "confirmed",
+      "text": "На неизменном T07-кандидате при разгруженном CPU проходят isolated-v2 first enable/config/disable/re-enable, sticky guest failure с PDF upload, legacy-комната без plugin/Worker/WASM, 40 hostile probes с точными CSP и 100 dual-instance cycles. Это подтверждает F8 как основную причину прежних room-отказов, но не заменяет exact-SHA CI/staging.",
+      "sources": [
+        "S12",
+        "S15"
+      ]
+    }
+  ],
+  "gaps": [
+    {
+      "question": "Exact-SHA CI/Docker и gated staging для T07-кандидата ещё не выполнены.",
+      "blocking": true,
+      "next_step": "Commit/push ветки feat/working-meeting-plugin-runtime, workflow_dispatch CI и Docker на точном SHA, затем Staging Deploy с bootstrap=false. Отрицательный gate исправлять, не перезапускать до PASS; public floor1 не менять."
+    },
+    {
+      "question": "Полный local e2e на финальном T07-дереве не выполнен.",
+      "blocking": false,
+      "next_step": "Разово пропущен по прямому поручению пользователя (D-014); не объявлять выполненным. Полный CI e2e на точном SHA обязателен."
+    }
+  ]
+}

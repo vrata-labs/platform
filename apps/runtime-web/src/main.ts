@@ -1,4 +1,6 @@
 import * as THREE from "three";
+import { createMeetingNavigationRuntime } from "./meeting/meeting-navigation-runtime.js";
+import { clearRuntimeKeyboardState, collectRuntimeKeyboardSample, isRuntimeUiKeyboardTarget } from "./input/keyboard-target.js";
 import { createRoomTemplatePreferences, fetchPublicTemplateSettings } from "./template-preferences.js";
 import { Room, RoomEvent, Track } from "livekit-client";
 import {
@@ -27,6 +29,7 @@ import {
   type RemoteBrowserObjectState,
   type RemoteBrowserPatch,
   type RoomMediaObjectsState,
+  type RoomTemplateSurface,
   type ScreenShareErrorCode,
   type ScreenShareObjectState,
   type SurfaceInputEvent,
@@ -40,7 +43,23 @@ import {
 } from "@vrata/shared-types";
 
 import { appendBrandingSuffix, applyRoomShellBootState, renderSceneAttributions } from "./boot-session.js";
-import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, exportRoomNote, exportRoomNotesArchive, fetchRoomDocumentMediaContent, fetchRoomDocumentPresentation, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, grantRoomPresenter, listPresence, listRoomDocuments, listRoomNoteVersions, openPersonalRoom, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, restoreRoomNoteVersion, revokeRoomPresenter, runRoomSessionControlAction, savePersonalRoomState, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimePersonalState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
+import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, exportRoomNote, exportRoomNotesArchive, fetchRoomDocumentMediaContent, fetchRoomDocumentPresentation, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, fetchStateToken, grantRoomPresenter, listPresence, listRoomDocuments, listRoomNoteVersions, openPersonalRoom, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, restoreRoomNoteVersion, revokeRoomPresenter, runRoomSessionControlAction, savePersonalRoomState, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, transferRoomOwner, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimePersonalState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
+import { createSessionControlPoller } from "./session-control-poller.js";
+import { RoomPluginController } from "./plugins/controller.js";
+import { RoomPluginTokenBound } from "./plugins/token-bound.js";
+import { createRoomPluginSeatChoiceView, createRoomPluginStatusView } from "./plugins/status-view.js";
+import { createRoomPluginAuthorHttp } from "./plugins/author-http.js";
+import { RoomPluginAuthorSession } from "./plugins/author-session.js";
+import { createRoomPluginAuthorPanel } from "./plugins/author-panel.js";
+import { RoomPluginSeatAdapter } from "./plugins/seat-adapter.js";
+import { createRoomPluginSeatOptOut } from "./plugins/seat-opt-out.js";
+import { planStandUp } from "./seating/stand-up.js";
+import { createMediaSourceUpgrade, permitsScreenShare } from "./media/media-source-upgrade.js";
+import { createMediaActionBarrier } from "./media/media-action-barrier.js";
+import { planBaseMedia } from "./media/media-token-error.js";
+import { createMediaParticipantResolver, planRemoteMicrophones, sameMicrophoneOwner } from "./media/media-participant.js";
+import { createRoomIdentityTab } from "./identity-session-tab.js";
+import { redeemRoomRecovery } from "./identity-recovery.js";
 import { probeDocumentMedia } from "./document-media-probe.js";
 import { createRuntimeDebugState } from "./runtime-debug-state.js";
 import { formatClientCompatibilityStatus, resolveClientCompatibility, type ClientCompatibilitySummary } from "./client-capabilities.js";
@@ -56,12 +75,12 @@ import {
   type RoomStateSnapshot,
   type SurfaceCommandResult
 } from "./room-state-client.js";
-import { classifyMediaError, classifyRoomStateError, classifyScreenShareError, createFaultError, getRuntimeIssue, shouldRetryConnection, type RuntimeIssue } from "./runtime-errors.js";
+import { classifyMediaError, classifyRoomStateError, classifyScreenShareActionError, createFaultError, getRuntimeIssue, shouldRetryConnection, type RuntimeIssue } from "./runtime-errors.js";
 import { canRetry, createReconnectPolicy, getReconnectDelayMs } from "./reconnect.js";
 import { applyRuntimeIssueState, clearRuntimeIssueState, createRuntimeUiState } from "./runtime-state.js";
 import { createNotesRuntime, createNotesRuntimeState } from "./notes-runtime.js";
 import { applyPassiveMediaRecovery, applyPostBootControls, shouldStartPassiveMedia } from "./runtime-startup.js";
-import { describeMediaCapabilityReason, detectBrowserMediaCapabilities, formatUnsupportedMediaCapabilities } from "./media-capabilities.js";
+import { describeMediaCapabilityReason, detectBrowserMediaCapabilities, formatUnsupportedMediaCapabilities, recordDisplayCaptureUnsupported } from "./media-capabilities.js";
 import { collectWebRtcDiagnostics, createUnavailableWebRtcDiagnostics, type WebRtcStatsTransport, type WebRtcTransportRole } from "./webrtc-diagnostics.js";
 import { isScreenShareAudioSource, shouldPublishMediaSurfaceAudio } from "./media-surface-audio.js";
 import { createMediaSurfaceCommandClient } from "./media/media-surface-commands.js";
@@ -84,7 +103,7 @@ import {
   runtimeMediaSurfaceDefinitionFromScene,
   type RuntimeMediaSurfaceView
 } from "./media/media-surface-view.js";
-import { cleanupMediaRoomConsumers, createDeferredMediaStopQueue, createMediaRoomIdleScheduler, hasMediaRoomSurfaceConsumer, planMediaRoomIdleAction, shouldHandleMediaRoomEvent, transitionPassiveMediaOwnership } from "./media/media-room-lifecycle.js";
+import { cleanupMediaRoomConsumers, createDeferredMediaStopQueue, createMediaRoomIdleScheduler, disconnectMediaRoomWithCleanup, hasMediaRoomSurfaceConsumer, planMediaRoomIdleAction, shouldHandleMediaRoomEvent, transitionPassiveMediaOwnership } from "./media/media-room-lifecycle.js";
 import { createCoalescedConnection } from "./media/coalesced-connection.js";
 import { allocatePlannedMediaCanvasRuntimes, planMediaCanvasRuntimeAllocations, releaseMediaCanvasRuntime, type MediaCanvasRuntimeAllocation } from "./media/media-canvas-runtime-plan.js";
 import { routeMediaObjectSurfaceInput } from "./media/media-object-router.js";
@@ -108,7 +127,10 @@ import {
 } from "./media/remote-browser-vr-keyboard.js";
 import { planRemoteBrowserXrPointer } from "./media/remote-browser-xr-input.js";
 import { getScreenShareErrorCode } from "./media/screen-share-object.js";
-import { captureAndPublishScreenShareStream, createMockShareStream } from "./media/screen-share-capture.js";
+import { captureScreenShareStream, createMockShareStream } from "./media/screen-share-capture.js";
+import { createScreenShareActions } from "./media/screen-share-actions.js";
+import { createMeetingToolTransition, MeetingToolTransitionError, planMeetingTool, type MeetingToolContext } from "./meeting/meeting-tool-transition.js";
+import { createMeetingToolUi, meetingToolMessage } from "./meeting/meeting-tool-ui.js";
 import { createInactiveWhiteboardDebugSnapshot, createWhiteboardObjectRuntime } from "./media/whiteboard-object.js";
 import { applySpatialSettings, createSpatialAudioSettings, resolveSpatialAudioMode } from "./spatial-audio.js";
 import { captureCanvasDiagnostics, inspectSceneObject } from "./scene-debug.js";
@@ -191,14 +213,16 @@ import { createRemoteBrowserVideoRuntime, type RemoteBrowserVideoEntry } from ".
 import { createScreenShareRuntime, resolveScreenShareSubscriptionCount, type ScreenShareRuntimeEntry } from "./media/screen-share-runtime.js";
 import { createMediaSurfaceAudioRuntime, type MediaSurfaceAudioNode } from "./media/media-surface-audio-runtime.js";
 import { createDocumentSurfaceActions } from "./document-surface-actions.js";
-import { createHostControlsRuntime } from "./host-controls-runtime.js";
+import { runtimeFetch as fetch, runtimeSessionGate, SessionUpgradeError, describeIdentityRequirement } from "./session-upgrade.js";
+import { mountSessionUpgradeUi } from "./session-upgrade-ui.js";
+import { createHostControlsRuntime, SESSION_CONTROL_REFRESH_INTERVAL_MS } from "./host-controls-runtime.js";
 import { bindHostControls } from "./host-control-bindings.js";
 import { describeRoomAccessError, describeSessionControlReason } from "./room-access-messages.js";
 import { createDocumentLibraryRuntime } from "./document-library-runtime.js";
 import { createDocumentSurfaceView } from "./document-surface-view.js";
 import { bindDocumentControls } from "./document-control-bindings.js";
 
-import { createRuntimeDiagnostics } from "./runtime-diagnostics.js";
+import { createRuntimeDiagnostics, reportRuntimeBootDiagnostics } from "./runtime-diagnostics.js";
 import { createXrTelemetryReporter } from "./xr-telemetry-reporter.js";
 
 function fallbackUuid(): string {
@@ -293,7 +317,9 @@ type RuntimeNavigatorXr = {
 const XR_SESSION_OPTIONS: XRSessionInit = {
   optionalFeatures: ["local-floor", "bounded-floor", "layers"]
 };
-const participantId = getParticipantId();
+let participantId = getParticipantId();
+const roomIdentityTab = createRoomIdentityTab(sessionStorage, roomId);
+let activeIdentityProtocolVersion: 2 | null = null;
 const personalOwnerId = getPersonalOwnerId();
 const displayNameFromQuery = query.get("name")?.trim() || null;
 const storedDisplayName = getStoredValue(localStorage, "vrata.displayName", "noah.displayName")?.trim() || null;
@@ -332,6 +358,9 @@ const sceneAttributionsPanelEl = mustElement<HTMLDivElement>("#scene-attribution
 const sceneAttributionsListEl = mustElement<HTMLUListElement>("#scene-attributions-list");
 const spaceSelect = mustElement<HTMLSelectElement>("#space-select");
 const openPersonalRoomButton = mustElement<HTMLButtonElement>("#open-personal-room");
+const roomRecoveryCredential = mustElement<HTMLInputElement>("#room-recovery-credential");
+const roomRecoverySubmit = mustElement<HTMLButtonElement>("#room-recovery-submit");
+const roomRecoveryStatus = mustElement<HTMLElement>("#room-recovery-status");
 const spaceSelectStatusEl = mustElement<HTMLDivElement>("#space-select-status");
 const notesPanelEl = mustElement<HTMLDivElement>("#notes-panel");
 const notesScopeSelect = mustElement<HTMLSelectElement>("#notes-scope-select");
@@ -352,6 +381,9 @@ const documentDownloadButton = mustElement<HTMLButtonElement>("#document-downloa
 const documentSurfaceButton = mustElement<HTMLButtonElement>("#document-surface-button");
 const documentDeleteButton = mustElement<HTMLButtonElement>("#document-delete-button");
 const documentStatusEl = mustElement<HTMLDivElement>("#document-status");
+const documentUploadPolicyEl = mustElement<HTMLElement>("#document-upload-policy");
+const documentOperationProgressEl = mustElement<HTMLProgressElement>("#document-operation-progress");
+const documentRefreshButton = mustElement<HTMLButtonElement>("#document-refresh-button");
 const presentationControlsEl = mustElement<HTMLDivElement>("#presentation-controls");
 const presentationPrevButton = mustElement<HTMLButtonElement>("#presentation-prev");
 const presentationNextButton = mustElement<HTMLButtonElement>("#presentation-next");
@@ -397,6 +429,7 @@ const endSessionButton = mustElement<HTMLButtonElement>("#end-session");
 const hostParticipantSelect = mustElement<HTMLSelectElement>("#host-participant-select");
 const removeParticipantButton = mustElement<HTMLButtonElement>("#remove-participant");
 const transferHostButton = mustElement<HTMLButtonElement>("#transfer-host");
+const transferOwnerButton = mustElement<HTMLButtonElement>("#transfer-owner");
 const grantPresenterButton = mustElement<HTMLButtonElement>("#grant-presenter");
 const revokePresenterButton = mustElement<HTMLButtonElement>("#revoke-presenter");
 const remoteBrowserControlEl = mustElement<HTMLDivElement>("#remote-browser-control");
@@ -578,6 +611,7 @@ whiteboardPreviewLine.visible = false;
 displaySurface.add(whiteboardPreviewLine);
 
 const mediaSurfaceViews = new Map<string, RuntimeMediaSurfaceView>();
+let meetingNavigation: ReturnType<typeof createMeetingNavigationRuntime> | null = null;
 for (const definition of DEFAULT_RUNTIME_MEDIA_SURFACES) {
   const view = createMediaSurfaceView(definition, definition.surfaceId === DEBUG_SURFACE_ID ? displaySurface : undefined);
   mediaSurfaceViews.set(definition.surfaceId, view);
@@ -618,6 +652,8 @@ let pointerDownAtMs = 0;
 let pointerDownClientX = 0;
 let pointerDownClientY = 0;
 let livekitRoom: Room | null = null;
+let mediaRoomTransitionInFlight = false;
+const mediaAudioAction = createMediaActionBarrier();
 let audioSessionJoined = false;
 let passiveMediaRequired = false;
 let microphoneEnabled = false;
@@ -649,6 +685,7 @@ const mediaRoomIdleDisconnectScheduler = createMediaRoomIdleScheduler<Room, numb
 });
 let roomStateClient: RoomStateClient | null = null;
 let roomStateAccessToken = "";
+const roomPluginTokenBound = new RoomPluginTokenBound();
 let roomStateConnected = false;
 let roomStateConnectionGeneration = 0;
 let latestRealtimeParticipants: PresenceState[] = [];
@@ -670,7 +707,9 @@ let xrSelectEventPending = false;
 let xrSelectEventCount = 0;
 let xrRayVisibleLatched = false;
 const { markXrTelemetry, reportXrTelemetry } = createXrTelemetryReporter({
-  apiBaseUrl, roomId, participantId, renderer, avatarVrMockEnabled, localPoseController,
+  fetch, sessionGate: runtimeSessionGate,
+  apiBaseUrl, roomId, renderer, avatarVrMockEnabled, localPoseController,
+  get participantId() { return participantId; },
   get roomStateAccessToken() { return roomStateAccessToken; },
   get syntheticXrState() { return syntheticXrState; },
   get xrSelectEventCount() { return xrSelectEventCount; },
@@ -704,6 +743,9 @@ let forcedTestSeatId: string | null = null;
 let sceneTeleportFloorY = 0;
 let sceneSeatAnchors: SceneBundleSeatAnchor[] = [];
 let sceneSeatAnchorMap = createSeatAnchorReadModel([]).anchorMap;
+// The scene's entry point is the safe place to stand after leaving a seat.
+let sceneEntryPoint: { x: number; y: number; z: number } | null = null;
+const standUpButton = document.querySelector<HTMLButtonElement>("#stand-up")!;
 let sceneAnchorsReady = true;
 let roomSeatOccupancy: Record<string, string> = {};
 let roomMediaObjects: RoomMediaObjectsState | null = null;
@@ -741,7 +783,7 @@ const {
 } = createMediaObjectQueries({
   get roomMediaObjects() { return roomMediaObjects; },
   get selectedMediaSurfaceId() { return selectedMediaSurfaceId; },
-  participantId,
+  get participantId() { return participantId; },
   mediaSurfaceViews
 });
 const {
@@ -766,7 +808,7 @@ const {
   get livekitRoom() { return livekitRoom; }
 });
 const mediaSurfaceCommands = createMediaSurfaceCommandClient({
-  participantId,
+  get participantId() { return participantId; },
   getClient: () => roomStateClient,
   isConnected: () => roomStateConnected,
   createConnectionError: () => createFaultError("ConnectionError", "room_state_failed")
@@ -1278,6 +1320,9 @@ const botInitialPosition = { x: initialLocalPosition.x, z: initialLocalPosition.
 
 interface RemoteAudioNode {
   participantId: string;
+  mediaIdentity: string;
+  trackKey: string;
+  track: Track;
   element: HTMLMediaElement;
   source: MediaElementAudioSourceNode | null;
   gain: GainNode | null;
@@ -1305,6 +1350,11 @@ interface MockAudioSource {
 }
 
 const remoteAudioNodes = new Map<string, RemoteAudioNode>();
+let selectedRemoteMicrophones: ReturnType<typeof planRemoteMicrophones> = new Map();
+const resolveMediaPeer = createMediaParticipantResolver(() => {
+  reconcileRemoteAudioTracksWithPresence();
+  syncScreenShareLiveKitTracks();
+});
 const mediaSurfaceAudioNodes = new Map<string, MediaSurfaceAudioNode>();
 const {
   connectMediaSurfaceAudioTrack,
@@ -1374,24 +1424,39 @@ let effectiveCleanSceneMode = requestedCleanSceneMode;
 let activeSceneRenderProfile: SceneBundleRenderProfile | undefined;
 let pbrRoomEnvironment: PbrRoomEnvironment | null = null;
 let availableSpaces: RuntimeSpaceOption[] = [];
-const { renderHostControls, refreshSessionControl, runHostControlAction } = createHostControlsRuntime({
-  apiBaseUrl, roomId, participantId,
+// Host controls can render before the plugin author session below is constructed.
+let roomPluginAuthorReady = false;
+const { renderHostControls, refreshSessionControl, runHostControlAction, canManageHostControls, authorityRevision,
+  observeAdmissionRevision, acceptRenewedAuthority, peopleAuthority, participantLabel, refreshDiagnostics } = createHostControlsRuntime({
+  apiBaseUrl, roomId,
+  get participantId() { return participantId; },
   get debugState() { return debugState; },
   get roomStateAccessToken() { return roomStateAccessToken; },
   get runtimeFlags() { return runtimeFlags; },
   get latestRealtimeParticipants() { return latestRealtimeParticipants; },
   get latestFallbackParticipants() { return latestFallbackParticipants; },
+  get sessionControlBlocked() { return sessionControlBlocked; },
+  get activeIdentityProtocolVersion() { return activeIdentityProtocolVersion; },
   hostControlsEl, hostControlsStatusEl, presenterLineEl, hostParticipantSelect,
   lockRoomButton, unlockRoomButton, endSessionButton, removeParticipantButton,
-  transferHostButton, grantPresenterButton, revokePresenterButton,
-  fetchRoomSessionControl, applyAccessDebug, disableRuntimeForSessionBlock
+  transferHostButton, transferOwnerButton, grantPresenterButton, revokePresenterButton,
+  fetchRoomSessionControl, applyAccessDebug, disableRuntimeForSessionBlock,
+  applyAuthorityAccess: access => applyAccessDebug(access, roomStateAccessToken),
+  onAuthorityChanged: () => { meetingNavigation?.requestSync(); if (roomPluginAuthorReady) roomPluginAuthor.sync(); },
+  onPluginBindingsRevision: revision => { roomPluginRuntime.observeRevisionHint(revision); if (roomPluginAuthorReady) roomPluginAuthor.observeRevision(revision); }
 });
 let sessionControlBlocked = false;
+let meetingTools: ReturnType<typeof createMeetingToolTransition> | null = null;
+let meetingToolsCurrent: (() => MeetingToolContext) | null = null;
+let surfaceStopRevisionSupported = false;
+// Seat claim/release correlation announced by room-state, and whether this connection delivered occupancy yet.
+let seatCommandCorrelationSupported = false;
+let roomStateOccupancySeen = false;
 const remoteAvatarRuntime = createRemoteAvatarRuntime({
   scene,
   bodyGeometry,
   headGeometry,
-  localParticipantId: participantId
+  get localParticipantId() { return participantId; }
 });
 
 function setFallbackEnvironmentVisible(visible: boolean): void {
@@ -1574,6 +1639,7 @@ function syncSeatDebugState(): void {
   const snapshot = seatingController.getSnapshot();
   debugState.currentSeatId = snapshot.currentSeatId;
   debugState.pendingSeatId = snapshot.pendingSeatId;
+  standUpButton.hidden = !snapshot.currentSeatId;
 }
 
 function applySceneDebugFit(bounds: NonNullable<typeof debugState.sceneDebug.boundingBox>): void {
@@ -1623,15 +1689,19 @@ function applySnapshotParticipants(people: PresenceState[]): void {
 }
 
 function applyMergedPresenceParticipants(): void {
-  applySnapshotParticipants(mergePresenceSources(latestRealtimeParticipants, latestFallbackParticipants));
+  const people = mergePresenceSources(latestRealtimeParticipants, latestFallbackParticipants);
+  applySnapshotParticipants(people);
+  meetingNavigation?.updatePeople(people);
   renderHostControls();
 }
 
 function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["access"]>, token: string, expiresInSeconds?: number): void {
+  if (sessionControlBlocked) return;
   const previousRole = debugState.access.role;
   const previouslyCouldViewDocuments = canViewDocuments();
   const previousLastDeniedPermission = debugState.access.lastDeniedPermission;
   const previousLastSurfaceCommandAccepted = debugState.access.lastSurfaceCommandAccepted;
+  roomPluginTokenBound.observeToken(token);
   roomStateAccessToken = token;
   debugState.access = {
     ...access,
@@ -1662,8 +1732,33 @@ function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["acc
 }
 
 function disableRuntimeForSessionBlock(reason: string): void {
+  roomPluginTokenBound.clear();
+  try { roomPluginRuntime.stop(); if (roomPluginAuthorReady) roomPluginAuthor.stop(); } catch { /* Plugin cleanup must not prevent the core session block. */ }
+  sessionControlPoller.stop();
   const message = describeSessionControlReason(reason);
   sessionControlBlocked = true;
+  meetingTools?.invalidate();
+  clearRoomStateReconnect();
+  clearSeatReclaimRetry();
+  roomStateConnectionGeneration++;
+  roomStateConnected = false;
+  debugState.roomStateConnected = false;
+  roomStateAccessToken = "";
+  runtimeBootReady = false;
+  roomStateClient?.close();
+  roomStateClient = null;
+  mediaRoomConnection.invalidate();
+  mediaSourceUpgrade.invalidate();
+  deferredScreenShareStops.clear();
+  passiveMediaRequired = false;
+  audioSessionJoined = false;
+  if (livekitRoom) void disconnectMediaRoom(livekitRoom, "session_blocked").catch(() => undefined);
+  mediaSurfaceCommands.rejectAll("room_session_blocked");
+  cancelPendingNotes();
+  syncNotesAccessUi();
+  invalidateDocumentLibrary();
+  clearDocumentFeedback();
+  renderDocumentsUi();
   setStatus(message);
   guestAccessLineEl.textContent = message;
   debugState.issueCode = "room_access_denied";
@@ -1671,18 +1766,8 @@ function disableRuntimeForSessionBlock(reason: string): void {
   debugState.degradedMode = "access_denied";
   debugState.lastRecoveryAction = reason;
   debugState.hostControls.lastReason = reason;
-  runtimeBootReady = false;
-  roomStateClient?.close();
-  roomStateClient = null;
-  mediaRoomConnection.invalidate();
-  deferredScreenShareStops.clear();
-  passiveMediaRequired = false;
-  audioSessionJoined = false;
   for (const surfaceId of Array.from(mediaSurfaceViews.keys())) {
     closeMediaSurfaceRuntimes(surfaceId);
-  }
-  if (livekitRoom) {
-    void disconnectMediaRoom(livekitRoom, "session_blocked").catch(() => undefined);
   }
   joinAudioButton.disabled = true;
   muteButton.disabled = true;
@@ -1690,6 +1775,74 @@ function disableRuntimeForSessionBlock(reason: string): void {
   stopShareButton.disabled = true;
   syncWhiteboardControls();
   renderHostControls(message);
+}
+
+const sessionControlPoller = createSessionControlPoller({ intervalMs: SESSION_CONTROL_REFRESH_INTERVAL_MS,
+  refresh: () => refreshSessionControl() });
+window.addEventListener("pagehide", () => { sessionControlPoller.stop(); roomPluginRuntime.stop(); });
+window.addEventListener("pageshow", event => {
+  if (event.persisted && !sessionControlBlocked && !runtimeSessionGate.reason) {
+    sessionControlPoller.start(); roomPluginRuntime.start(activeIdentityProtocolVersion);
+  }
+});
+document.addEventListener("visibilitychange", () => roomPluginRuntime.availabilityChanged());
+window.addEventListener("online", () => { roomPluginRuntime.availabilityChanged(); roomPluginAuthor.sync(); });
+window.addEventListener("offline", () => { roomPluginRuntime.availabilityChanged(); roomPluginAuthor.sync(); });
+
+function startIdentitySessionRenewal(expiresInSeconds: number): void {
+  if (activeIdentityProtocolVersion !== 2) return;
+  let nextAttemptAtMs = Date.now() + Math.max(30_000, Math.min(420_000, (expiresInSeconds - 120) * 1000));
+  let inFlight = false;
+  const timer = window.setInterval(() => {
+    if (sessionControlBlocked || runtimeSessionGate.reason) {
+      window.clearInterval(timer);
+      return;
+    }
+    if (inFlight || Date.now() < nextAttemptAtMs) return;
+    inFlight = true;
+    nextAttemptAtMs = Date.now() + 60_000;
+    void (async () => {
+      try {
+        const identityCredential = roomIdentityTab.identityCredential();
+        if (!identityCredential) {
+          runtimeSessionGate.require("identity_recovery_required");
+          return;
+        }
+        const pluginTokenRequest = roomPluginTokenBound.begin();
+        const renewed = await fetchStateToken(apiBaseUrl, roomId, {
+          identityProtocolVersion: 2, identityCredential, participantId, displayName
+        });
+        if (renewed.identityProtocolVersion !== 2 || renewed.participantId !== participantId
+          || !renewed.identityCredential || !renewed.token) {
+          runtimeSessionGate.require("identity_recovery_required");
+          return;
+        }
+        if (sessionControlBlocked || runtimeSessionGate.reason) return;
+        roomIdentityTab.rememberIdentity(renewed.identityCredential);
+        const previousRole = debugState.access.role;
+        const access = acceptRenewedAuthority(renewed);
+        roomPluginTokenBound.admit(pluginTokenRequest, renewed.token, renewed.expiresInSeconds);
+        applyAccessDebug(access ?? debugState.access, renewed.token, renewed.expiresInSeconds);
+        roomPluginRuntime.kick();
+        nextAttemptAtMs = Date.now() + Math.max(30_000, Math.min(420_000, (renewed.expiresInSeconds - 120) * 1000));
+        // Existing sockets still carry the old exp; reconnect with the new rs2.
+        if (previousRole === debugState.access.role && roomStateClient && debugState.roomStateUrl) {
+          roomStateConnected = false;
+          debugState.roomStateConnected = false;
+          mediaSurfaceCommands.rejectAll("room_state_reconnecting");
+          roomStateClient.close();
+          roomStateClient = null;
+          connectRoomStateWithRetry(debugState.roomStateUrl);
+        }
+      } catch (error) {
+        if (runtimeSessionGate.reason) return;
+        if (error instanceof RuntimeAccessError && error.status === 403) disableRuntimeForSessionBlock(error.reason);
+        else console.warn("identity_session_renewal_failed", error);
+      } finally {
+        inFlight = false;
+      }
+    })();
+  }, 60_000);
 }
 
 function clearInteractionVisuals(): void {
@@ -1752,6 +1905,8 @@ function syncSeatStateFromOccupancy(): void {
   seatingController.applyOccupancy({ seatOccupancy: roomSeatOccupancy, forcedSeatId: forcedTestSeatId });
   syncSeatDebugState();
   updateSeatMarkerVisuals(performance.now() / 1000);
+  roomPluginSeats.observe();
+  roomPluginRuntime.seatingChanged();
   const currentSeatId = getCurrentSeatId();
   if (!currentSeatId) {
     lastAppliedSeatLockId = null;
@@ -2067,6 +2222,7 @@ function syncMediaObjectsDebugState(): void {
   syncRemoteBrowserControls();
   syncSurfaceAudioControl();
   syncMediaSurfaceObjectIds();
+  meetingNavigation?.requestSync();
 }
 
 function routeSurfaceInputToMediaObject(event: SurfaceInputEvent): boolean {
@@ -2095,6 +2251,10 @@ function handleRoomSnapshot(snapshot: RoomStateSnapshot): void {
   roomStateServerOffsetMs = snapshot.serverTimeMs - Date.now();
   roomSeatOccupancy = { ...(snapshot.seatOccupancy ?? {}) };
   roomMediaObjects = snapshot.mediaObjects;
+  surfaceStopRevisionSupported = snapshot.capabilities?.surfaceStopRevision === true;
+  seatCommandCorrelationSupported = snapshot.capabilities?.seatCommandCorrelation === true;
+  roomStateOccupancySeen = true;
+  meetingTools?.sync();
   syncSeatStateFromOccupancy();
   syncMediaObjectsDebugState();
   ensureSurfaceLiveKitRoom();
@@ -2152,7 +2312,33 @@ function setPlayerPositionForFloorTeleport(floorPoint: Vector3Like): void {
   });
 }
 
+standUpButton.addEventListener("click", () => {
+  const commands = planStandUp({ seatId: getCurrentSeatId(), exit: sceneEntryPoint });
+  if (!commands.length) return;
+  // An explicit stand is also this tab's refusal of automatic seating after a reload.
+  roomPluginSeatOptOut.set(true);
+  forcedTestSeatId = null;
+  executeRuntimeCommandList(commands);
+});
+const roomPluginSeatOptOut = createRoomPluginSeatOptOut((() => { try { return sessionStorage; } catch { return null; } })(), roomId);
+// Single arrival grant of this page session. Plugins only ask; the server decides and the frame pipeline seats.
+const roomPluginSeats = new RoomPluginSeatAdapter({
+  world: () => ({ ready: runtimeBootReady && sceneAnchorsReady && roomStateOccupancySeen, correlation: seatCommandCorrelationSupported,
+    online: navigator.onLine && roomStateConnected, xr: renderer.xr.isPresenting, selfId: participantId,
+    seats: sceneSeatAnchors.map(anchor => ({ id: anchor.id, yaw: anchor.yaw })), occupancy: roomSeatOccupancy,
+    currentSeatId: getCurrentSeatId(), pendingSeatId: getPendingSeatId() }),
+  optedOut: () => roomPluginSeatOptOut.get(),
+  claim: (seatId, commandId) => executeRuntimeCommandList([{ type: "request_seat_claim", seatId, commandId }, { type: "send_seat_claim", seatId, commandId }]),
+  cancel: (releaseCommandId, claimCommandId) => {
+    if (seatingController.getPendingCommandId() !== claimCommandId) return false;
+    const cancelled = seatingController.cancelPending(releaseCommandId);
+    syncSeatDebugState();
+    executeRuntimeCommandList(cancelled.commands);
+    return cancelled.commands.length > 0;
+  }
+});
 const executeRuntimeCommandList = createRuntimeCommandExecutor({
+  onManualLocomotionIntent: () => roomPluginSeats.manualIntent(),
   seatingController,
   getRoomStateClient: () => roomStateClient,
   isRoomStateConnected: () => roomStateConnected,
@@ -2421,6 +2607,7 @@ function supportsAudioOutputSelection(): boolean {
 }
 
 function canUseScreenShareControl(): boolean {
+  if (meetingToolsCurrent) return !meetingTools?.busy() && planMeetingTool(meetingToolsCurrent(), { kind: "screen" }).kind !== "blocked";
   const activeObject = activeMediaObjectForSurface(selectedMediaSurfaceId);
   return debugState.access.canStartScreenShare
     && roomStateConnected
@@ -2430,6 +2617,11 @@ function canUseScreenShareControl(): boolean {
 }
 
 function canUseWhiteboardControl(): boolean {
+  if (meetingToolsCurrent) {
+    const decision = planMeetingTool(meetingToolsCurrent(), { kind: "board" });
+    return !meetingTools?.busy() && decision.kind !== "blocked"
+      && !(decision.plan.previous?.type === WHITEBOARD_OBJECT_TYPE && decision.plan.surfaceId === selectedMediaSurfaceId);
+  }
   const activeObject = activeMediaObjectForSurface(selectedMediaSurfaceId);
   return debugState.access.canCreateWhiteboard
     && roomStateConnected
@@ -3129,13 +3321,17 @@ function syncAudioControls(): void {
     joinMutedCheckbox.disabled = true;
     return;
   }
-  joinAudioButton.disabled = audioActionInFlight;
-  joinAudioButton.textContent = audioSessionJoined ? "Leave Audio" : "Join Audio";
-  joinAudioButton.title = audioSessionJoined ? "Stop publishing your microphone" : "Publish your microphone";
-  muteButton.disabled = audioActionInFlight || !audioSessionJoined || !livekitRoom;
+  joinAudioButton.disabled = audioActionInFlight || mediaRoomTransitionInFlight;
+  joinAudioButton.textContent = audioSessionJoined ? "Leave Audio" : joinMutedPreference ? "Join Audio Muted" : "Join Audio";
+  joinAudioButton.title = audioSessionJoined
+    ? "Leave the audio session"
+    : joinMutedPreference
+      ? "Connect without publishing your microphone; press Unmute to speak"
+      : "Connect and publish your microphone";
+  muteButton.disabled = audioActionInFlight || mediaRoomTransitionInFlight || !audioSessionJoined || !livekitRoom;
   muteButton.textContent = microphoneEnabled ? "Mute" : "Unmute";
   muteButton.title = microphoneEnabled ? "Mute your microphone" : "Unmute your microphone";
-  joinMutedCheckbox.disabled = audioActionInFlight || audioSessionJoined;
+  joinMutedCheckbox.disabled = audioActionInFlight || mediaRoomTransitionInFlight || audioSessionJoined;
 }
 
 function syncRemoteMicStatus(): void {
@@ -3144,7 +3340,7 @@ function syncRemoteMicStatus(): void {
     return;
   }
   const status = debugState.remoteParticipants.map((participant) => {
-    const label = participant.participantId.slice(0, 8);
+    const label = participantLabel(participant.participantId);
     const state = !participant.audioJoined
       ? "not joined"
       : participant.muted
@@ -3214,6 +3410,7 @@ async function refreshAudioDevices(requestPermissions = false): Promise<void> {
 }
 
 function syncMediaCapabilityControls(): void {
+  meetingTools?.sync();
   const unsupportedStatus = formatUnsupportedMediaCapabilities(browserMediaCapabilities);
   if (unsupportedStatus) {
     updateAudioDeviceStatus(unsupportedStatus);
@@ -3345,7 +3542,7 @@ function bindLocalAudioTrackEnded(track: MediaStreamTrack): void {
   }
   localAudioTrackEndHandlers.add(track);
   track.addEventListener("ended", () => {
-    if (!audioSessionJoined || !microphoneEnabled) {
+    if (!audioSessionJoined || !microphoneEnabled || mediaRoomTransitionInFlight) {
       return;
     }
     microphoneEnabled = false;
@@ -3438,16 +3635,17 @@ function connectLocalAudioTrack(room: Room): void {
   };
 }
 
-function connectRemoteAudioTrack(track: Track, participantId: string): void {
+function connectRemoteAudioTrack(track: Track, participantId: string, owner: { mediaIdentity: string; trackKey: string }): void {
   const mediaStreamTrack = (track as { mediaStreamTrack?: MediaStreamTrack }).mediaStreamTrack;
   const existing = remoteAudioNodes.get(participantId);
-  if (existing?.trackId === mediaStreamTrack?.id) {
+  if (existing && sameMicrophoneOwner(existing, { ...owner, track })) {
     return;
   }
   if (existing) {
     disconnectRemoteAudioElement(participantId);
   }
-  const element = track.attach() as HTMLMediaElement & { playsInline?: boolean };
+  // Web Audio source ownership survives detach; never reuse an SDK-recycled element.
+  const element = track.attach(document.createElement("audio")) as HTMLMediaElement & { playsInline?: boolean };
   element.autoplay = true;
   element.playsInline = true;
   element.style.display = "none";
@@ -3512,6 +3710,9 @@ function connectRemoteAudioTrack(track: Track, participantId: string): void {
   }
   remoteAudioNodes.set(participantId, {
     participantId,
+    mediaIdentity: owner.mediaIdentity,
+    trackKey: owner.trackKey,
+    track,
     element,
     source,
     gain,
@@ -3602,6 +3803,7 @@ function startHiddenVideoPlayback(element: HTMLVideoElement, onError?: (error: s
 }
 
 function resolveRemoteBrowserObjectForTrack(participantIdentity: string | null | undefined, publication: unknown, track: Track, kind: "audio" | "video"): MediaObjectInstance<RemoteBrowserObjectState> | null {
+  if (activeIdentityProtocolVersion === 2 && (!participantIdentity || !participantIdentity.startsWith("remote-browser:"))) return null;
   const trackSid = getPublicationTrackSid(publication, track, "");
   return physicalRemoteBrowserObjectForMediaTrack(roomMediaObjects, mediaSurfaceViews, participantIdentity, trackSid || null, kind);
 }
@@ -3613,6 +3815,12 @@ function getPublicationName(publication: unknown): string | null {
 }
 
 function resolveScreenShareObjectForTrack(participantIdentity: string | null | undefined, publication: unknown, track: Track, kind: "audio" | "video"): MediaObjectInstance<ScreenShareObjectState> | null {
+  if (activeIdentityProtocolVersion === 2) {
+    const peer = participantIdentity ? livekitRoom?.remoteParticipants.get(participantIdentity) : null;
+    const binding = resolveMediaPeer(peer, livekitRoom?.name ?? "", activeIdentityProtocolVersion);
+    if (binding?.kind !== "user" || binding.scope === "m") return null;
+    participantIdentity = binding.participantId;
+  }
   const trackSid = getPublicationTrackSid(publication, track, "");
   return physicalScreenShareObjectForMediaTrack(
     roomMediaObjects,
@@ -3720,6 +3928,7 @@ function disconnectRemoteAudioElement(participantId: string): void {
   if (!node) {
     return;
   }
+  node.track.detach(node.element);
   node.element.remove();
   node.source?.disconnect();
   node.gain?.disconnect();
@@ -3737,26 +3946,13 @@ function disconnectRemoteAudioElement(participantId: string): void {
   }
 }
 
-function getRemoteParticipantMicrophoneTrack(participantId: string, publication: unknown): Track | null {
-  const track = (publication as { track?: Track | null }).track;
-  if (track?.kind !== Track.Kind.Audio) {
-    return null;
-  }
-  if (resolveRemoteBrowserObjectForTrack(participantId, publication, track, "audio")) {
-    return null;
-  }
-  if (isScreenShareAudioSource((publication as { source?: unknown }).source)) {
-    return null;
-  }
-  return track;
-}
-
 function isMicrophonePublication(publication: unknown): boolean {
   return (publication as { source?: unknown }).source === Track.Source.Microphone;
 }
 
-function reconcileRemoteAudioTracksWithPresence(): void {
+function reconcileRemoteAudioTracksWithPresence(excludedTrack?: Track): void {
   if (!livekitRoom) {
+    selectedRemoteMicrophones.clear();
     return;
   }
   const activeAudioParticipantIds = new Set(
@@ -3764,22 +3960,14 @@ function reconcileRemoteAudioTracksWithPresence(): void {
       .filter((participant) => participant.activeAudio)
       .map((participant) => participant.participantId)
   );
-  for (const participantId of Array.from(remoteAudioNodes.keys())) {
-    if (!activeAudioParticipantIds.has(participantId)) {
-      disconnectRemoteAudioElement(participantId);
-    }
+  selectedRemoteMicrophones = planRemoteMicrophones(livekitRoom.remoteParticipants.values(),
+    peer => resolveMediaPeer(peer, livekitRoom!.name, activeIdentityProtocolVersion), participantId, activeAudioParticipantIds, excludedTrack);
+  for (const [id, node] of remoteAudioNodes) {
+    const desired = selectedRemoteMicrophones.get(id);
+    if (!desired || !sameMicrophoneOwner(node, { ...desired, track: desired.value.track })) disconnectRemoteAudioElement(id);
   }
-  for (const [participantId, participant] of livekitRoom.remoteParticipants.entries()) {
-    if (!activeAudioParticipantIds.has(participantId) || remoteAudioNodes.has(participantId)) {
-      continue;
-    }
-    for (const publication of participant.trackPublications.values()) {
-      const track = getRemoteParticipantMicrophoneTrack(participantId, publication);
-      if (track) {
-        connectRemoteAudioTrack(track, participantId);
-        break;
-      }
-    }
+  for (const [id, desired] of selectedRemoteMicrophones) {
+    if (!remoteAudioNodes.has(id)) connectRemoteAudioTrack(desired.value.track, id, desired);
   }
 }
 
@@ -3858,6 +4046,7 @@ function clearMediaRoomIdleDisconnect(): void {
 }
 
 function reconcileMediaRoomIdleDisconnect(room: Room | null, diagnosticsReason: string): void {
+  if (mediaRoomTransitionInFlight) { clearMediaRoomIdleDisconnect(); return; }
   if (!room) {
     return;
   }
@@ -3865,14 +4054,14 @@ function reconcileMediaRoomIdleDisconnect(room: Room | null, diagnosticsReason: 
     roomIsCurrent: livekitRoom === room,
     audioSessionJoined,
     hasPhysicalConsumer: hasActiveMediaRoomSurfaceConsumer(),
-    passiveMediaRequired
+    passiveMediaRequired, pendingPublication: Boolean(meetingTools?.busy())
   });
   mediaRoomIdleDisconnectScheduler.reconcile(room, action, () => {
     if (planMediaRoomIdleAction({
       roomIsCurrent: livekitRoom === room,
       audioSessionJoined,
       hasPhysicalConsumer: hasActiveMediaRoomSurfaceConsumer(),
-      passiveMediaRequired
+      passiveMediaRequired, pendingPublication: Boolean(meetingTools?.busy())
     }) !== "schedule-disconnect") {
       return;
     }
@@ -3881,8 +4070,7 @@ function reconcileMediaRoomIdleDisconnect(room: Room | null, diagnosticsReason: 
 }
 
 async function disconnectMediaRoom(room: Room, diagnosticsReason: string): Promise<void> {
-  clearMediaRoomReference(room, diagnosticsReason);
-  await room.disconnect();
+  await disconnectMediaRoomWithCleanup(() => clearMediaRoomReference(room, diagnosticsReason), () => room.disconnect());
 }
 
 function getSpatialAudioFallbackReason(): string | null {
@@ -3922,7 +4110,7 @@ function updateSpatialAudio(): void {
     remoteSources: debugState.remoteParticipants.map((participant) => {
       const target = remoteAvatarRuntime.getAudioTarget(participant.participantId);
       const audioNode = remoteAudioNodes.get(participant.participantId);
-      const remoteParticipant = livekitRoom?.remoteParticipants.get(participant.participantId);
+      const remoteParticipant = livekitRoom ? selectedRemoteMicrophones.get(participant.participantId)?.value.participant : null;
       return {
         participantId: participant.participantId,
         x: roundDebugNumber(target?.x ?? participant.head.x),
@@ -3995,8 +4183,8 @@ function updateAvatarLipsync(deltaSeconds: number): void {
   }
 
   let maxSpeakerLevel = 0;
-  for (const participant of livekitRoom.remoteParticipants.values()) {
-    maxSpeakerLevel = Math.max(maxSpeakerLevel, participant.audioLevel ?? 0);
+  for (const selected of selectedRemoteMicrophones.values()) {
+    maxSpeakerLevel = Math.max(maxSpeakerLevel, selected.value.participant.audioLevel ?? 0);
   }
   for (const node of mediaSurfaceAudioNodes.values()) {
     if (node.analyser && node.sampleBuffer) {
@@ -4006,7 +4194,8 @@ function updateAvatarLipsync(deltaSeconds: number): void {
   speakerOutputLevel = maxSpeakerLevel;
   debugState.speakerOutputLevel = Number(speakerOutputLevel.toFixed(3));
 
-  for (const [remoteParticipantId, participant] of livekitRoom.remoteParticipants.entries()) {
+  for (const [remoteParticipantId, selected] of selectedRemoteMicrophones) {
+    const participant = selected.value.participant;
     const node = remoteAudioNodes.get(remoteParticipantId);
     const sourceState: AvatarLipsyncSourceState = node
       ? participant.isMicrophoneEnabled
@@ -4042,6 +4231,47 @@ const debugState = createRuntimeDebugState({
   runtimeFlags,
   faultConfig
 });
+Object.defineProperty(debugState.hostControls, "polling", { enumerable: true,
+  get: () => ({ timer: sessionControlPoller.diagnostics(), request: refreshDiagnostics() }) });
+const roomPluginStatusView = createRoomPluginStatusView({ document,
+  root: document.querySelector<HTMLElement>("#room-plugin-statuses")!, list: document.querySelector<HTMLElement>("#room-plugin-status-list")! });
+const roomPluginSeatChoice = createRoomPluginSeatChoiceView({ root: document.querySelector<HTMLElement>("#room-plugin-seat-choice")!,
+  checkbox: document.querySelector<HTMLInputElement>("#room-plugin-seat-choice-input")!, optOut: roomPluginSeatOptOut,
+  veto: () => roomPluginSeats.manualIntent() });
+const roomPluginRuntime = new RoomPluginController({ apiBaseUrl, roomId,
+  context: () => ({ active: activeIdentityProtocolVersion === 2 && !sessionControlBlocked && !runtimeSessionGate.reason,
+    ready: runtimeBootReady, online: navigator.onLine, visible: document.visibilityState !== "hidden",
+    connection: roomStateConnected ? "connected" : "reconnecting" }),
+  proof: () => roomPluginTokenBound.capture(), render: rows => { roomPluginStatusView.render(rows); roomPluginSeatChoice.render(rows); },
+  identityRequired: reason => runtimeSessionGate.require(reason),
+  seating: {
+    supported: () => seatCommandCorrelationSupported,
+    ready: () => runtimeBootReady && sceneAnchorsReady && roomStateOccupancySeen,
+    activate: () => roomPluginSeats.activate(),
+    snapshot: (owner, seating) => roomPluginSeats.snapshot(owner, seating),
+    port: owner => ({ claim: seatId => roomPluginSeats.claim(seatId, owner), cancel: () => roomPluginSeats.cancelOwn(owner) }),
+    retire: owner => roomPluginSeats.retire(owner)
+  },
+  start: async (source, config, approved, dispatch, signal) => {
+    const { startPluginSandbox } = await import("./plugins/host.js");
+    return startPluginSandbox(source, config, approved, undefined, { dispatch, signal });
+  }
+});
+Object.defineProperty(debugState, "plugins", { enumerable: true, get: () => ({ ...roomPluginRuntime.diagnostics(), seating: roomPluginSeats.diagnostics() }) });
+const roomPluginAuthorPanel = createRoomPluginAuthorPanel({ document,
+  root: document.querySelector<HTMLElement>("#room-plugin-author")!, list: document.querySelector<HTMLElement>("#room-plugin-author-list")!,
+  message: document.querySelector<HTMLElement>("#room-plugin-author-message")!,
+  fileInput: document.querySelector<HTMLInputElement>("#room-plugin-upload-input")!, uploadButton: document.querySelector<HTMLButtonElement>("#room-plugin-upload-button")!,
+  upload: bytes => roomPluginAuthor.upload(bytes), apply: intent => roomPluginAuthor.apply(intent) });
+// Host-facing author library. The API re-checks the proven room identity and current role on every request.
+const roomPluginAuthor = new RoomPluginAuthorSession({
+  http: createRoomPluginAuthorHttp({ apiBaseUrl, roomId, token: () => roomStateAccessToken || null }),
+  context: () => ({ eligible: activeIdentityProtocolVersion === 2 && runtimeBootReady && !sessionControlBlocked && !runtimeSessionGate.reason
+    && (debugState.access.role === "host" || debugState.personalRoom.isOwner === true), online: navigator.onLine }),
+  render: state => roomPluginAuthorPanel.render(state),
+  changed: () => roomPluginRuntime.kick()
+});
+roomPluginAuthorReady = true;
 
 const {
   screenShareEntries,
@@ -4077,6 +4307,9 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
 
 const {
   canViewNotes,
+  cancelPendingNotes,
+  changeNotesScope,
+  getUnsavedNote,
   syncNotesAccessUi,
   loadActiveNote,
   scheduleNotesAutosave,
@@ -4092,6 +4325,8 @@ const {
   downloadBlob,
   get runtimeFlags() { return runtimeFlags; },
   get roomStateAccessToken() { return roomStateAccessToken; },
+  isSessionBlocked: () => sessionControlBlocked,
+  preserveDraft: draft => sessionUpgradeUi.preserveDraft(draft),
   elements: {
     notesPanelEl,
     notesScopeSelect,
@@ -4127,13 +4362,14 @@ function downloadBlob(blob: Blob, filename: string): void {
 }
 
 const {
-  canViewDocuments, canPresentDocuments, selectedDocument, documentErrorCode, setDocumentStatus,
+  canViewDocuments, canUploadDocuments, canPresentDocuments, selectedDocument, documentErrorCode, setDocumentStatus,
   renderDocumentsUi, loadRoomDocuments, uploadSelectedDocument,
-  downloadSelectedDocument, deleteSelectedDocument
+  downloadSelectedDocument, deleteSelectedDocument, invalidate: invalidateDocumentLibrary, clearFeedback: clearDocumentFeedback,
+  onPageHide: documentLibraryPageHide, onPageShow: documentLibraryPageShow
 } = createDocumentLibraryRuntime({
   apiBaseUrl, roomId, debugState, documentsPanelEl, documentUploadInput,
   documentUploadButton, documentSelect, documentDownloadButton,
-  documentSurfaceButton, documentDeleteButton, documentStatusEl,
+  documentSurfaceButton, documentDeleteButton, documentStatusEl, documentUploadPolicyEl, documentOperationProgressEl, documentRefreshButton,
   // Surface views are composed next; resolve them only when rendering.
   renderPresentationControls: () => renderPresentationControls(),
   renderDocumentMediaControls: () => renderDocumentMediaControls(),
@@ -4142,18 +4378,22 @@ const {
   get runtimeFlags() { return runtimeFlags; },
   get roomStateConnected() { return roomStateConnected; },
   get roomStateAccessToken() { return roomStateAccessToken; },
-  get presentationActionInFlight() { return presentationActionInFlight; },
+  get sessionControlBlocked() { return sessionControlBlocked; },
+  get presentationActionInFlight() { return presentationActionInFlight || Boolean(meetingTools?.busy()); },
   get roomDocuments() { return roomDocuments; },
   set roomDocuments(value) { roomDocuments = value; },
   get selectedDocumentId() { return selectedDocumentId; },
   set selectedDocumentId(value) { selectedDocumentId = value; }
 });
+window.addEventListener("pagehide", documentLibraryPageHide);
+window.addEventListener("pageshow", documentLibraryPageShow);
 
 const {
   presentationInputEventId, documentMediaInputEventId,
   renderDocumentMediaControls, renderPresentationControls
 } = createDocumentSurfaceView({
-  participantId, currentPdfPresentationObject, currentImageViewerObject,
+  get participantId() { return participantId; },
+  currentPdfPresentationObject, currentImageViewerObject,
   currentVideoPlayerObject, canPresentDocuments, getPdfPresentationRuntime,
   // Surface actions are composed after the views, without eager callbacks.
   goToPresentationPage: (page) => goToPresentationPage(page),
@@ -4166,11 +4406,12 @@ const {
   documentMediaStatusEl,
   get roomStateServerOffsetMs() { return roomStateServerOffsetMs; },
   get selectedMediaSurfaceId() { return selectedMediaSurfaceId; },
-  get presentationActionInFlight() { return presentationActionInFlight; }
+  get presentationActionInFlight() { return presentationActionInFlight || Boolean(meetingTools?.busy()); }
 });
 
 const {
-  selectDocumentForSurface,
+  selectDocumentForSurfaceAt,
+  unlinkStoppedDocument,
   patchCurrentPresentation,
   goToPresentationPage,
   togglePresentationDisplayMode,
@@ -4182,7 +4423,7 @@ const {
 } = createDocumentSurfaceActions({
   apiBaseUrl,
   roomId,
-  participantId,
+  get participantId() { return participantId; },
   selectedDocument,
   canPresentDocuments,
   setDocumentStatus,
@@ -4212,6 +4453,89 @@ const {
   get roomDocuments() { return roomDocuments; },
   set roomDocuments(value) { roomDocuments = value; }
 });
+
+const screenShareActions = createScreenShareActions({
+  participantId: () => participantId,
+  debugState, connected: () => Boolean(roomStateClient && roomStateConnected), mock: () => shareMockEnabled,
+  canStart: surfaceId => debugState.access.canStartScreenShare && roomStateConnected && !activeMediaObjectForSurface(surfaceId)
+    && surfaceAllowsObject(surfaceId, SCREEN_SHARE_OBJECT_TYPE),
+  commands: mediaSurfaceCommands, ensureMediaRoom: () => ensureMediaRoom(true),
+  mediaAudioEnabled: surfaceId => shouldPublishMediaSurfaceAudio(roomMediaObjects, surfaceId),
+  attach: (stream, input) => attachScreenShareStream(stream, { ...input, ownerParticipantId: participantId }),
+  attachMock: attachMockVideoStream, bindEnded: bindLocalScreenShareTrackEnd,
+  cleanup: async (room, objectId, tracks) => {
+    const entry = screenShareRuntimeByObjectId.get(objectId);
+    if (entry) { entry.stopping = true; await unpublishScreenShareEntry(entry); detachScreenShareEntry(entry); }
+    else if (room) for (const track of tracks) await room.localParticipant.unpublishTrack(track).catch(() => undefined);
+  },
+  errorCode: getScreenShareErrorCode, setStatus, started: () => { lastScreenShareStoppedAtMs = 0; },
+  syncControls: () => { startShareButton.disabled = !canUseScreenShareControl(); stopShareButton.disabled = !canStopLocalScreenShare(); },
+  report: note => { void reportDiagnostics(note); }
+});
+const meetingToolUi = createMeetingToolUi({ document, confirm: () => meetingTools?.confirm() ?? Promise.resolve(), cancel: () => meetingTools?.cancel() });
+
+function initializeMeetingTools(boot: { templateSurfaces?: RoomTemplateSurface[]; templateSettings?: { presentation?: { surfaceId?: string } } }): void {
+  meetingToolsCurrent = () => ({ leaseKey: JSON.stringify([roomId, participantId, roomStateConnectionGeneration,
+    sessionControlBlocked, roomStateConnected, authorityRevision(), [...debugState.access.permissions].sort()]),
+    blocked: sessionControlBlocked || Boolean(runtimeSessionGate.reason), connected: roomStateConnected,
+    participantId, permissions: debugState.access.permissions, screenSupported: shareMockEnabled || browserMediaCapabilities.screenShare.supported,
+    screenEnabled: shareMockEnabled || runtimeFlags.screenShare, documentsEnabled: runtimeFlags.documentsEnabled,
+    stopRevisionSupported: surfaceStopRevisionSupported, xrActive: renderer.xr.isPresenting,
+    selectedSurfaceId: selectedMediaSurfaceId, selectedDocumentId: selectedDocument()?.documentId ?? null,
+    selectedDocumentChecksum: selectedDocument()?.checksum ?? null, documents: roomDocuments,
+    physicalSurfaceIds: new Set([...mediaSurfaceViews].filter(([, surface]) => surface.object.visible).map(([id]) => id)),
+    surfaces: roomMediaObjects?.surfaces ?? null, objects: roomMediaObjects?.objects ?? {},
+    templateSurfaces: boot.templateSurfaces ?? [], preferredPresentationSurfaceId: boot.templateSettings?.presentation?.surfaceId });
+  meetingTools = createMeetingToolTransition({ current: meetingToolsCurrent,
+    capture: plan => shareMockEnabled ? Promise.resolve(createMockShareStream())
+      : captureScreenShareStream(shouldPublishMediaSurfaceAudio(roomMediaObjects, plan.surfaceId)),
+    prepareScreen: async () => { if (!shareMockEnabled) await ensureMediaRoom(true); },
+    stop: async plan => {
+      const previous = plan.previous!;
+      const stoppedObject = roomMediaObjects?.objects[previous.objectId];
+      const result = await mediaSurfaceCommands.stopObject(previous.objectId, plan.surfaceId, "meeting-replace", previous.revision);
+      if (result.accepted) {
+        if (stoppedObject) await unlinkStoppedDocument(stoppedObject);
+        const entry = screenShareRuntimeByObjectId.get(previous.objectId);
+        if (entry && !entry.remote) { entry.stopping = true; await unpublishScreenShareEntry(entry); detachScreenShareEntry(entry); }
+      }
+      return result;
+    },
+    start: async (plan, stream, check) => {
+      check(); let started = false;
+      if (plan.intent.kind === "document") started = await selectDocumentForSurfaceAt({ surfaceId: plan.surfaceId, documentId: plan.intent.documentId, checksum: plan.intent.checksum, assertActive: check });
+      else if (plan.intent.kind === "screen") started = await screenShareActions.start({ surfaceId: plan.surfaceId, stream: stream!, assertActive: check });
+      else { if (!activeWhiteboardObjectForSurface(plan.surfaceId)) await startWhiteboardOnSurface(plan.surfaceId); started = true; }
+      if (started && selectedMediaSurfaceId === plan.requestedSelection) selectMediaSurface(plan.surfaceId);
+      return started;
+    },
+    changed: state => {
+      meetingToolUi.render(state); renderDocumentsUi(); syncMediaCapabilityControls(); syncWhiteboardControls();
+      startShareButton.disabled = !canUseScreenShareControl(); stopShareButton.disabled = !canStopLocalScreenShare();
+      reconcileMediaRoomIdleDisconnect(livekitRoom, "meeting_tool_transition_idle");
+    },
+    failed: (error, plan) => {
+      if (plan.intent.kind === "screen" && meetingTools?.snapshot().phase !== "stopping"
+        && !(error instanceof MeetingToolTransitionError)) handleScreenShareActionError(error);
+    }
+  });
+}
+
+async function startScreenShare(): Promise<void> { await meetingTools?.request({ kind: "screen" }); }
+async function startWhiteboard(): Promise<void> { await meetingTools?.request({ kind: "board" }); }
+function meetingToolReasons(): Partial<Record<"start-share" | "start-whiteboard", string>> {
+  if (!meetingToolsCurrent) return {};
+  const context = meetingToolsCurrent(), screen = planMeetingTool(context, { kind: "screen" }), board = planMeetingTool(context, { kind: "board" });
+  return { ...(screen.kind === "blocked" ? { "start-share": meetingToolMessage(screen.reason) } : {}),
+    ...(board.kind === "blocked" ? { "start-whiteboard": meetingToolMessage(board.reason) } : {}) };
+}
+async function requestMeetingDocument(): Promise<void> {
+  const selected = selectedDocument(), kind = selected?.metadata?.kind;
+  if (!selected || !kind || !["pdf", "image", "video"].includes(kind)) { setDocumentStatus("Select a PDF, image or video to present", "document_not_presentable"); return; }
+  const objectType = kind === "pdf" ? "pdf-presentation" : kind === "image" ? "image-viewer" : "video-player";
+  await meetingTools?.request({ kind: "document", documentId: selected.documentId, checksum: selected.checksum, objectType });
+}
+window.addEventListener("pagehide", () => meetingTools?.invalidate());
 
 function refreshClientCompatibility(): void {
   clientCompatibility = buildClientCompatibility();
@@ -4476,7 +4800,7 @@ const mediaObjectTestControls = createMediaObjectTestControls({
   debugSurfaceId: DEBUG_SURFACE_ID,
   get selectedMediaSurfaceId() { return selectedMediaSurfaceId; },
   get permissions() { return debugState.access.permissions; },
-  participantId,
+  get participantId() { return participantId; },
   mediaSurfaceCommands,
   activeMediaObjectForSurface,
   activeScreenShareObjectForSurface,
@@ -4684,12 +5008,15 @@ const mediaSurfaceTestControls = createMediaSurfaceTestControls({
 (window as Window & { __NOAH_TEST__?: unknown }).__NOAH_TEST__ = (window as Window & { __VRATA_TEST__?: unknown }).__VRATA_TEST__;
 
 function setStatus(message: string): void {
+  if (runtimeSessionGate.reason) message = describeIdentityRequirement(runtimeSessionGate.reason);
   statusLineEl.textContent = message;
   debugState.statusLine = message;
 }
 
 const { renderDebugPanel, reportDiagnostics, reportUnhandledRuntimeError } = createRuntimeDiagnostics({
-  apiBaseUrl, roomId, participantId, debugEnabled, camera, renderer,
+  fetch, sessionGate: runtimeSessionGate,
+  apiBaseUrl, roomId, debugEnabled, camera, renderer,
+  get participantId() { return participantId; },
   reportLineEl, debugPanel, xrDebugPanelEl, refreshWebRtcDiagnostics,
   captureCanvasDiagnostics, inspectSceneObject, setStatus,
   get displayName() { return displayName; },
@@ -4753,7 +5080,7 @@ async function loadAvailableSpaces(currentRoomId: string): Promise<void> {
   renderSpaceSelector("loading", [], currentRoomId);
   try {
     const search = failSpaces ? "?fail=1" : "";
-    const spaces = await fetchRuntimeSpaces(apiBaseUrl, currentRoomId, search);
+    const spaces = await fetchRuntimeSpaces(apiBaseUrl, currentRoomId, search, roomStateAccessToken ?? undefined);
     availableSpaces = spaces;
     const currentSpace = resolveCurrentSpace(spaces, currentRoomId);
     if (!currentSpace && spaces.length > 0) {
@@ -4807,6 +5134,7 @@ function startPersonalStatePersistence(input: { roomId: string; sessionToken: st
   }
   let lastSavedSignature = personalPoseSignature(debugState.personalRoom.lastPoseRestored ? currentPersonalPoseState() : {});
   const save = async (force = false): Promise<void> => {
+    if (sessionControlBlocked) return;
     const state = currentPersonalPoseState();
     const signature = personalPoseSignature(state);
     if (!force && signature === lastSavedSignature) {
@@ -4897,6 +5225,7 @@ function clearSeatReclaimRetry(): void {
 }
 
 function connectRoomStateWithRetry(roomStateUrl: string): void {
+  if (sessionControlBlocked) return;
   clearRoomStateReconnect();
   clearSeatReclaimRetry();
   debugState.roomStateMode = "disconnected";
@@ -4917,13 +5246,20 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
   }
 
   const connectionGeneration = ++roomStateConnectionGeneration;
+  surfaceStopRevisionSupported = false;
+  seatCommandCorrelationSupported = false; roomStateOccupancySeen = false;
+  meetingTools?.sync();
   const isCurrentConnection = () => connectionGeneration === roomStateConnectionGeneration;
   roomStateClient = connectRoomState(roomStateUrl, roomId, participantId, {
+    onIdentityRequired: (reason) => {
+      if (isCurrentConnection()) runtimeSessionGate.require(reason);
+    },
     onOpen: () => {
       if (!isCurrentConnection()) return;
       const reopened = debugState.avatarPoseTransport.lastPoseSentAtMs > 0;
       roomStateConnected = true;
       debugState.roomStateConnected = true;
+      roomPluginRuntime.connectionChanged();
       debugState.roomStateMode = "colyseus";
       startShareButton.disabled = !canUseScreenShareControl();
       stopShareButton.disabled = !canStopLocalScreenShare();
@@ -4940,6 +5276,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       const seatReclaim = planSeatReclaimOnReconnect({
         currentSeatId: getCurrentSeatId(),
         pendingReleaseSeatIds: seatingController.getPendingReleaseSeatIds(),
+        pendingCorrelatedReleases: seatingController.getPendingCorrelatedReleases(),
         seatingEnabled: runtimeFlags.avatarSeatingEnabled,
         roomStateClientAvailable: Boolean(activeClient)
       });
@@ -4989,6 +5326,9 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
     },
     onSeatClaimResult: (result) => {
       if (!isCurrentConnection()) return;
+      roomPluginSeats.settleClaim(result);
+      // A late answer to a cancelled automatic claim never seats or clears anything.
+      if (seatingController.isCancelledClaim(result.commandId)) { syncSeatDebugState(); return; }
       if (result.accepted) {
         roomSeatOccupancy = applyAcceptedSeatClaimToOccupancy(roomSeatOccupancy, { result, participantId });
         clearSeatReclaimRetry();
@@ -4996,20 +5336,29 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
         setStatus(`Seated at ${result.seatId}`);
         return;
       }
-      seatingController.clearPending();
+      seatingController.settleRejectedClaim(result);
       clearSeatReclaimRetry();
       syncSeatDebugState();
       setStatus(result.occupantId ? `Seat occupied by ${result.occupantId}` : "Seat unavailable");
+      roomPluginRuntime.seatingChanged();
+    },
+    onSeatReleaseResult: (result) => {
+      if (!isCurrentConnection()) return;
+      seatingController.acknowledgeRelease(result.commandId);
+      syncSeatStateFromOccupancy();
     },
     onAccessDenied: (result) => {
       if (!isCurrentConnection()) return;
-      debugState.access.lastDeniedPermission = result.permission;
+      const command = result as SurfaceCommandResult;
+      const replacementConflict = result.permission === "surface.stop-object" && command.commandId?.includes(":meeting-replace:")
+        && ["revision-mismatch", "missing-object", "object-surface-mismatch"].includes(command.blockedReason ?? "");
+      debugState.access.lastDeniedPermission = replacementConflict ? null : result.permission;
       debugState.access.lastSurfaceCommandAccepted = false;
       debugState.mediaObjects.lastCommand = result as SurfaceCommandResult;
       debugState.mediaObjects.blockedReason = (result as SurfaceCommandResult).blockedReason ?? null;
       mediaSurfaceCommands.settle(result as SurfaceCommandResult);
       if (!debugState.issueCode) {
-        setStatus(`Access denied: ${result.permission}`);
+        setStatus(replacementConflict ? "Surface content changed. Review it and try again." : `Access denied: ${result.permission}`);
       }
     },
     onSurfaceCommandResult: (result) => {
@@ -5029,6 +5378,8 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       const issue = classifyRoomStateError(error);
       roomStateConnected = false;
       debugState.roomStateConnected = false;
+      roomPluginRuntime.connectionChanged();
+      roomPluginSeats.stop("offline");
       mediaSurfaceCommands.rejectAll("room_state_error");
       clearSeatReclaimRetry();
       applyIssue(issue, {
@@ -5047,7 +5398,10 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       const issue = getRuntimeIssue("room_state_failed");
       roomStateConnected = false;
       debugState.roomStateConnected = false;
+      roomPluginRuntime.connectionChanged();
+      roomPluginSeats.stop("offline");
       mediaSurfaceCommands.rejectAll("room_state_closed");
+      surfaceStopRevisionSupported = false; meetingTools?.sync();
       applyIssue(issue, {
         degradedMode: "api_fallback",
         roomStateMode: "disconnected",
@@ -5333,7 +5687,12 @@ const mediaRoomConnection = createCoalescedConnection<Room>({
       throw createFaultError("ConnectionError", "media_network_blocked");
     }
 
-    const voicePlan = await planVoiceSession(apiBaseUrl, roomId, participantId, roomStateAccessToken);
+    const proof = roomStateAccessToken;
+    const voicePlan = await planBaseMedia({ optionalShare: debugState.access.canStartScreenShare,
+      proofStillCurrent: () => proof === roomStateAccessToken && !sessionControlBlocked && !runtimeSessionGate.reason,
+      plan: screenShare => planVoiceSession(apiBaseUrl, roomId, participantId, proof,
+        { canPublishAudio: true, canPublishVideo: screenShare }) });
+    runtimeSessionGate.assertActive();
     setupAudio(room);
     setupMediaTransportDiagnostics(room);
     try {
@@ -5343,6 +5702,7 @@ const mediaRoomConnection = createCoalescedConnection<Room>({
       debugState.media.webrtc = createUnavailableWebRtcDiagnostics("livekit_connect_failed");
       throw error;
     }
+    runtimeSessionGate.assertActive();
     setupMediaTransportDiagnostics(room);
     await applyPreferredAudioDevices(room);
   },
@@ -5357,7 +5717,7 @@ const mediaRoomConnection = createCoalescedConnection<Room>({
   createInvalidatedError: () => createFaultError("NotAllowedError", "media_room_session_blocked")
 });
 
-async function ensureMediaRoom(): Promise<Room> {
+async function ensureBaseMediaRoom(): Promise<Room> {
   if (sessionControlBlocked) {
     throw createFaultError("NotAllowedError", "media_room_session_blocked");
   }
@@ -5373,6 +5733,11 @@ async function ensureMediaRoom(): Promise<Room> {
     await room.disconnect();
     return livekitRoom;
   }
+  installMediaRoom(room);
+  return room;
+}
+
+function installMediaRoom(room: Room): void {
   livekitRoom = room;
   mediaRoomReady = true;
   setupMediaTransportDiagnostics(room);
@@ -5381,8 +5746,68 @@ async function ensureMediaRoom(): Promise<Room> {
   syncScreenShareLiveKitTracks();
   reconcileRemoteAudioTracksWithPresence();
   startShareButton.disabled = !canUseScreenShareControl();
-  return room;
 }
+
+function roomPermitsScreenShare(room: Room): boolean {
+  const permission = room.localParticipant.permissions;
+  return permitsScreenShare(permission && { canPublish: permission.canPublish,
+    canPublishSources: permission.canPublishSources.map(source => Track.sourceFromProto(source)) });
+}
+
+const mediaSourceUpgrade = createMediaSourceUpgrade<Room, Awaited<ReturnType<typeof planVoiceSession>>>({
+  current: () => livekitRoom,
+  ensureBase: ensureBaseMediaRoom,
+  permitsShare: roomPermitsScreenShare,
+  assertActive: () => {
+    runtimeSessionGate.assertActive();
+    if (sessionControlBlocked) throw createFaultError("NotAllowedError", "media_room_session_blocked");
+  },
+  prepare: screenShare => planVoiceSession(apiBaseUrl, roomId, participantId, roomStateAccessToken,
+    { canPublishAudio: true, canPublishVideo: screenShare }),
+  create: () => new Room(),
+  retire: async room => {
+    await mediaAudioAction.settled();
+    runtimeSessionGate.assertActive();
+    if (livekitRoom !== room || sessionControlBlocked) throw createFaultError("NotAllowedError", "media_room_session_blocked");
+    if (Array.from(screenShareRuntimeByObjectId.values()).some(entry => !entry.remote && entry.publishedTracks.length > 0)) {
+      throw createFaultError("NotAllowedError", "media_upgrade_has_local_screen_share");
+    }
+    disconnectLocalAudioTrack();
+    if (audioMockEnabled) stopMockAudioSource();
+    await disconnectMediaRoom(room, "media_room_source_upgrade");
+  },
+  connect: async (room, plan) => {
+    setupAudio(room);
+    setupMediaTransportDiagnostics(room);
+    await room.connect(plan.livekitUrl, plan.token);
+    await applyPreferredAudioDevices(room);
+  },
+  install: installMediaRoom,
+  dispose: room => disconnectMediaRoom(room, "media_room_source_upgrade_failed"),
+  restoreMicrophone: async room => {
+    if (!audioSessionJoined || sessionControlBlocked || runtimeSessionGate.reason) return;
+    try { await setLocalMicrophoneEnabled(room, microphoneEnabled); }
+    catch (error) { microphoneEnabled = false; handleAudioActionError(error, "microphone_restore_failed"); }
+    syncLocalAudioPresence();
+    syncAudioControls();
+  },
+  transition: active => {
+    mediaRoomTransitionInFlight = active;
+    if (active) clearMediaRoomIdleDisconnect();
+    else reconcileMediaRoomIdleDisconnect(livekitRoom, "media_room_source_upgrade_idle");
+    syncAudioControls();
+  },
+  recoveryFailed: () => {
+    audioSessionJoined = false;
+    microphoneEnabled = false;
+    disconnectLocalAudioTrack();
+    syncAudioControls();
+    syncLocalAudioPresence();
+  },
+  invalidatedError: () => createFaultError("NotAllowedError", "media_room_session_blocked")
+});
+
+function ensureMediaRoom(screenShare = false): Promise<Room> { return mediaSourceUpgrade.ensure(screenShare); }
 
 function applyBotPose(timeSeconds: number): void {
   if (botMode === "off") {
@@ -5994,7 +6419,7 @@ async function refreshPresence(): Promise<void> {
   lastApiPresenceRefreshAtMs = nowMs;
   const apiFallbackRequired = !roomStateConnected;
   try {
-    latestFallbackParticipants = await listPresence(apiBaseUrl, roomId);
+    latestFallbackParticipants = await listPresence(apiBaseUrl, roomId, roomStateAccessToken);
     if (apiFallbackRequired) {
       latestRealtimeParticipants = [];
     }
@@ -6053,9 +6478,7 @@ function setupAudio(room: Room): void {
       }
       return;
     }
-    if (participant?.identity) {
-      connectRemoteAudioTrack(track, participant.identity);
-    }
+    reconcileRemoteAudioTracksWithPresence();
     debugState.audioState = "remote-track";
   });
 
@@ -6083,9 +6506,8 @@ function setupAudio(room: Room): void {
       track.detach().forEach((element) => element.remove());
       return;
     }
-    if (participant?.identity) {
-      disconnectRemoteAudioElement(participant.identity);
-    }
+    // LiveKit emits unsubscribe before clearing publication.track.
+    reconcileRemoteAudioTracksWithPresence(track);
     track.detach().forEach((element) => element.remove());
   });
 
@@ -6096,17 +6518,14 @@ function setupAudio(room: Room): void {
     if (!isMicrophonePublication(publication)) {
       return;
     }
-    if (participant?.identity === participantId) {
+    if (participant === room.localParticipant) {
       microphoneEnabled = false;
       disconnectLocalAudioTrack();
       syncAudioControls();
       syncLocalAudioPresence();
       return;
     }
-    if (participant?.identity) {
-      disconnectRemoteAudioElement(participant.identity);
-      syncRemoteAudioDiagnostics();
-    }
+    syncRemoteAudioDiagnostics();
   });
 
   room.on(RoomEvent.TrackUnmuted, (publication, participant) => {
@@ -6116,7 +6535,7 @@ function setupAudio(room: Room): void {
     if (!isMicrophonePublication(publication)) {
       return;
     }
-    if (participant?.identity === participantId) {
+    if (participant === room.localParticipant) {
       microphoneEnabled = audioSessionJoined;
       if (microphoneEnabled) {
         connectLocalAudioTrack(room);
@@ -6125,131 +6544,17 @@ function setupAudio(room: Room): void {
       syncLocalAudioPresence();
       return;
     }
-    if (participant?.identity) {
-      const track = getRemoteParticipantMicrophoneTrack(participant.identity, publication);
-      if (track) {
-        connectRemoteAudioTrack(track, participant.identity);
-        syncRemoteAudioDiagnostics();
-      }
-    }
+    syncRemoteAudioDiagnostics();
   });
 }
 
-async function startScreenShare(): Promise<void> {
-  if (!debugState.access.canStartScreenShare) {
-    debugState.access.lastDeniedPermission = "screen-share.start";
-    throw createFaultError("NotAllowedError", "screen_share_forbidden");
-  }
-  if (!roomStateClient || !roomStateConnected) {
-    throw createFaultError("ConnectionError", "room_state_failed");
-  }
-  if (!shareMockEnabled && !browserMediaCapabilities.screenShare.supported) {
-    debugState.screenShare.errorCode = "display_capture_unsupported";
-    throw createFaultError("NotSupportedError", `screen_share_unsupported:${browserMediaCapabilities.screenShare.reason}`);
-  }
-  if (startShareButton.disabled) {
-    return;
-  }
-  const targetSurfaceId = selectedMediaSurfaceId;
-  const createResult = await mediaSurfaceCommands.createScreenShareObjectOnSurface(targetSurfaceId);
-  if (!createResult.accepted || !createResult.objectId) {
-    throw new Error(`screen_share_create_rejected:${createResult.blockedReason ?? "unknown"}`);
-  }
-
-  const objectId = createResult.objectId;
-  const surfaceId = createResult.surfaceId ?? targetSurfaceId;
-  lastScreenShareStoppedAtMs = 0;
-  let revision = createResult.revision ?? 0;
-  debugState.screenShare.selectedSurfaceId = surfaceId;
-  debugState.screenShare.errorCode = null;
-
-  try {
-    const selecting = await mediaSurfaceCommands.patchScreenShareObject(objectId, surfaceId, revision, { type: "mark-selecting" });
-    if (!selecting.accepted) {
-      throw new Error(`screen_share_selecting_rejected:${selecting.blockedReason ?? "unknown"}`);
-    }
-    revision = selecting.revision ?? revision;
-
-    if (shareMockEnabled) {
-      const publishing = await mediaSurfaceCommands.patchScreenShareObject(objectId, surfaceId, revision, { type: "mark-publishing" });
-      if (!publishing.accepted) {
-        throw new Error(`screen_share_publishing_rejected:${publishing.blockedReason ?? "unknown"}`);
-      }
-      revision = publishing.revision ?? revision;
-      const mediaTrackSid = `mock-screen-share:${participantId}:${objectId}:${Date.now()}`;
-      attachMockVideoStream(createMockShareStream(), objectId, surfaceId, mediaTrackSid);
-      const active = await mediaSurfaceCommands.patchScreenShareObject(objectId, surfaceId, revision, { type: "mark-active", mediaTrackSid });
-      if (!active.accepted) {
-        throw new Error(`screen_share_active_rejected:${active.blockedReason ?? "unknown"}`);
-      }
-      debugState.screenShareState = "sharing";
-      debugState.screenShare.active = true;
-      debugState.screenShare.localPublishing = true;
-      debugState.screenShare.publishedTrackSid = mediaTrackSid;
-      startShareButton.disabled = !canUseScreenShareControl();
-      stopShareButton.disabled = !canStopLocalScreenShare();
-      setStatus("Sharing screen");
-      void reportDiagnostics("screenshare_mock_started");
-      return;
-    }
-
-    const room = await ensureMediaRoom();
-    debugState.screenShareState = "starting";
-    const publishing = await mediaSurfaceCommands.patchScreenShareObject(objectId, surfaceId, revision, { type: "mark-publishing" });
-    if (!publishing.accepted) {
-      throw new Error(`screen_share_publishing_rejected:${publishing.blockedReason ?? "unknown"}`);
-    }
-    revision = publishing.revision ?? revision;
-    const mediaAudioEnabled = shouldPublishMediaSurfaceAudio(roomMediaObjects, surfaceId);
-    debugState.screenShare.mediaAudioEnabled = mediaAudioEnabled;
-    const published = await captureAndPublishScreenShareStream(room, { objectId, mediaAudioEnabled });
-    attachScreenShareStream(published.stream, {
-      objectId,
-      surfaceId,
-      ownerParticipantId: participantId,
-      mediaTrackSid: published.mediaTrackSid,
-      publishedTracks: published.publishedTracks
-    });
-    bindLocalScreenShareTrackEnd(objectId, surfaceId, published.publishedTracks);
-    const active = await mediaSurfaceCommands.patchScreenShareObject(objectId, surfaceId, revision, { type: "mark-active", mediaTrackSid: published.mediaTrackSid });
-    if (!active.accepted) {
-      throw new Error(`screen_share_active_rejected:${active.blockedReason ?? "unknown"}`);
-    }
-    debugState.screenShareState = "sharing";
-    debugState.screenShare.active = true;
-    debugState.screenShare.localPublishing = true;
-    debugState.screenShare.publishedTrackSid = published.mediaTrackSid;
-    startShareButton.disabled = !canUseScreenShareControl();
-    stopShareButton.disabled = !canStopLocalScreenShare();
-    setStatus("Sharing screen");
-    void reportDiagnostics("screenshare_started");
-  } catch (error) {
-    const errorCode = getScreenShareErrorCode(error);
-    debugState.screenShare.errorCode = errorCode;
-    void mediaSurfaceCommands.patchScreenShareObject(objectId, surfaceId, revision, { type: "mark-failed", errorCode })
-      .then(() => mediaSurfaceCommands.stopScreenShareObject(objectId, surfaceId))
-      .catch(() => undefined);
-    const entry = screenShareRuntimeByObjectId.get(objectId);
-    if (entry) {
-      entry.stopping = true;
-      await unpublishScreenShareEntry(entry);
-      detachScreenShareEntry(entry);
-    }
-    startShareButton.disabled = !canUseScreenShareControl();
-    stopShareButton.disabled = true;
-    throw error;
-  }
-}
-
-async function startWhiteboard(): Promise<void> {
+async function startWhiteboardOnSurface(surfaceId: string): Promise<void> {
   if (!debugState.access.canCreateWhiteboard) {
     debugState.access.lastDeniedPermission = "surface.create-object";
     throw createFaultError("NotAllowedError", "whiteboard_forbidden");
   }
-  if (startWhiteboardButton.disabled) {
-    return;
-  }
-  const result = await mediaSurfaceCommands.createWhiteboardObjectOnSurface(selectedMediaSurfaceId);
+  if (!roomStateConnected || activeMediaObjectForSurface(surfaceId) || !surfaceAllowsObject(surfaceId, WHITEBOARD_OBJECT_TYPE)) throw createFaultError("NotAllowedError", "whiteboard_control_unavailable");
+  const result = await mediaSurfaceCommands.createWhiteboardObjectOnSurface(surfaceId);
   if (!result.accepted) {
     debugState.mediaObjects.blockedReason = result.blockedReason ?? null;
     throw new Error(`whiteboard_create_rejected:${result.blockedReason ?? "unknown"}`);
@@ -6554,13 +6859,13 @@ function syncLocalAudioPresence(): void {
 }
 
 async function performAudioAction(action: () => Promise<void>): Promise<void> {
-  if (audioActionInFlight) {
+  if (audioActionInFlight || mediaRoomTransitionInFlight) {
     return;
   }
   audioActionInFlight = true;
   syncAudioControls();
   try {
-    await action();
+    await mediaAudioAction.run(action);
   } finally {
     audioActionInFlight = false;
     syncAudioControls();
@@ -6614,8 +6919,8 @@ async function joinAudio(): Promise<void> {
   const startMuted = joinMutedPreference;
   setStatus("Joining audio...");
   debugState.audioState = "joining";
-
-  const room = await ensureMediaRoom();
+  // An audio action already admitted before a promotion must settle on the base room before it is retired.
+  const room = await ensureBaseMediaRoom();
   audioSessionJoined = true;
   await setLocalMicrophoneEnabled(room, !startMuted);
   await refreshAudioDevices(!audioMockEnabled && !startMuted);
@@ -6623,7 +6928,7 @@ async function joinAudio(): Promise<void> {
   syncWhiteboardControls();
   syncLocalAudioPresence();
   syncAudioControls();
-  clearAudioIssue(startMuted ? "Joined muted" : "Audio connected");
+  clearAudioIssue(startMuted ? "Joined muted — press Unmute to speak" : "Audio connected");
   debugState.audioState = startMuted ? "muted" : "connected";
   void reportDiagnostics(startMuted ? "audio_joined_muted" : "audio_connected");
 }
@@ -6690,7 +6995,7 @@ micSelect.addEventListener("change", () => {
   preferredMicDeviceId = micSelect.value || "default";
   localStorage.setItem("vrata.audioinput", preferredMicDeviceId);
   updateAudioDeviceStatus(`Selected microphone: ${micSelect.selectedOptions[0]?.textContent ?? "default"}`);
-  if (!livekitRoom) {
+  if (!livekitRoom || mediaRoomTransitionInFlight) {
     return;
   }
   const room = livekitRoom;
@@ -6709,7 +7014,7 @@ speakerSelect.addEventListener("change", () => {
   preferredSpeakerDeviceId = speakerSelect.value || "default";
   localStorage.setItem("vrata.audiooutput", preferredSpeakerDeviceId);
   updateAudioDeviceStatus(`Selected speaker: ${speakerSelect.selectedOptions[0]?.textContent ?? "default"}`);
-  if (!livekitRoom || !supportsAudioOutputSelection()) {
+  if (!livekitRoom || mediaRoomTransitionInFlight || !supportsAudioOutputSelection()) {
     return;
   }
   void applyPreferredAudioDevices(livekitRoom).catch((error: unknown) => {
@@ -6731,9 +7036,31 @@ openPersonalRoomButton.addEventListener("click", () => {
   openPersonalRoomButton.disabled = true;
   openPersonalRoomButton.textContent = "Opening...";
   debugState.personalRoom.openState = "opening";
-  void openPersonalRoom(apiBaseUrl, { participantId: personalOwnerId, displayName }).then((result) => {
+  void (async () => {
+    if (activeIdentityProtocolVersion !== 2) return openPersonalRoom(apiBaseUrl, { participantId: personalOwnerId, displayName });
+    // A room ID is a lookup hint; reopening requires the separate tab-local proof.
+    const existingRoomId = sessionStorage.getItem("vrata.personalRoomId.v2");
+    const credential = existingRoomId ? createRoomIdentityTab(sessionStorage, existingRoomId).identityCredential() : null;
+    if (existingRoomId && !credential) throw new Error("personal_room_identity_recovery_required");
+    if (!existingRoomId) {
+      sessionStorage.setItem("vrata.identity.v2.storage-check", "1");
+      sessionStorage.removeItem("vrata.identity.v2.storage-check");
+    }
+    const result = await openPersonalRoom(apiBaseUrl, { identityProtocolVersion: 2, displayName,
+      ...(existingRoomId && credential ? { roomId: existingRoomId, identityCredential: credential } : {}) });
+    if (result.identityProtocolVersion !== 2 || !result.identityCredential || !result.participantId) {
+      throw new Error("invalid_personal_room_identity_admission");
+    }
+    const tab = createRoomIdentityTab(sessionStorage, result.room.roomId);
+    tab.rememberIdentity(result.identityCredential);
+    if (sessionStorage.getItem(`vrata.identity.v2.${encodeURIComponent(result.room.roomId)}`) !== result.identityCredential) {
+      throw new Error("personal_room_identity_storage_unavailable");
+    }
+    sessionStorage.setItem("vrata.personalRoomId.v2", result.room.roomId);
+    return result;
+  })().then((result) => {
     debugState.personalRoom.openState = "idle";
-    sessionStorage.setItem("vrata.participantId", result.room.ownerParticipantId ?? personalOwnerId);
+    sessionStorage.setItem("vrata.participantId", result.participantId ?? result.room.ownerParticipantId ?? personalOwnerId);
     window.location.assign(result.roomLink);
   }).catch((error: unknown) => {
     console.error(error);
@@ -6745,14 +7072,34 @@ openPersonalRoomButton.addEventListener("click", () => {
   });
 });
 
+roomRecoverySubmit.addEventListener("click", () => {
+  if (roomRecoverySubmit.disabled) return;
+  roomRecoverySubmit.disabled = true;
+  roomRecoveryStatus.textContent = "Verifying recovery code...";
+  void (async () => {
+    // Never redeem a single-use proof unless the new room identity can survive
+    // the required reload in this tab.
+    sessionStorage.setItem("vrata.identity.v2.storage-check", "1");
+    if (sessionStorage.getItem("vrata.identity.v2.storage-check") !== "1") throw new Error("storage_unavailable");
+    sessionStorage.removeItem("vrata.identity.v2.storage-check");
+    const restored = await redeemRoomRecovery({ apiBaseUrl, roomId, displayName, credential: roomRecoveryCredential.value });
+    roomIdentityTab.rememberIdentity(restored.identityCredential);
+    if (sessionStorage.getItem(`vrata.identity.v2.${encodeURIComponent(roomId)}`) !== restored.identityCredential) {
+      throw new Error("storage_unavailable");
+    }
+    sessionStorage.setItem("vrata.participantId", restored.participantId);
+    roomRecoveryCredential.value = "";
+    runtimeSessionGate.require("identity_recovery_required");
+    window.location.reload();
+  })().catch(() => {
+    roomRecoveryStatus.textContent = "Could not restore access. Ask the room administrator for a new code.";
+  }).finally(() => { roomRecoverySubmit.disabled = false; });
+});
+
 notesScopeSelect.addEventListener("change", () => {
-  notesState.activeNotesScope = notesScopeSelect.value === "private" ? "private" : "shared";
-  templatePreferences.setNotesScope(notesState.activeNotesScope);
-  notesState.notesLastSavedContent = "";
-  notesState.notesLastUpdatedAt = null;
-  notesState.notesVersions = [];
-  notesState.notesSaveState = "idle";
-  void loadActiveNote();
+  void changeNotesScope(notesScopeSelect.value === "private" ? "private" : "shared").then(changed => {
+    if (changed) templatePreferences.setNotesScope(notesState.activeNotesScope);
+  }).catch(() => undefined);
 });
 
 notesEditor.addEventListener("input", () => {
@@ -6781,11 +7128,12 @@ notesExportRoomJsonButton.addEventListener("click", () => {
 
 bindDocumentControls({
   roomId, documentSelect, documentUploadButton, documentDownloadButton,
+  documentRefreshButton, loadRoomDocuments,
   documentSurfaceButton, documentDeleteButton, presentationPrevButton,
   presentationNextButton, presentationLargeButton, presentationStopButton,
   documentMediaPlayButton, documentMediaFitButton, documentMediaLoopInput,
   documentMediaSeekInput, documentMediaStopButton, renderDocumentsUi,
-  uploadSelectedDocument, downloadSelectedDocument, selectDocumentForSurface,
+  uploadSelectedDocument, downloadSelectedDocument, selectDocumentForSurface: requestMeetingDocument,
   deleteSelectedDocument, currentPdfPresentationObject, goToPresentationPage,
   togglePresentationDisplayMode, stopCurrentPresentation,
   toggleDocumentMediaPlayback, toggleDocumentMediaFit,
@@ -6823,9 +7171,9 @@ bindHostControls({
   apiBaseUrl, roomId, debugState,
   get roomStateAccessToken() { return roomStateAccessToken; },
   hostParticipantSelect, lockRoomButton, unlockRoomButton, endSessionButton,
-  removeParticipantButton, transferHostButton, grantPresenterButton, revokePresenterButton,
-  renderHostControls, runHostControlAction, runRoomSessionControlAction,
-  removeRoomParticipant, transferRoomHost, grantRoomPresenter, revokeRoomPresenter
+  removeParticipantButton, transferHostButton, transferOwnerButton, grantPresenterButton, revokePresenterButton,
+  renderHostControls, runHostControlAction, canManageHostControls, authorityRevision, participantLabel, runRoomSessionControlAction,
+  removeRoomParticipant, transferRoomHost, transferRoomOwner, grantRoomPresenter, revokeRoomPresenter
 });
 
 joinAudioButton.addEventListener("click", () => {
@@ -6838,14 +7186,16 @@ joinMutedCheckbox.addEventListener("change", () => {
   joinMutedPreference = joinMutedCheckbox.checked;
   templatePreferences.setJoinMuted(joinMutedPreference);
   updateAudioDeviceStatus(joinMutedPreference ? "Join muted enabled" : "Join muted disabled");
+  syncAudioControls();
 });
 
-startShareButton.addEventListener("click", () => {
-  void startScreenShare().catch((error: unknown) => {
+function handleScreenShareActionError(error: unknown): void {
     console.error(error);
-    const issue = classifyScreenShareError(error);
+    const issue = classifyScreenShareActionError(error, meetingTools?.snapshot().phase === "capturing");
     if (issue.code === "screen_share_denied" || issue.code === "screen_share_unsupported" || issue.code === "media_network_blocked") {
       if (issue.code === "screen_share_unsupported") {
+        recordDisplayCaptureUnsupported(browserMediaCapabilities);
+        refreshClientCompatibility();
         startShareButton.disabled = true;
         startShareButton.textContent = "Share Unsupported";
         startShareButton.title = `Screen share unsupported: ${describeMediaCapabilityReason(browserMediaCapabilities.screenShare.reason)}`;
@@ -6868,8 +7218,8 @@ startShareButton.addEventListener("click", () => {
     setStatus("Screen share failed");
     debugState.screenShareState = error instanceof Error ? error.name : "failed";
     void reportDiagnostics("screenshare_failed");
-  });
-});
+}
+startShareButton.addEventListener("click", () => { void startScreenShare().catch(handleScreenShareActionError); });
 
 startWhiteboardButton.addEventListener("click", () => {
   void startWhiteboard().catch((error: unknown) => {
@@ -7040,18 +7390,21 @@ stopShareButton.addEventListener("click", () => {
 });
 
 window.addEventListener("keydown", (event) => {
-  keyState[event.code] = true;
-  if (!(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement) && !(event.target instanceof HTMLSelectElement)) {
+  if (collectRuntimeKeyboardSample(keyState, event, true)) {
     commitDebugSurfaceInputFromFocusedKeyboard("key-down", event);
   }
 });
 
 window.addEventListener("keyup", (event) => {
-  keyState[event.code] = false;
-  if (!(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement) && !(event.target instanceof HTMLSelectElement)) {
+  if (collectRuntimeKeyboardSample(keyState, event, false)) {
     commitDebugSurfaceInputFromFocusedKeyboard("key-up", event);
   }
 });
+
+window.addEventListener("focusin", event => {
+  if (isRuntimeUiKeyboardTarget(event.target)) clearRuntimeKeyboardState(keyState);
+});
+window.addEventListener("blur", () => clearRuntimeKeyboardState(keyState));
 
 renderer.domElement.addEventListener("pointerdown", (event) => {
   whiteboardPointerActive = whiteboardDrawToolActive && canUseWhiteboardDrawTool()
@@ -7274,7 +7627,7 @@ window.addEventListener("resize", () => {
 });
 
 window.addEventListener("beforeunload", () => {
-  void removePresence(apiBaseUrl, roomId, participantId, roomStateAccessToken);
+  if (!sessionControlBlocked) void removePresence(apiBaseUrl, roomId, participantId, roomStateAccessToken).catch(() => undefined);
   detachVideoTrack();
   for (const surfaceId of Array.from(mediaSurfaceViews.keys())) {
     closeMediaSurfaceRuntimes(surfaceId);
@@ -7374,7 +7727,6 @@ renderer.setAnimationLoop(() => {
     }
 
     syncAvatarPoseRealtime(nowMs);
-    void refreshSessionControl().catch(() => undefined);
 
     if (presenceAccumulator >= 0.12) {
       presenceAccumulator = 0;
@@ -7409,12 +7761,26 @@ async function main(): Promise<void> {
   joinMutedCheckbox.checked = joinMutedPreference;
   guestJoinMutedCheckbox.checked = templatePreferences.joinMuted(true);
   await waitForGuestOnboardingIfNeeded();
+  const pluginTokenRequest = roomPluginTokenBound.begin();
   const boot = await bootRuntime(apiBaseUrl, roomId, navigator.userAgent, {
     participantId,
     displayName,
     requestedRole: query.get("role"),
-    inviteToken: query.get("invite")
+    inviteToken: query.get("invite"),
+    identityCredential: roomIdentityTab.identityCredential(),
+    waitingCredential: roomIdentityTab.waitingCredential()
   });
+  runtimeSessionGate.assertActive();
+  if (boot.identityProtocolVersion === 2) {
+    if (!boot.participantId || !boot.identityCredential) throw new Error("invalid_room_identity_admission");
+    participantId = boot.participantId;
+    seatingController.adoptParticipantId(participantId);
+    debugState.participantId = participantId;
+    roomIdentityTab.rememberIdentity(boot.identityCredential);
+    try { sessionStorage.setItem("vrata.participantId", participantId); } catch { /* tab storage may be disabled */ }
+  }
+  activeIdentityProtocolVersion = boot.identityProtocolVersion ?? null;
+  startIdentitySessionRenewal(boot.access.expiresInSeconds);
   templatePreferences.setTemplate(boot.templateSettings);
   joinMutedPreference = templatePreferences.joinMuted();
   joinMutedCheckbox.checked = joinMutedPreference;
@@ -7446,8 +7812,12 @@ async function main(): Promise<void> {
   debugState.personalRoom.enabled = runtimeFlags.personalRoomsEnabled;
   debugState.personalRoom.roomType = boot.roomType;
   debugState.personalRoom.ownerParticipantId = boot.ownerParticipantId ?? null;
-  debugState.personalRoom.isOwner = boot.roomType === "personal" && boot.ownerParticipantId === participantId;
+  debugState.personalRoom.isOwner = boot.roomType === "personal" && (boot.identityProtocolVersion === 2
+    ? boot.isOwner === true : boot.ownerParticipantId === participantId);
   openPersonalRoomButton.hidden = !runtimeFlags.personalRoomsEnabled;
+  openPersonalRoomButton.disabled = !runtimeFlags.personalRoomsEnabled;
+  if (boot.identityProtocolVersion === 2) roomPluginTokenBound.admit(pluginTokenRequest, boot.access.token, boot.access.expiresInSeconds);
+  else roomPluginTokenBound.clear();
   roomStateAccessToken = boot.access.token;
   debugState.access = {
     ...boot.access,
@@ -7455,6 +7825,9 @@ async function main(): Promise<void> {
     lastDeniedPermission: null,
     lastSurfaceCommandAccepted: null
   };
+  observeAdmissionRevision(boot.authorityRevision, { participantId: boot.participantId, access: boot.access, isOwner: boot.isOwner });
+  initializeMeetingTools(boot);
+  meetingNavigation?.configureTemplate(boot.templateSurfaces ?? [], boot.templateSettings?.presentation.surfaceId);
   debugState.avatarPresenceMode = runtimeFlags.avatarLegIkEnabled ? "experimental-leg-ik" : "baseline";
   debugState.roomStateUrl = boot.roomStateUrl;
   debugState.sceneBundleUrl = boot.sceneBundleUrl ?? null;
@@ -7474,6 +7847,9 @@ async function main(): Promise<void> {
   refreshClientCompatibility();
   await syncPresence(boot.joinMode, false);
   await refreshSessionControl(true);
+  if (sessionControlBlocked) return;
+  if (!runtimeSessionGate.reason) sessionControlPoller.start();
+  roomPluginRuntime.start(activeIdentityProtocolVersion);
   await loadAvailableSpaces(boot.roomId);
   syncNotesAccessUi();
   void loadActiveNote();
@@ -7580,6 +7956,7 @@ async function main(): Promise<void> {
       applyCleanSceneMode,
       applySceneDebugFit,
       applySpawnPoint(spawnPoint) {
+        sceneEntryPoint = { ...spawnPoint.position };
         applySceneSpawnPoint(localPoseController, spawnPoint);
         updateLocalPositionDebug();
       },
@@ -7608,6 +7985,7 @@ async function main(): Promise<void> {
   }
 
   if (boot.roomType === "personal" && debugState.personalRoom.isOwner) {
+    if (sessionControlBlocked) return;
     restorePersonalPose(boot.personalState);
     startPersonalStatePersistence({
       roomId: boot.roomId,
@@ -7617,6 +7995,7 @@ async function main(): Promise<void> {
     });
   }
 
+  if (sessionControlBlocked) return;
   applyPostBootControls({
     displayName,
     runtimeFlags: {
@@ -7712,7 +8091,7 @@ async function main(): Promise<void> {
   });
   updateVrButtonState();
   if (runtimeFlags.enterVr) {
-    document.querySelector(".controls")?.appendChild(vrButton);
+    document.getElementById("primary-controls")?.appendChild(vrButton);
   }
   if (runtimeFlags.enterVr && !getEnterVrVisibility(xrSupport, runtimeFlags.enterVr)) {
     const issue = getRuntimeIssue("xr_unavailable");
@@ -7741,16 +8120,57 @@ async function main(): Promise<void> {
   player.add(localHeadMesh);
 
   await refreshPresence();
-  await reportDiagnostics("runtime_booted");
   syncAccumulator = 0;
   presenceAccumulator = 0;
   diagnosticsAccumulator = 0;
-  runtimeBootReady = true;
+  runtimeBootReady = !sessionControlBlocked;
+  roomPluginRuntime.kick();
+  roomPluginSeats.observe();
+  roomPluginRuntime.seatingChanged();
+  roomPluginAuthor.sync();
+  reportRuntimeBootDiagnostics(reportDiagnostics);
 }
 
+const sessionUpgradeUi = mountSessionUpgradeUi({
+  gate: runtimeSessionGate, roomId, buildId: new URL(import.meta.url).pathname,
+  document, storage: () => sessionStorage, reload: () => window.location.reload(), download: downloadBlob,
+  getUnsavedNote,
+  stopSession(reason) {
+    try { disableRuntimeForSessionBlock(reason); }
+    finally {
+      renderer.setAnimationLoop(null);
+      void renderer.xr.getSession()?.end().catch(() => undefined);
+    }
+  },
+  confirmDiscard: () => window.confirm("The browser could not retain your note draft. Copy or download it first. Update anyway?")
+});
+
+meetingNavigation = createMeetingNavigationRuntime({
+  document, selectSurface: selectMediaSurface, authority: peopleAuthority,
+  context: () => ({
+    admitted: Boolean(roomStateAccessToken), blocked: sessionControlBlocked || Boolean(runtimeSessionGate.reason),
+    connected: roomStateConnected, permissions: debugState.access.permissions,
+    features: { audio: runtimeFlags.audioJoin, screenShare: runtimeFlags.screenShare || shareMockEnabled,
+      documents: runtimeFlags.documentsEnabled, notes: runtimeFlags.notesEnabled, hostControls: runtimeFlags.hostControlsEnabled },
+    capabilities: { microphone: audioMockEnabled || browserMediaCapabilities.audioInput.supported,
+      screenCapture: shareMockEnabled || browserMediaCapabilities.screenShare.supported, speakerSelection: supportsAudioOutputSelection() },
+    audioJoined: audioSessionJoined, audioBusy: audioActionInFlight || mediaRoomTransitionInFlight,
+    documentSelected: Boolean(selectedDocument()), documentDisplayable: ["pdf", "image", "video"].includes(selectedDocument()?.metadata?.kind ?? ""),
+    canManagePeople: canManageHostControls(), participantSelected: Boolean(hostParticipantSelect.value),
+    selectedSurfaceId: selectedMediaSurfaceId, localParticipantId: participantId,
+    toolReasons: meetingToolReasons(),
+    physicalSurfaceIds: new Set([...mediaSurfaceViews].filter(([, surface]) => surface.object.visible).map(([id]) => id)),
+    surfaces: roomMediaObjects?.surfaces ?? null, objects: roomMediaObjects?.objects ?? {}
+  })
+});
+
 void main().catch((error: unknown) => {
+  if (error instanceof SessionUpgradeError || runtimeSessionGate.reason) return;
   console.error(error);
   if (error instanceof RuntimeAccessError) {
+    if (error.waitingCredential) {
+      try { roomIdentityTab.rememberWaiting(error.waitingCredential); } catch { /* invalid proof is never stored */ }
+    }
     const message = describeRoomAccessError(error);
     setStatus(message);
     guestAccessLineEl.textContent = error.accessRequestId

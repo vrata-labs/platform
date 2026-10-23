@@ -49,6 +49,21 @@ function commonHeaders(contentType: string, origin = "*") {
   };
 }
 
+test("trusted kernel can create only same-origin child workers; guest worker retains the stricter CSP", async () => {
+  await fixture(async root => {
+    for (const [name, policy] of [
+      ["room-plugin-kernel-abcdefgh.js", "default-src 'none'; script-src 'none'; connect-src 'none'; worker-src 'self'; base-uri 'none'"],
+      ["room-plugin-worker-abcdefgh.js", "default-src 'none'; script-src 'wasm-unsafe-eval'; connect-src 'none'; worker-src 'none'; base-uri 'none'"]
+    ]) {
+      const path = join(root, name); await writeFile(path, "// fixed trusted asset");
+      const captured = capture(); assert.equal(await serveStatic(captured.response, path), true);
+      const headers = captured.calls[0][2] as Record<string, string>;
+      assert.equal(headers["content-security-policy"], policy); assert.equal(headers["x-content-type-options"], "nosniff");
+      assert.equal(headers["cross-origin-resource-policy"], "same-origin");
+    }
+  });
+});
+
 async function fixture(run: (root: string) => Promise<void>): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "vrata-http-responses-"));
   try { await run(root); } finally { await rm(root, { recursive: true, force: true }); }
@@ -217,7 +232,8 @@ for (const [extension, type] of [
       await writeFile(path, body);
       const { response, calls } = capture();
       assert.equal(await serveStatic(response, path), true);
-      assert.deepEqual(calls, [["writeHead", 200, { "content-type": type, "content-length": String(body.length) }], ["end", body]]);
+      assert.deepEqual(calls, [["writeHead", 200, { "content-type": type, "content-length": String(body.length),
+        ...(extension === ".HTML" ? { "cache-control": "no-cache" } : {}) }], ["end", body]]);
     });
   });
 }
@@ -314,7 +330,7 @@ test("real HTTP static GET and HEAD retain length, bytes and request ID", async 
       assert.equal(result.headers["content-length"], String(body.length));
       assert.equal(result.headers["content-type"], "text/html; charset=utf-8");
       assert.equal(result.headers["access-control-allow-origin"], undefined);
-      assert.equal(result.headers["cache-control"], undefined);
+      assert.equal(result.headers["cache-control"], "no-cache");
       assert.deepEqual(result.body, method === "HEAD" ? Buffer.alloc(0) : body);
     }
   });
