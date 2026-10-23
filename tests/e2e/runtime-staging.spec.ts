@@ -1,7 +1,8 @@
 import { expect, test, observeScenePage, type APIRequestContext, type Page } from "./scene-network-fixture";
 import { PDFDocument, rgb } from "pdf-lib";
 import { expectSceneRoomReady, type ExpectedBundleUrl } from "./scene-room-acceptance";
-import { createLegacyStagingRoom, releaseLegacyStagingRoom, disableRetainedStagingRooms } from "./staging-legacy-room";
+import { createLegacyStagingRoom, releaseLegacyStagingRoom, disableRetainedStagingRooms, enterStagingRoomAsHost, stagingInvitation } from "./staging-legacy-room";
+import { completeGuestEntry } from "./guest-entry";
 
 const stagingRoomId = process.env.STAGING_ROOM_ID ?? "demo-room";
 const stagingAdminToken = process.env.STAGING_ADMIN_TOKEN ?? "";
@@ -9,7 +10,20 @@ const stagingAdminToken = process.env.STAGING_ADMIN_TOKEN ?? "";
 const stagingBaseUrl = process.env.BASE_URL ?? "http://127.0.0.1:4000";
 const stagingAssetBaseUrl = process.env.STAGING_ASSET_BASE_URL ?? `${new URL(stagingBaseUrl).protocol}//state.${new URL(stagingBaseUrl).host}`;
 const stagingSceneBundleVersion = process.env.STAGING_SCENE_BUNDLE_VERSION;
-test.afterEach(async ({ request }) => disableRetainedStagingRooms(request, stagingAdminToken));
+const stagingAdmin = { "x-vrata-admin-token": stagingAdminToken };
+// Role query parameters are a floor-1 development path; real invitations work on both floors.
+const invitationRevocations: Array<() => Promise<void>> = [];
+test.afterEach(async ({ request }) => {
+  for (const revoke of invitationRevocations.splice(0)) await revoke();
+  await disableRetainedStagingRooms(request, stagingAdminToken);
+});
+
+async function enterAsMember(page: Page, request: APIRequestContext, roomId: string, displayName: string) {
+  const invitation = await stagingInvitation(request, roomId, stagingAdmin, "member", { debug: "1" });
+  invitationRevocations.push(invitation.revoke);
+  await page.goto(invitation.link);
+  await completeGuestEntry(page, displayName);
+}
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -283,7 +297,7 @@ test.describe("@staging runtime HUD space selector", () => {
     await expect(page.locator("#speaker-level-fill").locator("..")).toBeVisible();
   });
 
-  test("PDF presentation renders, changes page, and restores current page for late join", async ({ page, request, baseURL }) => {
+  test("PDF presentation renders, changes page, and restores current page for late join", async ({ page, request }) => {
     test.setTimeout(180000);
     const createRoomResponse = await createLegacyStagingRoom(request, "pdf", {
       headers: { "x-vrata-admin-token": stagingAdminToken },
@@ -294,8 +308,7 @@ test.describe("@staging runtime HUD space selector", () => {
       }
     });
     expect(createRoomResponse.ok()).toBeTruthy();
-    const room = await createRoomResponse.json() as { roomId: string; roomLink: string };
-    const roomUrl = new URL(room.roomLink, baseURL).toString();
+    const room = await createRoomResponse.json() as { roomId: string };
 
     const pdf = await PDFDocument.create();
     const pageOne = pdf.addPage([640, 360]);
@@ -303,7 +316,7 @@ test.describe("@staging runtime HUD space selector", () => {
     const pageTwo = pdf.addPage([640, 360]);
     pageTwo.drawRectangle({ x: 0, y: 0, width: 640, height: 360, color: rgb(0.08, 0.18, 0.9) });
 
-    await page.goto(`${roomUrl}?role=host&name=StagingPdfHost&debug=1`);
+    invitationRevocations.push((await enterStagingRoomAsHost(page, request, room.roomId, stagingAdmin, "StagingPdfHost", { debug: "1" })).revoke);
     await expect(page.locator("#document-upload-button")).toBeEnabled({ timeout: 15000 });
     await page.setInputFiles("#document-upload-input", {
       name: "staging-slides.pdf",
@@ -323,7 +336,7 @@ test.describe("@staging runtime HUD space selector", () => {
 
     const latePage = await observeScenePage(page.context().newPage());
     try {
-      await latePage.goto(`${roomUrl}?role=member&name=StagingPdfLate&debug=1`);
+      await enterAsMember(latePage, request, room.roomId, "StagingPdfLate");
       await expect(latePage.locator("#presentation-page-label")).toHaveText("Page 2 / 2", { timeout: 30000 });
       await expect.poll(async () => latePage.evaluate(() => {
         const debug = (window as Window & { __VRATA_DEBUG__?: { pdfPresentation?: { renderState?: string; page?: number } } }).__VRATA_DEBUG__;
@@ -338,16 +351,15 @@ test.describe("@staging runtime HUD space selector", () => {
     await expect(page.locator("#presentation-controls")).toBeHidden({ timeout: 15000 });
   });
 
-  test("image and video surfaces render and restore synchronized playback", async ({ page, request, baseURL }) => {
+  test("image and video surfaces render and restore synchronized playback", async ({ page, request }) => {
     test.setTimeout(180000);
     const createRoomResponse = await createLegacyStagingRoom(request, "documents", {
       headers: { "x-vrata-admin-token": stagingAdminToken },
       data: { tenantId: "demo-tenant", templateId: "meeting-room-basic", name: `Staging document media ${Date.now()}` }
     });
     expect(createRoomResponse.ok()).toBeTruthy();
-    const room = await createRoomResponse.json() as { roomLink: string };
-    const roomUrl = new URL(room.roomLink, baseURL).toString();
-    await page.goto(`${roomUrl}?role=host&name=StagingMediaHost&debug=1`);
+    const room = await createRoomResponse.json() as { roomId: string };
+    invitationRevocations.push((await enterStagingRoomAsHost(page, request, room.roomId, stagingAdmin, "StagingMediaHost", { debug: "1" })).revoke);
     await expect(page.locator("#document-upload-button")).toBeEnabled({ timeout: 15000 });
 
     const pngBase64 = await page.evaluate(() => {
@@ -407,7 +419,7 @@ test.describe("@staging runtime HUD space selector", () => {
 
     const latePage = await observeScenePage(page.context().newPage());
     try {
-      await latePage.goto(`${roomUrl}?role=member&name=StagingMediaLate&debug=1`);
+      await enterAsMember(latePage, request, room.roomId, "StagingMediaLate");
       await expect.poll(async () => latePage.evaluate(() => {
         const media = (window as Window & { __VRATA_DEBUG__?: { documentMedia?: { kind?: string | null; playbackState?: string; actualPositionMs?: number; errorCode?: string | null } } }).__VRATA_DEBUG__?.documentMedia;
         return { kind: media?.kind ?? null, playbackState: media?.playbackState ?? null, ready: (media?.actualPositionMs ?? 0) > 0, errorCode: media?.errorCode ?? null };

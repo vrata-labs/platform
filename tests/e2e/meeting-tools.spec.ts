@@ -1,7 +1,7 @@
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
-import { randomUUID } from "node:crypto";
 import { startReferenceTemplateFixture } from "./reference-template-fixture";
 import { chooseMeetingPanel as choosePanel } from "./meeting-tools-acceptance";
+import { admitInvitation } from "./staging-identity";
 
 test.use({ trace: "off", screenshot: "off", video: "off" });
 type Fixture = Awaited<ReturnType<typeof startReferenceTemplateFixture>>;
@@ -128,13 +128,12 @@ for (const mobile of [false, true]) {
       }
       // A normal API-admitted colleague uses the same merged presence source as
       // the avatar/host UI. Their name is text, never HTML or a raw-ID fallback.
-      const peerId = randomUUID(), otherInvite = await request.post(`${fixture.origin}/api/rooms/${room.roomId}/invites`, { headers, data: { role: "member", expiresInSeconds: 600 } });
+      const otherInvite = await request.post(`${fixture.origin}/api/rooms/${room.roomId}/invites`, { headers, data: { role: "member", expiresInSeconds: 600 } });
       expect(otherInvite.status()).toBe(201);
-      const other = await request.post(`${fixture.origin}/api/tokens/state`, { data: { roomId: room.roomId, participantId: peerId,
-        inviteToken: (await otherInvite.json()).inviteToken, displayName: "Colleague" } }); expect(other.status()).toBe(200);
+      const other = await admitInvitation(fixture.origin, room.roomId, (await otherInvite.json()).inviteToken, "Colleague"), peerId = other.participantId;
       const unsafeName = "<img src=x>";
       expect((await request.put(`${fixture.origin}/api/rooms/${room.roomId}/presence/${peerId}`, {
-        headers: { authorization: `Bearer ${(await other.json()).token}` }, data: { participantId: peerId, displayName: unsafeName, mode: "desktop",
+        headers: { authorization: `Bearer ${other.token}` }, data: { participantId: peerId, displayName: unsafeName, mode: "desktop",
           rootTransform: { x: 2, y: 0, z: 2, yaw: 0 }, bodyTransform: { x: 2, y: 0.92, z: 2, yaw: 0 },
           headTransform: { x: 2, y: 1.6, z: 2, yaw: 0, pitch: 0 }, audioJoined: false, muted: true,
           speaking: false, activeMedia: { audio: false, screenShare: false }, seq: 1, clientTimeMs: Date.now() }

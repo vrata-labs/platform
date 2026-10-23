@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expect } from "playwright/test";
 import { bearer, inviteTokenFromLink, privateHttp } from "./plugin-author-scenarios";
+import { admitInvitation } from "./staging-identity";
 
 // Native fetch and scalar assertions avoid private credentials in API call logs.
 export async function runPersistedTelemetryRoundTrip(origin: string, admin: Record<string, string>): Promise<void> {
@@ -16,11 +17,9 @@ export async function runPersistedTelemetryRoundTrip(origin: string, admin: Reco
       { role: "host", waitingRoomEnabled: false, expiresInSeconds: 600 });
     expect(invitation.status).toBe(201);
     const invite = invitation.json<{ inviteId: string; inviteLink: string }>(); inviteId = invite.inviteId;
-    const participantId = `telemetry-host-${randomUUID()}`;
-    const admitted = await privateHttp(origin, "/api/tokens/state", "POST", {}, { roomId, participantId,
-      displayName: "Telemetry Host", inviteToken: inviteTokenFromLink(invite.inviteLink) });
-    expect(admitted.status).toBe(200);
-    const host = admitted.json<{ token: string; role: string }>(); expect(host.role === "host").toBe(true);
+    const host = await admitInvitation(origin, roomId, inviteTokenFromLink(invite.inviteLink), "Telemetry Host");
+    expect(host.role === "host").toBe(true);
+    const { participantId } = host;
     const headers = bearer(host.token), stem = `/api/rooms/${roomId}`;
     const control = await privateHttp(origin, `${stem}/session-control`, "GET", headers);
     expect(control.status).toBe(200);

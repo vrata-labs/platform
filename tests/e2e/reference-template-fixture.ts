@@ -31,6 +31,9 @@ type ReferenceTemplateFixtureOptions = {
   stateTokenSecret?: string;
   livekitUrl?: string;
   documentUploadMaxBytes?: number;
+  /** Raised after seeding, as on an activated deployment. VRATA_E2E_IDENTITY_FLOOR=2 reruns unpinned
+   * scenarios on floor 2 before a shared activation; callers that depend on a floor pass it explicitly. */
+  identityProtocol?: 1 | 2;
 };
 
 export async function startReferenceTemplateFixture(postgresUrl: string, options: ReferenceTemplateFixtureOptions = {}) {
@@ -54,6 +57,9 @@ export async function startReferenceTemplateFixture(postgresUrl: string, options
   const origin = `http://127.0.0.1:${apiPort}`;
   const stateOrigin = `http://127.0.0.1:${statePort}`;
   const connection = new URL(postgresUrl); connection.searchParams.set("options", `-c search_path=${schema},public`);
+  const floor = options.identityProtocol ?? (process.env.VRATA_E2E_IDENTITY_FLOOR === "2" ? 2 : 1);
+  // v2 credentials need a signing secret of at least 32 bytes; the 16-byte development default fails closed.
+  const stateTokenSecret = options.stateTokenSecret ?? (floor === 2 ? `reference-fixture-state-secret-${schema}` : undefined);
   let storage: InstanceType<typeof PostgresStorage>;
   let apiChild: ChildProcess | undefined;
   let roomStateChild: ChildProcess | undefined;
@@ -68,7 +74,7 @@ export async function startReferenceTemplateFixture(postgresUrl: string, options
     ROOM_STATE_INTERNAL_URL: stateOrigin, ROOM_STATE_PUBLIC_URL: `ws://127.0.0.1:${statePort}`, API_INTERNAL_URL: origin,
     VRATA_INTERNAL_SERVICE_TOKEN: "test-internal-token", ROOM_TEMPLATE_ASSET_BASE_URL: assetsOrigin,
     FEATURE_AVATAR_POSE_BINARY: "true", VRATA_DEV_ROLE_QUERY: String(options.devRoleQuery ?? true),
-    ...(options.stateTokenSecret ? { STATE_TOKEN_SECRET: options.stateTokenSecret } : {}),
+    ...(stateTokenSecret ? { STATE_TOKEN_SECRET: stateTokenSecret } : {}),
     LIVEKIT_URL: options.livekitUrl ?? "ws://127.0.0.1:7880", LIVEKIT_API_KEY: "devkey", LIVEKIT_API_SECRET: "secret",
     ...(options.livekitUrl ? { LIVEKIT_ROOM_PREFIX: "vrata-", MEDIA_TOKEN_TTL_SECONDS: "120" } : {}),
     DOCUMENT_LOCAL_UPLOAD_ROOT: documentStorageRoot, MINIO_DOCUMENT_PREFIX: "documents",
@@ -141,6 +147,10 @@ export async function startReferenceTemplateFixture(postgresUrl: string, options
     const { seedStagingTemplateFixtures } = await import(pathToFileURL(resolve("tools/seed-staging-template-fixtures.mjs")).href);
     await seedStagingTemplateFixtures(origin, adminToken);
     await storage.transitionReferenceTemplateCatalog("active");
+    if (floor === 2) {
+      assert.match(schema, /^template_e2e_[0-9a-f]{32}$/);
+      await storage.identityProtocol.raise(2);
+    }
   } catch (error) {
     closing = true;
     await Promise.all([apiChild, roomStateChild].filter((child): child is ChildProcess => Boolean(child)).map(stop)); await pool.end();

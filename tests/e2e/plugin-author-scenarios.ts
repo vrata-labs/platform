@@ -6,13 +6,121 @@ import { join, relative, resolve } from "node:path";
 import type { TestContext } from "node:test";
 import { pathToFileURL } from "node:url";
 import { expect, type APIRequestContext, type Page } from "playwright/test";
-import type { AuthorHttpResponse, startAuthorHttpFixture } from "../../apps/api/src/plugins/author-http.test-helper.js";
+import type { AuthorHttpPackage, AuthorHttpResponse, AuthorHttpSession, startAuthorHttpFixture } from "../../apps/api/src/plugins/author-http.test-helper.js";
 
 export const publicSdkSha256 = "c301002fb1fdbd3eb1c4aad396adef4e0160d450051f1a3ee5e9ae84b66a7896";
 export const nativeMarker = "__T05_NATIVE_AUTHOR_EXECUTED__";
 export const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 export const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
 export const pluginPath = (roomId: string, suffix: string) => `/api/rooms/${encodeURIComponent(roomId)}/plugins/${suffix}`;
+
+/** Public author acceptance on an activated floor, through HTTP only: genuine v2 invitations, an
+ * external CLI artifact and owned cleanup. Storage and quota internals stay in isolated tests. */
+export async function runFloorTwoAuthorRoutes(origin: string, admin: Record<string, string>, page: Page, sdk: Buffer): Promise<void> {
+  const tenantId = `plugin-author-floor-two-${randomUUID()}`;
+  let tenantCreated = false, roomId: string | undefined;
+  const inviteIds: string[] = [];
+  let author: Awaited<ReturnType<typeof createExternalAuthorProject>> | undefined;
+  try {
+    expect((await privateHttp(origin, "/api/tenants", "POST", admin, { tenantId, name: "Plugin author floor two" })).status).toBe(201);
+    tenantCreated = true;
+    const created = await privateHttp(origin, "/api/rooms", "POST", admin, {
+      tenantId, templateId: "meeting-room-basic", name: "Private plugin author fixture", visibility: "private", guestAllowed: true,
+      features: { voice: false, screenShare: false, spatialAudio: false }
+    });
+    expect(created.status).toBe(201);
+    const room = created.json<{ roomId: string }>().roomId; roomId = room;
+    async function invite(role: string) {
+      const invitation = await privateHttp(origin, `/api/rooms/${room}/invites`, "POST", admin, { role, waitingRoomEnabled: false, expiresInSeconds: 600 });
+      expect(invitation.status).toBe(201);
+      const value = invitation.json<{ inviteId: string; inviteLink: string }>(); inviteIds.push(value.inviteId);
+      return inviteTokenFromLink(value.inviteLink);
+    }
+    const hostInvite = await invite("host");
+    // A legacy-shaped admission is refused before any identity or Host slot is issued.
+    const legacy = await privateHttp(origin, "/api/tokens/state", "POST", {}, { roomId: room, participantId: `legacy-${randomUUID()}`,
+      displayName: "Legacy plugin Host", inviteToken: hostInvite });
+    expect(legacy.status).toBe(426);
+    expect(legacy.bytes.toString("utf8") === JSON.stringify({ error: "identity_required", reason: "identity_upgrade_required" })).toBe(true);
+    async function session(inviteToken: string, role: string) {
+      const admitted = await privateHttp(origin, "/api/tokens/state", "POST", {},
+        { identityProtocolVersion: 2, roomId: room, displayName: `Plugin ${role}`, inviteToken });
+      expect(admitted.status).toBe(200);
+      const value = admitted.json<AuthorHttpSession>();
+      expect(value.token.startsWith("rs2.") && value.role === role).toBe(true);
+      return value;
+    }
+    const host = await session(hostInvite, "host");
+    const member = await session(await invite("member"), "member");
+    const guest = await session(await invite("guest"), "guest");
+    const privateValues = [host.token, host.identityCredential, member.token, member.identityCredential, guest.token, guest.identityCredential];
+    const call = (actor: AuthorHttpSession, suffix: string, method = "GET", body?: unknown) =>
+      privateHttp(origin, pluginPath(room, suffix), method, bearer(actor.token), body);
+
+    author = await createExternalAuthorProject(sdk);
+    const artifact = await author.build(`external.floor-two-${randomUUID().replaceAll("-", "")}`);
+    const uploaded = await call(host, "packages", "POST", artifact.bytes);
+    expect(uploaded.status).toBe(201);
+    const dto = uploaded.json<{ package: AuthorHttpPackage }>(); assertPublicDto(dto, privateValues);
+    const pkg = dto.package;
+    expect(pkg.pluginId === artifact.pluginId && pkg.artifactSha256 === artifact.artifactSha256 && pkg.state === "ready").toBe(true);
+    const content = `packages/${pkg.packageId}/content`;
+    assertDenied(await call(host, content), 403, "plugin_content_not_bound");
+    const binding = { expectedRevision: 0, packageId: pkg.packageId, version: pkg.version, artifactSha256: pkg.artifactSha256,
+      enabled: true, config: { greeting: "Shared floor two" }, approvedCapabilities: ["status.set"] };
+    const bound = await call(host, `bindings/${pkg.pluginId}`, "PUT", binding);
+    expect(bound.status).toBe(200); expect(bound.json<{ revision: number }>().revision).toBe(1);
+
+    const navigation = await page.goto(`${origin}/rooms/${room}`, { waitUntil: "domcontentloaded" }).catch(() => {
+      throw new Error("plugin_author_floor_two_room_shell_navigation_failed");
+    });
+    expect(navigation?.status()).toBe(200);
+    for (const actor of [member, guest]) {
+      const runtime = await call(actor, "runtime"); expect(runtime.status).toBe(200);
+      const snapshot = runtime.json<{ revision: number; bindings: Array<{ pluginId: string; artifactSha256: string }> }>();
+      assertPublicDto(snapshot, privateValues);
+      expect(snapshot.revision === 1 && snapshot.bindings.length === 1 && snapshot.bindings[0].artifactSha256 === pkg.artifactSha256).toBe(true);
+      const raw = await call(actor, content); expect(raw.status).toBe(200);
+      expect(raw.bytes.equals(artifact.bytes) && raw.headers["x-content-type-options"] === "nosniff"
+        && raw.headers["content-security-policy"].startsWith("sandbox;")).toBe(true);
+      const downloaded = await browserContent(page, pluginPath(room, content), actor.token);
+      expect(downloaded.status === 200 && downloaded.artifactSha256 === pkg.artifactSha256 && !downloaded.nativeExecuted).toBe(true);
+      for (const [suffix, method, body] of [["packages", "GET", undefined], ["packages", "POST", artifact.bytes],
+        [`bindings/${pkg.pluginId}`, "PUT", { ...binding, expectedRevision: 1 }]] as const) {
+        assertDenied(await call(actor, suffix, method, body), 403, "plugin_author_forbidden");
+      }
+    }
+    // Runtime reads need an admitted session; an administrator token is not one.
+    for (const suffix of ["runtime", content]) {
+      assertDenied(await privateHttp(origin, pluginPath(room, suffix), "GET", admin), 401, "identity_required");
+    }
+    const unbound = await call(host, `bindings/${pkg.pluginId}`, "DELETE", { expectedRevision: 1 });
+    expect(unbound.status).toBe(200); expect(unbound.json<{ revision: number }>().revision).toBe(2);
+    assertDenied(await call(guest, content), 403, "plugin_content_not_bound");
+    expect((await call(host, `packages/${pkg.packageId}`, "DELETE")).status).toBe(200);
+    const library = await call(host, "packages"); expect(library.status).toBe(200);
+    expect(library.json<{ packages: unknown[]; bindings: unknown[] }>().packages.length).toBe(0);
+    await author.assertNotExecuted();
+    expect(await page.evaluate(marker => Reflect.has(globalThis, marker), nativeMarker)).toBe(false);
+  } finally {
+    await page.goto("about:blank").catch(() => undefined);
+    let failed = false;
+    try { await author?.close(); } catch { failed = true; }
+    for (const inviteId of inviteIds) {
+      try { expect((await privateHttp(origin, `/api/rooms/${roomId}/invites/${inviteId}/revoke`, "POST", admin)).status).toBe(200); }
+      catch { failed = true; }
+    }
+    if (roomId) {
+      try { expect((await privateHttp(origin, `/api/rooms/${roomId}`, "DELETE", admin)).status).toBe(200); }
+      catch { failed = true; }
+    }
+    if (tenantCreated) {
+      try { expect((await privateHttp(origin, `/api/tenants/${tenantId}`, "DELETE", admin)).status).toBe(200); }
+      catch { failed = true; }
+    }
+    if (failed) throw new Error("plugin_author_floor_two_owned_resources_cleanup_failed");
+  }
+}
 
 export function inviteTokenFromLink(link: string): string {
   try {

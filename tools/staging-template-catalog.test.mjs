@@ -142,14 +142,19 @@ with tempfile.TemporaryDirectory() as root:
     assert host.identity_bound() is False
     import json
     def model(api, state): return json.dumps({"services":{"api":{"environment":{"STATE_TOKEN_SECRET":api}},"room-state":{"environment":{"STATE_TOKEN_SECRET":state}}}})
-    for a, b in ((None,None),("dev-state-secret","dev-state-secret"),("configured-secret","different-secret")):
+    signing = "configured-state-signing-secret-of-32-bytes"
+    for a, b in ((None,None),("dev-state-secret","dev-state-secret"),(signing,"different-secret")):
         host.run = lambda args: model(a,b)
         try: host.validate_identity_configuration()
         except ValueError as error:
             assert "identity_rollout_state_secret" in str(error)
-            assert "configured-secret" not in str(error) and "different-secret" not in str(error)
-        else: raise AssertionError("bad or drifting signing secret accepted")
+            assert "configured-secret" not in str(error) and "different-secret" not in str(error) and signing not in str(error)
+        else: raise AssertionError("bad, short or drifting signing secret accepted")
     host.run = lambda args: model("configured-secret","configured-secret")
+    try: host.validate_identity_configuration()
+    except ValueError as error: assert str(error) == "identity_rollout_state_secret_too_short"
+    else: raise AssertionError("a signing secret shorter than the v2 codec minimum was accepted")
+    host.run = lambda args: model(signing, signing)
     from pathlib import Path
     env_file = Path(root)/"infra/docker/.env.staging"
     env_file.parent.mkdir(parents=True)
@@ -174,7 +179,7 @@ spec=importlib.util.spec_from_file_location("catalog",${JSON.stringify(fileURLTo
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 with tempfile.TemporaryDirectory() as root:
     host=m.CatalogHost(root)
-    host.run=lambda args:json.dumps({"services":{name:{"environment":{"STATE_TOKEN_SECRET":"configured-secret"}} for name in ("api","room-state")}})
+    host.run=lambda args:json.dumps({"services":{name:{"environment":{"STATE_TOKEN_SECRET":"configured-state-signing-secret-of-32-bytes"}} for name in ("api","room-state")}})
     path=Path(root)/"infra/docker/.env.staging";path.parent.mkdir(parents=True)
     for value in ("","dev-internal-service-token","REPLACE_WITH_"+"x"*48,"short-private-value","unconfigured-read-only-preflight"):
         path.write_text("VRATA_INTERNAL_SERVICE_TOKEN="+value+"\\n")

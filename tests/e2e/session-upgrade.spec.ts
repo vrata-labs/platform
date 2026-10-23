@@ -1,5 +1,6 @@
 import { test, expect, type APIRequestContext, type Page, type WebSocketRoute } from "@playwright/test";
 import { createLegacyStagingRoom, releaseLegacyStagingRoom } from "./staging-legacy-room";
+import { identityProtocolAt } from "./staging-identity";
 
 // The migration server is deliberately not enabled in S1. Inject only its wire
 // denial; exercise the published client shutdown/UI through normal entry.
@@ -45,6 +46,8 @@ for (const staging of [false, true]) {
       test.setTimeout(90_000);
       const room = await fixture(request, staging);
       try {
+        // A floor-two deployment makes the same client adopt v2 before its first admission.
+        const protocol = staging && await identityProtocolAt(process.env.BASE_URL!) === 2 ? 2 : undefined;
         expect((await request.get(`/rooms/${room.roomId}`)).headers()["cache-control"]).toBe("no-cache");
         await page.addInitScript(() => {
           sessionStorage.setItem("vrata.participantId", "session-upgrade-tab");
@@ -52,7 +55,7 @@ for (const staging of [false, true]) {
           localStorage.setItem("vrata.personalOwnerId", "session-upgrade-owner");
         });
         await page.route("**/api/tokens/state", route => {
-          expect(route.request().postDataJSON().identityProtocolVersion).toBeUndefined();
+          expect(route.request().postDataJSON().identityProtocolVersion).toBe(protocol);
           return route.fulfill(denial());
         });
         await enter(page, room.inviteLink);

@@ -3,33 +3,39 @@ import { randomUUID } from "node:crypto";
 import { chooseMeetingPanel } from "./meeting-tools-acceptance";
 import { PDFDocument } from "pdf-lib";
 import { createExternalAuthorProject, downloadPublicSdk, nativeMarker } from "./plugin-author-scenarios";
+import { identityProtocolAt } from "./staging-identity";
 import { bindPluginArtifact as bind, enterOwnedPluginRoom as enter, expectPluginStatus as expectStatus, installPluginArtifact as install,
   startRoomPluginFixture as fixture, useOwnedActor as useActor } from "./room-plugin-fixture";
 
 // Room invitations, RS2 and private config must never enter trace/video/snapshots.
 test.use({ trace: "off", screenshot: "off", video: "off" });
 
-for (const staging of [false, true]) test(`${staging ? "@staging " : ""}legacy room loads without plugin discovery, Worker or VM download`, async ({ browser, request }) => {
+const stagingOrigin = () => ({ origin: process.env.BASE_URL!, adminToken: process.env.STAGING_ADMIN_TOKEN!, close: async () => {} });
+
+for (const staging of [false, true]) test(`${staging ? "@staging " : ""}room without plugin bindings never downloads Worker or VM; floor one skips discovery`, async ({ browser }) => {
   test.setTimeout(180_000);
-  const value = staging ? { origin: process.env.BASE_URL!, adminToken: process.env.STAGING_ADMIN_TOKEN!, close: async () => {} } : await fixture(1);
+  const value = staging ? stagingOrigin() : await fixture(1);
   expect(Boolean(value.origin && value.adminToken)).toBe(true);
   try {
-    if (staging) {
-      const health = await request.get(`${value.origin}/health`); expect(health.ok()).toBe(true);
-      expect((await health.json()).features?.identityProtocolVersion).not.toBe(2);
-    }
+    // Shared staging is read, not assumed: floor 2 discovers bindings, floor 1 has no plugin family.
+    const floor = staging ? await identityProtocolAt(value.origin) : 1;
     const actor = await enter(browser, value);
     await useActor(actor, async () => {
-      await actor.page.waitForTimeout(2200);
-      expect(actor.requests).toEqual({ plugin: 0, workers: 0, wasm: 0 });
+      if (floor === 2) await expect.poll(() => actor.requests.plugin, { timeout: 15_000 }).toBeGreaterThan(0);
+      else await actor.page.waitForTimeout(2200);
+      expect({ ...actor.requests, plugin: Math.min(actor.requests.plugin, 1) }).toEqual({ plugin: floor === 2 ? 1 : 0, workers: 0, wasm: 0 });
       await expect(actor.page.locator("#room-plugin-statuses")).toBeHidden();
-      await expect(actor.page.locator("#room-plugin-author")).toBeHidden();
+      // The admitted Host authors plugins only where the v2 plugin family exists.
+      if (floor === 2) await expect(actor.page.locator("#room-plugin-author")).toContainText("No packages uploaded", { timeout: 15_000 });
+      else await expect(actor.page.locator("#room-plugin-author")).toBeHidden();
     });
   } finally { await value.close(); }
 });
 
-test("isolated v2 discovers first external SDK artifact, changes config and disables without reload", async ({ browser, request }) => {
-  test.setTimeout(300_000); const value = await fixture(2);
+for (const staging of [false, true]) test(`${staging ? "@staging shared" : "isolated"} v2 discovers first external SDK artifact, changes config and disables without reload`, async ({ browser, request }) => {
+  test.setTimeout(300_000);
+  test.skip(staging && await identityProtocolAt(process.env.BASE_URL!) !== 2, "Shared staging has not activated identity v2");
+  const value = staging ? stagingOrigin() : await fixture(2);
   let author: Awaited<ReturnType<typeof createExternalAuthorProject>> | undefined;
   try {
     const actor = await enter(browser, value);

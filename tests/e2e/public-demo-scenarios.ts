@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { installFreshAudioObservation, readFreshAudioObservation } from "./fresh-audio-observation";
 import { createAudioProgressTracker, hasLiveAudio } from "./audio-progress";
+import { identityProtocolAt } from "./staging-identity";
 
 type DemoRole = "host" | "member" | "guest";
 type JsonRecord = Record<string, any>;
@@ -477,12 +478,15 @@ async function requestStateToken(
   input: { inviteToken?: string; requestedRole?: string },
   step: string
 ): Promise<{ status: number; data: JsonRecord }> {
+  // Floor 2 issues the participant itself; a requested role is sent to show it is ignored on both floors.
+  const identity = await identityProtocolAt(origin) === 2
+    ? { identityProtocolVersion: 2 } : { participantId: `public-demo-check-${randomUUID()}` };
   return fetchJson(origin, "/api/tokens/state", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       roomId,
-      participantId: `public-demo-check-${randomUUID()}`,
+      ...identity,
       displayName: "Public demo access check",
       ...input
     })
@@ -498,7 +502,10 @@ async function expectStateTokenDenied(
 ): Promise<void> {
   const result = await requestStateToken(origin, roomId, input, step);
   requireStatus(result.status, 403, step);
-  if (result.data.error !== "room_access_denied" || result.data.reason !== reason) {
+  // Floor 2 does not tell an unknown, expired or revoked invitation apart before admission.
+  const expected = await identityProtocolAt(origin) === 2 && reason.startsWith("invite_")
+    ? { error: "identity_required", reason: "invite_required" } : { error: "room_access_denied", reason };
+  if (result.data.error !== expected.error || result.data.reason !== expected.reason) {
     throw new Error(`${step}_wrong_denial`);
   }
 }
@@ -588,6 +595,13 @@ async function expectDirectRoomBrowserDenied(page: Page, origin: string, roomId:
 
 function assertTrustedSession(data: JsonRecord, expectedRole: DemoRole): { participantId: string; token: string } {
   const token = typeof data.token === "string" ? data.token : "";
+  if (data.identityProtocolVersion === 2) {
+    // An opaque possession proof: role and participant come from the server response, not token claims.
+    if (data.role !== expectedRole || !token.startsWith("rs2.") || typeof data.participantId !== "string" || !data.participantId) {
+      throw new Error("public_demo_untrusted_session_role");
+    }
+    return { participantId: data.participantId, token };
+  }
   const payload = decodeSessionToken(token);
   if (data.role !== expectedRole
     || payload.role !== expectedRole
@@ -1114,13 +1128,17 @@ async function supplementalInvites(origin: string, adminToken: string, roomId: s
   expiredLink: string;
   revokedLink: string;
 }> {
+  // The shortest real lifetime, then let it lapse: floor 2 never issues an already expired invitation.
   const expired = await adminJson(origin, adminToken, `/api/rooms/${roomId}/invites`, {
     method: "POST",
-    body: JSON.stringify({ role: "guest", expiresAt: new Date(Date.now() - 60_000).toISOString(), waitingRoomEnabled: false })
+    body: JSON.stringify({ role: "guest", expiresInSeconds: 1, waitingRoomEnabled: false })
   }, "public_demo_create_expired_invite");
   requireStatus(expired.status, 201, "public_demo_create_expired_invite");
   const expiredLink = typeof expired.data.inviteLink === "string" ? expired.data.inviteLink : "";
   inviteToken(expiredLink);
+  const expiresAtMs = typeof expired.data.expiresAt === "string" ? Date.parse(expired.data.expiresAt) : Number.NaN;
+  if (!Number.isFinite(expiresAtMs)) throw new Error("public_demo_expired_invite_invalid");
+  await new Promise(resolve => setTimeout(resolve, Math.max(0, expiresAtMs - Date.now()) + 1_000));
 
   const revoked = await adminJson(origin, adminToken, `/api/rooms/${roomId}/invites`, {
     method: "POST",
@@ -1218,8 +1236,11 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
     const deniedPage = await deniedContext.newPage();
     await expectDirectRoomBrowserDenied(deniedPage, options.origin, roomId);
     await expectInviteBrowserDenied(deniedPage, invalidInviteLink.href, "Invalid Demo Invite", "Access denied: private invite required");
-    await expectInviteBrowserDenied(deniedPage, negativeInvites.expiredLink, "Expired Demo Invite", "Access denied: invite link expired");
-    await expectInviteBrowserDenied(deniedPage, negativeInvites.revokedLink, "Revoked Demo Invite", "Access denied: invite link revoked");
+    const opaqueInvites = await identityProtocolAt(options.origin) === 2;
+    await expectInviteBrowserDenied(deniedPage, negativeInvites.expiredLink, "Expired Demo Invite",
+      opaqueInvites ? "Access denied: private invite required" : "Access denied: invite link expired");
+    await expectInviteBrowserDenied(deniedPage, negativeInvites.revokedLink, "Revoked Demo Invite",
+      opaqueInvites ? "Access denied: private invite required" : "Access denied: invite link revoked");
     await deniedContext.close();
     contexts.pop();
     for (let index = 0; index < 4; index += 1) contexts.push(await createTrackedContext(options.browser));
@@ -1394,13 +1415,29 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
     requireStatus((await removalResponse).status(), 200, "public_demo_host_remove_guest");
     await waitForExactPresence([host, firstMember, secondMember]);
     const blockedGuest = await sessionRequest(options.origin, roomId, guest.sessionToken, "/session-control", { method: "GET" }, "public_demo_removed_guest_server_state");
-    requireStatus(blockedGuest.status, 200, "public_demo_removed_guest_server_state");
-    if (blockedGuest.data.participant?.status !== "blocked" || blockedGuest.data.participant?.reason !== "participant_removed") {
-      throw new Error("public_demo_removed_guest_not_blocked_on_server");
+    // Floor 2 revokes the removed identity itself: its old session is not read back as blocked, it needs recovery.
+    const revokedIdentity = guest.sessionToken.startsWith("rs2.");
+    if (revokedIdentity) {
+      requireStatus(blockedGuest.status, 409, "public_demo_removed_guest_server_state");
+      if (blockedGuest.data.error !== "identity_required" || blockedGuest.data.reason !== "identity_recovery_required") {
+        throw new Error("public_demo_removed_guest_not_revoked_on_server");
+      }
+    } else {
+      requireStatus(blockedGuest.status, 200, "public_demo_removed_guest_server_state");
+      if (blockedGuest.data.participant?.status !== "blocked" || blockedGuest.data.participant?.reason !== "participant_removed") {
+        throw new Error("public_demo_removed_guest_not_blocked_on_server");
+      }
     }
     setPhase("host-remove-server-confirmed");
     await guest.page.bringToFront();
-    await expect(guest.page.locator("#status-line")).toContainText("Access denied: removed by host", { timeout: 120_000 });
+    if (revokedIdentity) {
+      await expect.poll(() => guest.page.evaluate(() => {
+        const debug = (window as any).__VRATA_DEBUG__;
+        return { reason: debug?.hostControls?.lastReason ?? null, connected: debug?.roomStateConnected ?? null };
+      }), { timeout: 120_000, intervals: corePollIntervals }).toEqual({ reason: "identity_recovery_required", connected: false });
+    } else {
+      await expect(guest.page.locator("#status-line")).toContainText("Access denied: removed by host", { timeout: 120_000 });
+    }
     phase = "completed";
   } catch (error) {
     primaryError = error;

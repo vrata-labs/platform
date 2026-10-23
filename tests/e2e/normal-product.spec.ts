@@ -1,7 +1,7 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { inlineSceneBundleUrl } from "./scene-bundle-fixtures.js";
 import type { RuntimeTestApi } from "../../apps/runtime-web/src/testing/runtime-test-api.js";
-import { createLegacyStagingRoom, releaseLegacyStagingRoom } from "./staging-legacy-room";
+import { createLegacyStagingRoom, enterStagingRoomAsHost, releaseLegacyStagingRoom } from "./staging-legacy-room";
 import { completeGuestEntry } from "./guest-entry";
 
 type Debug = {
@@ -43,13 +43,10 @@ async function verifyNormalProduct({ page, request }: { page: Page; request: API
     await route.continue();
   }, { times: 1 });
   const observer = await page.context().newPage();
+  let hostInvitation: Awaited<ReturnType<typeof enterStagingRoomAsHost>> | undefined;
   try {
-    const invite = await request.post(`/api/rooms/${roomId}/invites`, { headers, data: { role: "host", expiresInSeconds: 600 } });
-    expect(invite.ok()).toBe(true);
-    const link = new URL((await invite.json()).inviteLink);
-    link.searchParams.set("debug", "1"); link.searchParams.set("scenefit", "0");
-    await page.goto(`${link.pathname}${link.search}`);
-    await completeGuestEntry(page, "Regression host");
+    // Surface objects are Host controls; a retained floor-2 room needs the Host slot moved to this run.
+    hostInvitation = await enterStagingRoomAsHost(page, request, roomId, headers, "Regression host", { debug: "1", scenefit: "0" });
     await expect.poll(async () => (await readDebug(page)).sceneDebug?.state, { timeout: 30_000 }).toBe("loaded");
     await expect.poll(async () => (await readDebug(page)).roomStateConnected, { timeout: 20_000 }).toBe(true);
     const participantId = (await readDebug(page)).participantId;
@@ -100,6 +97,7 @@ async function verifyNormalProduct({ page, request }: { page: Page; request: API
   } finally {
     await observer.close();
     await page.goto("about:blank");
+    await hostInvitation?.revoke();
     expect((await releaseLegacyStagingRoom(request, roomId, { headers })).ok()).toBe(true);
   }
 }

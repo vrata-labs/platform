@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { createHmac, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { startReferenceTemplateFixture } from "./reference-template-fixture";
+import { identityProtocolAt } from "./staging-identity";
 import { signRoomSessionToken } from "../../packages/shared-types/src/session-token.js";
 
 // Raising the floor is irreversible. This case owns an isolated schema and is
@@ -16,6 +17,7 @@ for (const staging of [false, true]) test(`${staging ? "@staging " : ""}obsolete
   test.setTimeout(90_000);
   const fixture = staging ? null : await startReferenceTemplateFixture(process.env.VRATA_TEST_POSTGRES_URL!, { stateTokenSecret: "identity-key-rotation-browser-test-secret-32" });
   const origin = fixture?.origin ?? process.env.BASE_URL!;
+  const floor = staging ? await identityProtocolAt(origin) : 1;
   const roomId = staging ? process.env.STAGING_ROOM_ID ?? "demo-room" : "demo-room";
   const participantId = `old-key-${randomUUID()}`;
   const now = Math.floor(Date.now() / 1000);
@@ -28,7 +30,8 @@ for (const staging of [false, true]) test(`${staging ? "@staging " : ""}obsolete
     const denied = page.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state");
     await page.goto(`${origin}/rooms/${roomId}?onboard=0`);
     const response = await denied;
-    expect(response.status()).toBe(409);
+    // Floor 1 classifies the rotated development key; floor 2 refuses every bearer at admission.
+    expect(response.status()).toBe(floor === 2 ? 426 : 409);
     expect(await response.json()).toEqual({ error: "identity_required", reason: "identity_upgrade_required" });
     await expect(page.locator("#session-upgrade-dialog")).toBeVisible();
     await expect(page.locator("#session-upgrade-title")).toHaveText("Update required to rejoin this room");

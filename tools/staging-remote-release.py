@@ -141,6 +141,16 @@ class ReleaseHost:
         expected_snapshot = f"snapshots/{checked_sha(image_sha)}-{checked_sha(asset_sha)}"
         if (self.state.directory / "active").readlink().as_posix() != expected_snapshot:
             raise ValueError("staging_release_active_snapshot_mismatch")
+        self.running_images(image_sha)
+        self.catalog.verify_wave2(image_sha, proof_path)
+        record = {"schemaVersion": 1, "imageSha": image_sha, "assetSha": asset_sha,
+                  "snapshotId": f"{image_sha}-{asset_sha}", "foundationDigests": self.foundation_digests(),
+                  "runId": run_id, "runAttempt": run_attempt}
+        self.state.publish(record, proof_path, bootstrap, self.env()["LIVEKIT_NODE_IP"])
+        self.catalog.record_wave2(image_sha, proof_path)
+        return {"published": image_sha}
+
+    def running_images(self, image_sha):
         values = self.env()
         for service, repository in (("api", "API_IMAGE_REPO"), ("room-state", "ROOM_STATE_IMAGE_REPO"),
                                     ("remote-browser", "REMOTE_BROWSER_IMAGE_REPO")):
@@ -150,13 +160,42 @@ class ReleaseHost:
             image = self.run(["docker", "inspect", "--format", "{{.Config.Image}}", container], quiet=True)
             if image != f'{values.get(repository)}:{image_sha}':
                 raise ValueError("staging_release_runtime_image_mismatch")
-        self.catalog.verify_wave2(image_sha, proof_path)
-        record = {"schemaVersion": 1, "imageSha": image_sha, "assetSha": asset_sha,
-                  "snapshotId": f"{image_sha}-{asset_sha}", "foundationDigests": self.foundation_digests(),
-                  "runId": run_id, "runAttempt": run_attempt}
-        self.state.publish(record, proof_path, bootstrap, self.env()["LIVEKIT_NODE_IP"])
-        self.catalog.record_wave2(image_sha, proof_path)
-        return {"published": image_sha}
+
+    def activate_identity_v2(self, image_sha):
+        """Irreversible: raise the identity protocol floor to 2 for the rolled-out candidate.
+
+        Both the candidate and the accepted release that an automatic rollback would restore
+        must already satisfy every floor-2 capability, because the floor is never lowered."""
+        checked_sha(image_sha)
+        self.running_images(image_sha)
+        with self.state.locked(create=False, shared=True):
+            previous = self.state.manifest()
+        try:
+            catalog.assert_target_allowed(None, None, self.catalog.contract(image_sha), image_sha, 2, True, True)
+        except ValueError as error:
+            raise ValueError("staging_identity_activation_candidate_incompatible:" + str(error)) from None
+        if previous is not None:
+            try:
+                catalog.assert_target_allowed(None, None, self.catalog.contract(previous["imageSha"]), previous["imageSha"], 2, True, True)
+            except ValueError as error:
+                raise ValueError("staging_identity_activation_rollback_target_incompatible:" + str(error)) from None
+        try:
+            self.catalog.validate_identity_database()
+            self.catalog.validate_identity_configuration()
+        except ValueError as error:
+            raise ValueError("staging_identity_activation_configuration:" + str(error)) from None
+        output = self.run(self.catalog.compose + ["exec", "-T", "-w", "/app", "api", "node",
+                                                  "apps/api/dist/identity/activate-v2.js", "--confirm-irreversible"], quiet=True)
+        try:
+            result = json.loads(output.splitlines()[-1])
+        except (IndexError, ValueError):
+            raise RuntimeError("staging_identity_activation_unconfirmed") from None
+        if result.get("ok") is not True or result.get("after") != 2:
+            raise RuntimeError("staging_identity_activation_unconfirmed")
+        if self.catalog.minimum_identity_protocol() != 2:
+            raise RuntimeError("staging_identity_activation_unconfirmed")
+        return {"identityProtocol": {"before": result["before"], "after": 2, "raised": result["raised"], "audit": result["audit"]},
+                "rollbackTarget": previous["imageSha"] if previous else None}
 
     def rollback(self, image_sha, run_id, run_attempt):
         result = self.state.committed(image_sha, run_id, run_attempt)
@@ -188,7 +227,7 @@ class ReleaseHost:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["preflight", "rollout", "publish", "rollback", "prune", "committed"])
+    parser.add_argument("command", choices=["preflight", "rollout", "publish", "rollback", "prune", "committed", "activate-identity-v2"])
     parser.add_argument("--root", required=True)
     parser.add_argument("--image-sha", required=True)
     parser.add_argument("--asset-sha")
@@ -202,9 +241,11 @@ def main():
     checked_sha(args.image_sha)
     if args.command == "preflight":
         result = host.preflight(args.image_sha, args.bootstrap)
-    elif args.command in ("rollout", "publish", "rollback", "prune"):
+    elif args.command in ("rollout", "publish", "rollback", "prune", "activate-identity-v2"):
         with host.operation_lock():
-            if args.command == "rollout":
+            if args.command == "activate-identity-v2":
+                result = host.activate_identity_v2(args.image_sha)
+            elif args.command == "rollout":
                 result = host.rollout(args.image_sha, checked_sha(args.asset_sha), args.source, args.run_id, args.run_attempt, args.bootstrap)
             elif args.command == "publish":
                 result = host.publish(args.image_sha, checked_sha(args.asset_sha), args.gate_proof, args.run_id, args.run_attempt, args.bootstrap)

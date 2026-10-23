@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { test, expect } from "playwright/test";
 import type { AuthorHttpPackage, AuthorHttpSession } from "../../apps/api/src/plugins/author-http.test-helper.js";
 import { assertDenied, assertPublicDto, bearer, browserContent, createExternalAuthorProject, downloadPublicSdk,
-  inviteTokenFromLink, nativeMarker, pluginPath, privateHttp, runFloorOneAuthorDenial, sha256, startIsolatedAuthorApi, type ExternalArtifact } from "./plugin-author-scenarios";
+  inviteTokenFromLink, nativeMarker, pluginPath, privateHttp, runFloorOneAuthorDenial, runFloorTwoAuthorRoutes, sha256, startIsolatedAuthorApi, type ExternalArtifact } from "./plugin-author-scenarios";
 
 // Override CI's retained-on-failure trace too: private invitations, RS2, source and
 // arbitrary flat config may only live in memory/the cleaned external author project.
@@ -15,6 +15,13 @@ test("T05 isolated floor one admits a real legacy Host and denies all seven plug
     await downloadPublicSdk(request);
     await runFloorOneAuthorDenial(api.base, api.adminHeaders, page);
   } finally { await api.close(); }
+});
+
+test("T05 isolated floor two runs the shared-staging author acceptance through public HTTP only", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const api = await startIsolatedAuthorApi(2);
+  try { await runFloorTwoAuthorRoutes(api.base, api.adminHeaders, page, await downloadPublicSdk(request)); }
+  finally { await api.close(); }
 });
 
 test("T05 isolated v2 API author installs external CLI artifacts; admitted browsers receive only exact bound bytes", async ({ page, request }) => {

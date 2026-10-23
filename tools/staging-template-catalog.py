@@ -346,6 +346,9 @@ class CatalogHost:
             raise ValueError("identity_rollout_state_secret_required")
         if secrets[0] != secrets[1]:
             raise ValueError("identity_rollout_state_secret_mismatch")
+        # The v2 credential codecs refuse a shorter signing key; activating with one would fail every admission.
+        if len(secrets[0].strip().encode()) < 32:
+            raise ValueError("identity_rollout_state_secret_too_short")
         # Inspect only the configured host credential: an older accepted Compose
         # may not yet pass it to every service introduced by the target release.
         matches = [re.match(r"^\s*(?:export\s+)?VRATA_INTERNAL_SERVICE_TOKEN\s*=(.*)$", line)

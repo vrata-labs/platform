@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { PDFDocument, rgb } from "pdf-lib";
 import { startReferenceTemplateFixture } from "./reference-template-fixture.js";
 import { createLegacyStagingRoom, releaseLegacyStagingRoom } from "./staging-legacy-room";
+import { identityProtocolAt } from "./staging-identity";
 
 export function referenceTemplateScenarios(staging: boolean) {
 let fixture: Pick<Awaited<ReturnType<typeof startReferenceTemplateFixture>>, "origin" | "close" | "corruptAsset">;
@@ -137,18 +138,37 @@ test("reference UI shows three real previews and creates an owner-bound private 
   await expect(page.locator("#room-visibility-select")).toHaveValue("private");
   await expect(page.locator("#room-visibility-select")).toBeDisabled();
   await expect(page.locator("#guest-access-input")).not.toBeChecked();
+  // Floor 2 never takes an owner ID from the form: the admitted Member invitation recipient
+  // becomes Owner only through an explicit administrator transfer.
+  const v2 = await identityProtocolAt(fixture.origin) === 2;
   const owner = `owner-${randomUUID()}`;
   await page.locator("#room-name-input").fill(`Workspace ${randomUUID().slice(0,8)}`);
-  await page.locator("#room-owner-input").fill(owner);
+  if (v2) await expect(page.locator("#room-owner-input")).toHaveAttribute("readonly", "");
+  else await page.locator("#room-owner-input").fill(owner);
   const created = page.waitForResponse(response => response.url() === `${fixture.origin}/api/rooms` && response.request().method() === "POST");
   await page.locator("#create-room").click();
   const response = await created; expect(response.status()).toBe(201); const room = await response.json();
   rooms.add(room.roomId);
-  expect(room.templateVersion).toBe("2.0.0"); expect(room.visibility).toBe("private"); expect(room.ownerParticipantId).toBe(owner);
+  expect(room.templateVersion).toBe("2.0.0"); expect(room.visibility).toBe("private"); expect(room.ownerParticipantId).toBe(v2 ? null : owner);
   await expect(page.locator("#template-select")).toBeDisabled();
   await expect(page.locator("#bind-scene-bundle")).toBeDisabled();
-  await page.addInitScript(id => { sessionStorage.setItem("vrata.participantId", id); localStorage.setItem("vrata.notes.scope", "shared"); }, owner);
-  await join(page, `${room.roomLink}?debug=1&scenefit=0&onboard=0`);
+  if (v2) {
+    await expect(page.locator("#publish-status")).toContainText("published-member-invite-created");
+    const link = new URL((await page.locator("#invite-link").getAttribute("href"))!);
+    link.searchParams.set("debug", "1"); link.searchParams.set("scenefit", "0");
+    await page.addInitScript(() => localStorage.setItem("vrata.notes.scope", "shared"));
+    await join(page, link.href);
+    const recipient = await page.evaluate(() => (window as any).__VRATA_DEBUG__.participantId as string);
+    const control = await request.get(`${fixture.origin}/api/rooms/${room.roomId}/session-control`, { headers });
+    expect(control.status()).toBe(200);
+    const transferred = await request.post(`${fixture.origin}/api/rooms/${room.roomId}/owner/transfer`, { headers,
+      data: { participantId: recipient, expectedRevision: (await control.json()).authorityRevision } });
+    expect(transferred.status()).toBe(200);
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.personalRoom?.isOwner), { timeout: 20000 }).toBe(true);
+  } else {
+    await page.addInitScript(id => { sessionStorage.setItem("vrata.participantId", id); localStorage.setItem("vrata.notes.scope", "shared"); }, owner);
+    await join(page, `${room.roomLink}?debug=1&scenefit=0&onboard=0`);
+  }
   await captureReferenceView(page, "personal-spawn");
   await verifySeat(page, "owner-desk-seat");
   await expect(page.locator("#notes-scope-select")).toHaveValue("private");
@@ -156,8 +176,13 @@ test("reference UI shows three real previews and creates an owner-bound private 
   expect(info).toMatchObject({ id: "personal-room-basic", version: "2.0.0", sceneReleaseId: "personal-workspace-v1@0.4.2", integrityRequired: true });
   await page.locator("#notes-editor").fill("Private reference notes");
   await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.notes?.saveState), { timeout: 15000 }).toBe("saved");
+  // Knowing the owner's public ID never opens a private workspace; floor 2 also refuses the legacy request shape.
   const denied = await request.post(`${fixture.origin}/api/tokens/state`, { data: { roomId: room.roomId, participantId: "other-user", displayName: "Other" } });
-  expect(denied.status()).toBe(403);
+  expect(denied.status()).toBe(v2 ? 426 : 403);
+  if (v2) {
+    const uninvited = await request.post(`${fixture.origin}/api/tokens/state`, { data: { roomId: room.roomId, identityProtocolVersion: 2, displayName: "Other" } });
+    expect(uninvited.status()).toBe(403);
+  }
 });
 
 test("template selection confirms edited-default resets and API rejects mutable reference bindings", async ({ page, request }) => {

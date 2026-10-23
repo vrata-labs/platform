@@ -1,7 +1,8 @@
 import { expect, type APIRequestContext, type Browser, type BrowserContext, type Page, type Route } from "@playwright/test";
 import { PDFDocument, rgb } from "pdf-lib";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { chooseMeetingPanel, meetingRequest } from "./meeting-tools-acceptance";
+import { invitedParticipant } from "./staging-identity";
 
 type Admission = { token: string; participantId?: string; access: { role: string } };
 type DocumentRecord = { documentId: string; filename: string; downloadUrl: string; uploadedBy: string; checksum: string; metadata: { pageCount: number } };
@@ -246,16 +247,17 @@ async function runDelayedResponseScenario(meeting: Meeting, diagnostic: { phase:
   await expect(page.locator("#document-select")).toHaveValue(documents[1].documentId);
   await expect(page.locator("#document-operation-progress")).toBeHidden();
   diagnostic.phase = "peer-admission";
-  const peerInvite = await meeting.invite("member"), peerId = randomUUID();
+  const peerInvite = await meeting.invite("member");
+  // Readmission keeps the same participant on either floor, so the transferred Host returns.
+  const peerParticipant = invitedParticipant(meeting.origin, meeting.roomId, peerInvite.inviteToken, "Document peer");
+  let peerId = "", presenceSeq = 0;
   const admitPeer = async () => {
-    const response = await meeting.request.post(`${meeting.origin}/api/tokens/state`, { data: { roomId: meeting.roomId, participantId: peerId,
-      displayName: "Document peer", inviteToken: peerInvite.inviteToken } }); expect(response.status()).toBe(200);
-    const admission = await response.json() as Admission;
+    const admission = await peerParticipant.admit(); peerId = admission.participantId; presenceSeq++;
     expect((await meeting.request.put(`${meeting.origin}/api/rooms/${meeting.roomId}/presence/${peerId}`, {
       headers: { authorization: `Bearer ${admission.token}` }, data: { participantId: peerId, displayName: "Document peer", mode: "desktop",
         rootTransform: { x: 2, y: 0, z: 2, yaw: 0 }, bodyTransform: { x: 2, y: .92, z: 2, yaw: 0 },
         headTransform: { x: 2, y: 1.6, z: 2, yaw: 0, pitch: 0 }, audioJoined: false, muted: true, speaking: false,
-        activeMedia: { audio: false, screenShare: false }, seq: 1, clientTimeMs: Date.now() }
+        activeMedia: { audio: false, screenShare: false }, seq: presenceSeq, clientTimeMs: Date.now() }
     })).status()).toBe(200);
     return admission;
   };
@@ -281,8 +283,12 @@ async function runDelayedResponseScenario(meeting: Meeting, diagnostic: { phase:
     const libraryRefresh = page.waitForResponse(response => response.request().method() === "GET" && new URL(response.url()).pathname === meeting.path);
     void libraryRefresh.catch(() => undefined);
     diagnostic.phase = "transfer-host-retain-presenter";
-    expect((await meeting.request.post(`${meeting.origin}/api/rooms/${meeting.roomId}/presenters/${host.participantId}/grant`, { headers: actor })).status()).toBe(200);
+    // Hand Host over first: floor 2 never makes the Host its own Presenter. The new Host,
+    // readmitted with its current role, then grants the former Host the Presenter slot.
     expect((await meeting.request.post(`${meeting.origin}/api/rooms/${meeting.roomId}/host/transfer`, { headers: actor, data: { participantId: peerId } })).status()).toBe(200);
+    const newHost = await admitPeer(); expect(newHost.access.role).toBe("host");
+    expect((await meeting.request.post(`${meeting.origin}/api/rooms/${meeting.roomId}/presenters/${host.participantId}/grant`,
+      { headers: { authorization: `Bearer ${newHost.token}` } })).status()).toBe(200);
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.access?.role), { timeout: 20_000 }).toBe("presenter");
     diagnostic.phase = "authoritative-library-refresh";
     const refreshed = await libraryRefresh; expect(refreshed.status()).toBe(200);
