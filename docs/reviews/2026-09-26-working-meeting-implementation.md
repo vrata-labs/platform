@@ -2445,3 +2445,16 @@ Authoritative accepted-release.json до и после публичного read
 ### D-029 — 2026-10-23 — Разовое исключение полного local для подготовки активации
 - Основание: пользователь выбрал публикацию через exact-SHA CI/Docker и обычный gated staging на floor 1 после отчёта о красном полном local и повторе под перегрузкой.
 - Границы: только для коммитов 3030f27 и cdd57a6 с этой записью. Красный local не переименован в зелёный; CI, Docker и staging обязательны, их отказ исправляется. Активация floor 2 по-прежнему ждёт слияния в main (D-026).
+
+## T01a — подготовка активации принята на floor 1, 2026-10-23
+
+| Gate | Точный результат |
+|---|---|
+| Исполняемый SHA | b399acf0788bb34416da422f737c1006fbcec88d: 3030f27 (диагностика без сессии), cdd57a6 (шаг активации и floor-aware тесты), 9e82cb3 (floor через baseURL запросов) и docs поверх 228cf1c |
+| [CI39964029611](https://github.com/vrata-labs/platform/actions/runs/39964029611) | Attempt1: 254 passed, 1 failed — room-plugin-seating: участник сел, но статус примера заменён после вероятного перезапуска экземпляра по истечении аренды (вынесено в бэклог auto-seat-status-after-lease-restart). Attempt2 (повтор только упавшего job): success |
+| [Docker39964048175](https://github.com/vrata-labs/platform/actions/runs/39964048175) | Success, attempt1 |
+| [Staging39990787903](https://github.com/vrata-labs/platform/actions/runs/39990787903) | Success: 80 passed, 1 skipped (общий v2-сценарий плагинов выполняется только на floor 2), обязательный Rutube 1/1 |
+
+- Readback: accepted-release — image b399acf, asset 0a3b492e788bad82bf20a92476a628bf30c6dfbe, run 39990787903; api, room-state и remote-browser на b399acf и healthy; health, demo-room, control-plane и manifests Hall/BlueOffice — 200; общий floor1 сохранён.
+- На floor 1 новые staging-тесты прошли по прежним путям: отказ author API для legacy Host, discovery без plugin-трафика, входы по настоящим приглашениям. Передача Host в сохранённых комнатах и положительные v2-сценарии выполняются только на floor 2 и будут проверены активационным gate.
+- Активация floor 2 не выполнялась: по D-026 она ждёт слияния ветки в main. После слияния — Staging Deploy с activate_identity_v2=true на SHA из main и полный gate на floor 2.
