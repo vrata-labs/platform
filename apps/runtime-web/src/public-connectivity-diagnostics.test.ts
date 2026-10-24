@@ -15,6 +15,9 @@ test("redactString redacts issued v2 proofs and bearer values in free text", () 
   assert.equal(/rs2\.|ri2\.|abc\.def/.test(text), false);
   assert.match(text, /Bearer \[redacted\]/);
   assert.match(text, /identityCredential=\[redacted\]&roomId=r/);
+  const quoted = redactString("x_rs2.abc.def and rs2%2Eabc%2Edef; GET /a?token=secret-value HTTP 500");
+  assert.equal(/abc|secret-value/.test(quoted), false);
+  assert.match(quoted, /HTTP 500$/, "the rest of an error message stays readable");
 });
 
 test("redactConnectivityReport redacts secret-like keys recursively", () => {

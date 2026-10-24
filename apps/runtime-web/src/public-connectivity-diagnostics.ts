@@ -12,6 +12,7 @@ export type PublicDiagnosticCode =
   | "api_http_error"
   | "admin_details_protected"
   | "admin_details_public"
+  | "admin_details_unexpected"
   | "manifest_ok"
   | "manifest_unreachable"
   | "state_token_ok"
@@ -257,8 +258,9 @@ async function checkAdminDetailsProtected(context: DiagnosticsContext): Promise<
   return runTimedCheck(context, "adminDetails", async (startedAt) => {
     const response = await fetchOkWithTimeout(context, new URL(`/api/rooms/${encodeURIComponent(context.roomId)}/diagnostics`, context.apiBaseUrl).toString());
     // Floor 2 refuses the anonymous read at its identity boundary before the route itself; any other 409 is not that refusal.
+    // The body is read under the same bound as the request: headers alone must not let the check hang.
     const boundaryRefusal = context.identityProtocolVersion === 2 && response.status === 409
-      && (await response.json().catch(() => null) as { reason?: unknown } | null)?.reason === "identity_upgrade_required";
+      && (await withTimeout(response.json(), context.timeoutMs).catch(() => null) as { reason?: unknown } | null)?.reason === "identity_upgrade_required";
     if (response.status === 401 || response.status === 403 || boundaryRefusal) {
       return createCheck({
         name: "adminDetails",
@@ -275,10 +277,10 @@ async function checkAdminDetailsProtected(context: DiagnosticsContext): Promise<
       name: "adminDetails",
       label: "Admin details",
       status: "failed",
-      code: "admin_details_public",
+      code: response.ok ? "admin_details_public" : "admin_details_unexpected",
       startedAt,
       now: context.now,
-      message: "Stored diagnostics were readable without authorization",
+      message: response.ok ? "Stored diagnostics were readable without authorization" : `Stored diagnostics returned unexpected HTTP ${response.status}`,
       details: { status: response.status }
     });
   });
@@ -286,6 +288,21 @@ async function checkAdminDetailsProtected(context: DiagnosticsContext): Promise<
 
 async function checkManifest(context: DiagnosticsContext, sessionToken: string | null): Promise<{ check: PublicDiagnosticCheck; manifest: RuntimeManifest | null }> {
   const startedAt = context.now();
+  // Floor 2 serves the manifest only to an admitted session; without one an anonymous request would only add a second refusal.
+  if (context.identityProtocolVersion === 2 && !sessionToken) {
+    return {
+      check: createCheck({
+        name: "manifest",
+        label: "Room manifest",
+        status: "failed",
+        code: "manifest_unreachable",
+        startedAt,
+        now: context.now,
+        message: "Manifest needs an admitted room session"
+      }),
+      manifest: null
+    };
+  }
   try {
     const { response, payload } = await fetchJsonWithTimeout<RuntimeManifest>(context, `/api/rooms/${encodeURIComponent(context.roomId)}/manifest`,
       sessionToken ? { headers: { authorization: `Bearer ${sessionToken}` } } : undefined);
@@ -784,10 +801,11 @@ export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Pr
 }
 
 export function redactString(value: string): string {
-  return value.replace(/([?&][^=&]*(?:authorization|password|secret|token|invite|credential)[^=&]*=)[^&]+/gi, `$1[redacted]`)
-    // Error text may quote a header or an issued v2 session/identity proof outside a query string.
-    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1[redacted]")
-    .replace(/\b(?:rs2|ri2)\.[A-Za-z0-9._~+/=-]+/g, "[redacted]");
+  return value.replace(/([?&][^=&]*(?:authorization|password|secret|token|invite|credential)[^=&]*=)[^&\s#]+/gi, `$1[redacted]`)
+    // Error text may quote a header or an issued v2 session/identity proof outside a query string,
+    // including inside another word or percent-encoded. No lookbehind: older Safari cannot parse it.
+    .replace(/(Bearer\s+)[A-Za-z0-9._~+/=%-]+/gi, "$1[redacted]")
+    .replace(/(^|[^A-Za-z0-9])(?:rs2|ri2)(?:\.|%2E)[A-Za-z0-9._~+/=%-]+/gi, "$1[redacted]");
 }
 
 export function redactConnectivityReport(value: unknown, key = ""): unknown {
