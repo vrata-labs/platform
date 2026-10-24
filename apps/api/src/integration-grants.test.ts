@@ -166,3 +166,21 @@ test("finishing a revoke skips identities already revoked meanwhile and still as
   assert.equal((await storage.listIncompleteManagedGrantRevocations()).length, 0);
   assert((await storage.listManagedRoomsForEnforcement()).some(record => record.roomId === room.roomId && record.rotateRequestedAt));
 });
+
+test("a revoke finished twice (the route and the enforcer at once) asks for one new epoch", async () => {
+  const storage = new MemoryStorage();
+  const room = await storage.createManagedRoom({ roomId: randomUUID(), tenantId: "pt_01JBQ7Z8K3M4N5P6Q7R8S9T0VW", name: "Demo", visibility: "private" }, {
+    managedBy: "portal:stage", kind: "demo-instance", accessUntil: future(), graceSeconds: 0, operationId: randomUUID(), maxParticipants: 4 });
+  const grant = (await storage.issueManagedRoomGrant({ grantId: randomUUID(), roomId: room.roomId, role: "guest", purpose: "visit", maxUses: 1,
+    expiresAt: future(), codeHash: "d".repeat(64), operationId: randomUUID() }))!;
+  assert(typeof grant !== "string");
+  assert.equal((await storage.consumeManagedRoomGrant(room.roomId, "d".repeat(64))).ok, true);
+  const revoked = (await storage.revokeManagedRoomGrant(grant.grantId, null, randomUUID()))!;
+  await completeGrantRevocation(storage, revoked);
+  const first = (await storage.listManagedRoomsForEnforcement()).find(record => record.roomId === room.roomId)!;
+  assert(first.rotateRequestedAt);
+  await storage.rotateManagedRoomEpoch(room.roomId, first.accessEpoch, null);
+  await completeGrantRevocation(storage, revoked);
+  const after = (await storage.listManagedRoomsForEnforcement()).find(record => record.roomId === room.roomId);
+  assert.equal(after?.rotateRequestedAt ?? null, null, "the late finisher asks for nothing");
+});

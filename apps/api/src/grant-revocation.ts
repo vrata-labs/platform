@@ -21,6 +21,6 @@ export async function completeGrantRevocation(storage: Storage, grant: ManagedRo
       }
     }
   }
-  if (grant.usedCount > 0) await storage.requestManagedRoomRotation(grant.roomId);
+  // One step for the completion mark and the rotation request: a concurrent finisher rotates nothing twice.
   await storage.completeManagedGrantRevocation(grant.grantId);
 }

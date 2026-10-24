@@ -173,7 +173,9 @@ export class MemoryManagedRooms {
 
   async completeManagedGrantRevocation(grantId: string): Promise<void> {
     const grant = this.grants.get(grantId);
-    if (grant) grant.revocationCompletedAt = this.timestamp();
+    if (!grant || grant.revocationCompletedAt) return;
+    grant.revocationCompletedAt = this.timestamp();
+    if (grant.usedCount > 0) this.state(grant.roomId).rotateRequestedAt = grant.revocationCompletedAt;
   }
 
   /** Memory twin of the access update rule in PostgreSQL: a pause or a lapsed window asks for a new epoch. */
@@ -409,8 +411,18 @@ export class PostgresManagedRooms {
     return result.rows.map(mapGrant);
   }
 
+  // Room row first, then the grant: the same order as an exchange.
   async completeManagedGrantRevocation(grantId: string): Promise<void> {
-    await this.pool.query(`update integration_grants set revocation_completed_at = now() where grant_id = $1 and revocation_completed_at is null`, [grantId]);
+    await this.transaction(async client => {
+      const room = await client.query<{ room_id: string }>(
+        `select ir.room_id from integration_rooms ir join integration_grants g on g.room_id = ir.room_id where g.grant_id = $1 for update of ir`, [grantId]);
+      if (!room.rows[0]) return;
+      const done = await client.query<{ used_count: number }>(
+        `update integration_grants set revocation_completed_at = now() where grant_id = $1 and revocation_completed_at is null returning used_count`, [grantId]);
+      if ((done.rows[0]?.used_count ?? 0) > 0) {
+        await client.query(`update integration_rooms set rotate_requested_at = now() where room_id = $1`, [room.rows[0].room_id]);
+      }
+    });
   }
 
   async listManagedRoomsForEnforcement(): Promise<ManagedRoomEnforcementRecord[]> {
