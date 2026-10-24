@@ -256,8 +256,10 @@ async function checkApi(context: DiagnosticsContext): Promise<PublicDiagnosticCh
 async function checkAdminDetailsProtected(context: DiagnosticsContext): Promise<PublicDiagnosticCheck> {
   return runTimedCheck(context, "adminDetails", async (startedAt) => {
     const response = await fetchOkWithTimeout(context, new URL(`/api/rooms/${encodeURIComponent(context.roomId)}/diagnostics`, context.apiBaseUrl).toString());
-    // Floor 2 refuses the anonymous read at its identity boundary (409) before the route itself.
-    if (response.status === 401 || response.status === 403 || (context.identityProtocolVersion === 2 && response.status === 409)) {
+    // Floor 2 refuses the anonymous read at its identity boundary before the route itself; any other 409 is not that refusal.
+    const boundaryRefusal = context.identityProtocolVersion === 2 && response.status === 409
+      && (await response.json().catch(() => null) as { reason?: unknown } | null)?.reason === "identity_upgrade_required";
+    if (response.status === 401 || response.status === 403 || boundaryRefusal) {
       return createCheck({
         name: "adminDetails",
         label: "Admin details",
@@ -782,7 +784,10 @@ export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Pr
 }
 
 export function redactString(value: string): string {
-  return value.replace(/([?&][^=&]*(?:authorization|password|secret|token|invite)[^=&]*=)[^&]+/gi, `$1[redacted]`);
+  return value.replace(/([?&][^=&]*(?:authorization|password|secret|token|invite|credential)[^=&]*=)[^&]+/gi, `$1[redacted]`)
+    // Error text may quote a header or an issued v2 session/identity proof outside a query string.
+    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1[redacted]")
+    .replace(/\b(?:rs2|ri2)\.[A-Za-z0-9._~+/=-]+/g, "[redacted]");
 }
 
 export function redactConnectivityReport(value: unknown, key = ""): unknown {

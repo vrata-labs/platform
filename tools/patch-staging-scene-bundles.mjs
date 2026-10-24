@@ -165,8 +165,9 @@ export async function preflightSceneBundle(targetUrl, input = {}) {
   throw lastError instanceof Error ? lastError : new Error(`scene_bundle_preflight_failed:${targetUrl}`);
 }
 
-async function fetchRoom(baseUrl, roomId) {
-  const response = await fetch(new URL(`/api/rooms/${roomId}`, baseUrl));
+// An activated identity floor refuses anonymous reads of bound rooms; the administrator may read them on either floor.
+async function fetchRoom(baseUrl, adminToken, roomId) {
+  const response = await fetch(new URL(`/api/rooms/${roomId}`, baseUrl), { headers: { "x-vrata-admin-token": adminToken } });
   if (!response.ok) {
     throw new Error(`failed_to_read_room:${roomId}:${response.status}`);
   }
@@ -208,7 +209,7 @@ async function patchRooms(input) {
 
   const results = [];
   for (const target of targets) {
-    const previousRoom = await fetchRoom(input.baseUrl, target.roomId);
+    const previousRoom = await fetchRoom(input.baseUrl, input.adminToken, target.roomId);
     const previousSceneBundleUrl = previousRoom?.sceneBundleUrl ?? previousRoom?.manifest?.sceneBundle?.url ?? null;
     const payload = await patchRoom(input.baseUrl, input.adminToken, target.roomId, target.targetUrl);
     const actualUrl = payload?.sceneBundleUrl ?? payload?.manifest?.sceneBundle?.url ?? null;

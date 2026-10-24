@@ -10,6 +10,13 @@ test("redactString redacts sensitive query values", () => {
   );
 });
 
+test("redactString redacts issued v2 proofs and bearer values in free text", () => {
+  const text = redactString("failed: Bearer rs2.abc.def at /x?identityCredential=ri2.secret&roomId=r and ri2.other.value");
+  assert.equal(/rs2\.|ri2\.|abc\.def/.test(text), false);
+  assert.match(text, /Bearer \[redacted\]/);
+  assert.match(text, /identityCredential=\[redacted\]&roomId=r/);
+});
+
 test("redactConnectivityReport redacts secret-like keys recursively", () => {
   const redacted = redactConnectivityReport({
     token: "secret",

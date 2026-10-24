@@ -278,6 +278,8 @@ async function workflowFixture(t) {
     if (url.pathname === "/__persist") return send({ ok: true });
     if (url.pathname.startsWith("/api/rooms/")) {
       const id = decodeURIComponent(url.pathname.split("/").at(-1));
+      // As on an activated identity floor: bound rooms are never readable anonymously.
+      if (!request.headers["x-vrata-admin-token"]) return send({ error: "identity_required", reason: "identity_upgrade_required" }, 409);
       if (request.method === "PATCH") {
         if (behavior.failRestore && body.sceneBundleUrl?.includes("custom")) return send({ error: "test" }, 503);
         state.set(id, body.sceneBundleUrl);
