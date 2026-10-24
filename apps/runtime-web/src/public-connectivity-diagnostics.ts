@@ -180,7 +180,11 @@ async function fetchJsonWithTimeout<T>(context: DiagnosticsContext, path: string
       ...init,
       signal: controller.signal
     });
-    const payload = (await response.json().catch(() => ({}))) as T;
+    // A body cut off by the bound is a timeout, not an empty answer; only an unreadable body becomes {}.
+    const payload = (await response.json().catch((error: unknown) => {
+      if (controller.signal.aborted) throw error;
+      return {};
+    })) as T;
     return { response, payload };
   } finally {
     clearDiagnosticsTimeout(timeout);

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createReportSummary, redactConnectivityReport, redactString, withTimeout, type PublicDiagnosticCheck } from "./public-connectivity-diagnostics.js";
+import { createReportSummary, redactConnectivityReport, redactString, runPublicConnectivityDiagnostics, withTimeout, type PublicDiagnosticCheck } from "./public-connectivity-diagnostics.js";
 
 test("redactString redacts sensitive query values", () => {
   assert.equal(
@@ -52,3 +52,24 @@ test("withTimeout rejects slow checks with stable timeout message", async () => 
     /connectivity_check_timeout/
   );
 });
+
+test("a stored-report answer whose body stalls is reported as a timeout on floor 2", async () => {
+  const fetchImpl = (async (input: URL | RequestInfo, init?: RequestInit) => {
+    const path = new URL(String(input)).pathname;
+    if (path === "/health") return Response.json({ status: "ok", features: { identityProtocolVersion: 2 } });
+    if (path.endsWith("/diagnostics")) {
+      // Headers arrive; the body never finishes until the check's own bound aborts it.
+      const body = new ReadableStream({ start(controller) {
+        init?.signal?.addEventListener("abort", () => controller.error(new DOMException("aborted", "AbortError")));
+      } });
+      return new Response(body, { status: 409, headers: { "content-type": "application/json" } });
+    }
+    return Response.json({ error: "identity_required", reason: "invite_required" }, { status: 403 });
+  }) as typeof fetch;
+  const report = await runPublicConnectivityDiagnostics({ apiBaseUrl: "http://diagnostics.test", roomId: "room-1", timeoutMs: 50,
+    skipMicrophone: true, skipMedia: true, fetchImpl, WebSocketImpl: undefined });
+  const admin = report.checks.find(check => check.name === "adminDetails");
+  assert.equal(admin?.code, "connectivity_check_timeout");
+  assert.equal(admin?.status, "failed");
+});
+
