@@ -9,6 +9,13 @@ import { meetingDisplayName, meetingPersonRole, meetingRoleLabel, type MeetingPe
 type RuntimeDebugState = ReturnType<typeof createRuntimeDebugState>;
 type Button = Pick<HTMLButtonElement, "disabled" | "addEventListener">;
 
+const MANAGED_ROOM_BLOCKS = new Set(["room_closed", "access_expired", "room_paused"]);
+
+function isManagedRoomBlock(error: unknown): error is { reason: string } {
+  return typeof error === "object" && error !== null && error instanceof Error && error.name === "RuntimeAccessError"
+    && MANAGED_ROOM_BLOCKS.has((error as { reason?: string }).reason ?? "");
+}
+
 export interface HostControlElements {
   hostControlsEl: Pick<HTMLElement, "hidden">;
   hostControlsStatusEl: Pick<HTMLElement, "textContent">;
@@ -256,7 +263,10 @@ export function createHostControlsRuntime(context: HostControlsContext) {
       lastRefreshOutcome = sameBinding(participantId, protocol) && epoch === controlEpoch && applySessionControlResponse(payload) ? "applied" : "ignored";
     } catch (error) {
       lastRefreshOutcome = "failed";
-      console.warn("session_control_refresh_failed", error);
+      if (isManagedRoomBlock(error) && sameBinding(participantId, protocol)) {
+        lastRefreshOutcome = "applied";
+        disableRuntimeForSessionBlock(error.reason);
+      } else console.warn("session_control_refresh_failed", error);
     } finally {
       sessionControlRefreshInFlight = false;
       refreshFinished++; lastRefreshFinishedAtMs = Date.now();

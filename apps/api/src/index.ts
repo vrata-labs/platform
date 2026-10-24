@@ -1,6 +1,11 @@
 import type { ControlPlaneActor } from "./control-plane-actor.js";
 import { createRoomNotesRoutes } from "./room-notes-routes.js";
 import { createIntegrationRoutes } from "./integration-routes.js";
+import { loadDemoPolicies } from "./demo-policies.js";
+import { createManagedMediaControl } from "./managed-media.js";
+import { currentMediaRoomName } from "./managed-media-names.js";
+import { createManagedRoomEnforcer } from "./managed-room-enforcer.js";
+import { exchangeRoomGrant } from "./room-grant-exchange.js";
 import { loadIntegrationKeyring } from "./integration-auth.js";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
@@ -55,7 +60,6 @@ import { createRoomIdentityService } from "./identity/service.js";
 import { createRoomIdentityCodec } from "@vrata/shared-types/identity-credential";
 import { admitV2RoomSession, type V2AdmissionRequest } from "./identity/http-admission.js";
 import { currentSessionControlV2, resolveRoomRequestV2, untrustedSessionRoom, type VerifiedRoomRequestV2 } from "./identity/http-authority.js";
-import { roomMediaGrantName } from "./identity/media-room.js";
 import { applyRoomLifecycleV2, lifecycleV2Error, roomIdentityActorFromHttp } from "./identity/http-lifecycle.js";
 import { createMediaScreenService } from "./media-screen-service.js";
 import { IdentityStorageError } from "./identity/contracts.js";
@@ -316,7 +320,13 @@ const mediaScreenService = createMediaScreenService(storagePromise, {
 const routeRoomNotesRequest = createRoomNotesRoutes({ metrics, resolveControlPlaneActor, getRequestId, logEvent, runGuardedRoomEffect,
   deniedEffectReason: error => error instanceof RoomEffectPermissionDenied ? "permission_denied"
     : error instanceof IdentityBoundaryError ? error.reason : null });
-const routeIntegrationRequest = createIntegrationRoutes({ getRequestId, logEvent });
+let managedMediaControl: ReturnType<typeof createManagedMediaControl> | undefined;
+const managedMedia = () => managedMediaControl === undefined ? (managedMediaControl = createManagedMediaControl()) : managedMediaControl;
+const managedRoomEnforcer = createManagedRoomEnforcer({ storage: storagePromise, media: managedMedia,
+  mediaPrefix: () => process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-", logEvent,
+  intervalMs: Number.parseInt(process.env.VRATA_MANAGED_ENFORCER_INTERVAL_MS ?? "", 10) || undefined });
+const routeIntegrationRequest = createIntegrationRoutes({ getRequestId, logEvent, stateSecret: () => getStateTokenSecret(),
+  accessChanged: () => managedRoomEnforcer.kick() });
 
 function resolveAccessRole(requestedRole: unknown, env: NodeJS.ProcessEnv = process.env): { role: RoomRole; roleSource: RoomSessionRoleSource } {
   if (!isDevRoleQueryAllowed(env)) {
@@ -422,6 +432,7 @@ export function validateProductionApiEnv(env: NodeJS.ProcessEnv = process.env): 
   if (isPortalManagedDeployment(env) && loadIntegrationKeyring(env).size === 0) {
     throw new Error("invalid_portal_managed_config:integration_keys_required");
   }
+  if (isPortalManagedDeployment(env)) loadDemoPolicies(env);
 }
 
 function logEvent(event: Record<string, unknown>): void {
@@ -2402,11 +2413,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (await legacyIdentityBoundary.minimum() < 2) return json(response, 409, { error: "identity_required", reason: "identity_upgrade_required" });
     const room = await storage.getRoom(payload.roomId);
     if (!room) return json(response, 401, { error: "identity_required", reason: "identity_recovery_required" });
+    // Room-state re-verifies every socket each second, so a withdrawn managed room drops its sockets within that.
+    const managedVerifyBlock = getManagedAccessBlockReason(room);
+    if (managedVerifyBlock) return json(response, 403, { error: "room_access_denied", reason: managedVerifyBlock });
     const session = await resolveRoomRequestV2({ storage, secret: getStateTokenSecret(), token: payload.sessionToken,
       expectedRoomId: payload.roomId, participantId: payload.participantId });
     if (!session || session.identity.participantId !== payload.participantId) {
       return json(response, 401, { error: "identity_required", reason: "identity_recovery_required" });
     }
+    managedRoomEnforcer.observe(room, session.identity.identityId);
     const context = payload.includeSceneContext === true ? roomTemplateSessionContext(room) : null;
     return json(response, 200, {
       tenantId: room.tenantId, roomId: room.roomId, identityId: session.identity.identityId,
@@ -2424,8 +2439,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   // A portal-managed deployment answers room-scoped routes only for rooms that exist.
   const roomScopedMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)(?:\/|$)/);
-  if (roomScopedMatch && !isAdhocRoomsAllowed() && !(await storage.getRoom(decodeURIComponent(roomScopedMatch[1])))) {
-    return json(response, 404, { error: "room_not_found", requestId });
+  if (roomScopedMatch && !isAdhocRoomsAllowed()) {
+    const scopedRoom = await storage.getRoom(decodeURIComponent(roomScopedMatch[1]));
+    if (!scopedRoom) return json(response, 404, { error: "room_not_found", requestId });
+    // A closed managed room is a tombstone on every room-scoped route.
+    if (scopedRoom.managed?.status === "closed") return json(response, 410, { error: "room_access_denied", reason: "room_closed", requestId });
   }
 
   if (method === "GET" && url.pathname === "/api/templates") {
@@ -3460,6 +3478,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (actorResult.actor.actorType === "room-session") {
       const verified = v2SessionsByRequest.get(request);
       if (!verified || verified.room.roomId !== roomId) throw new IdentityBoundaryError(409, "identity_recovery_required");
+      // A participant learns of a withdrawn managed room from the poll it already runs every second.
+      const managedBlock = getManagedAccessBlockReason(room);
+      if (managedBlock) return json(response, sessionBlockStatusCode(managedBlock), { error: "room_access_denied", reason: managedBlock, requestId });
       const expiresAtSeconds = verified.expiresAtSeconds;
       const view = await readParticipantSessionViewV2(storage, verified);
       const mediaScreenReconciliation = await mediaScreenService.status(roomId, view.authorityRevision);
@@ -4002,6 +4023,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  if (method === "POST" && url.pathname === "/api/room-grants/exchange") {
+    const result = await exchangeRoomGrant({ storage, payload: await parseBody<unknown>(request), secret: getStateTokenSecret(), requestId,
+      reserveAdmission: () => storage.reserveIdentityAdmission({ originHash: identityAdmissionOriginHash(request), kind: "room" }) });
+    if (result.retryAfterSeconds) response.setHeader("retry-after", String(result.retryAfterSeconds));
+    return json(response, result.status, result.body);
+  }
+
   if (method === "POST" && url.pathname === "/api/tokens/state") {
     const requestPayload = await parseBody<StateTokenRequest>(request);
     if (await legacyIdentityBoundary.minimum() >= 2) {
@@ -4043,6 +4071,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       incrementCounter(metrics.roomAccessDeniedTotal, managedBlock);
       return json(response, sessionBlockStatusCode(managedBlock), { error: "room_access_denied", reason: managedBlock, requestId });
     }
+    // A portal-managed room is entered only through a grant exchange, which needs identity v2.
+    if (room?.managed) {
+      incrementCounter(metrics.roomAccessDeniedTotal, "grant_required");
+      return json(response, 403, { error: "room_access_denied", reason: "grant_required", requestId });
+    }
     const requested = resolveAccessRole(legacyRequest.requestedRole);
     if (!room) {
       const { role, roleSource } = requested;
@@ -4083,7 +4116,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         { rawBearer: typeof rawBearer === "string" ? rawBearer : null, secret: stateSecret, requestId });
     if (!capture) return;
     const effectivePermissions = getRoomPermissions(capture.role);
-    const canPublishAudio = hasRoomPermission(effectivePermissions, "audio.join") && requestedAudio;
+    // A demo policy can withdraw voice from the whole room.
+    const voiceAllowed = initialRoom?.managed?.features?.voice !== false;
+    const canPublishAudio = voiceAllowed && hasRoomPermission(effectivePermissions, "audio.join") && requestedAudio;
     const canPublishVideo = requestedVideo && hasRoomPermission(effectivePermissions, "screen-share.start");
     if (requestedAudio && !canPublishAudio || requestedVideo && !canPublishVideo || !canPublishAudio && !canPublishVideo) return writeMediaPublishNotAllowed(response);
     const publishSources: MediaPublishSource[] = [];
@@ -4109,7 +4144,28 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (proof.identityProtocolVersion === 2 && !mediaNamespace) {
       return json(response, 503, { error: "identity_authority_unavailable" });
     }
-    const mediaRoom = roomMediaGrantName(proof.roomId, roomPrefix, mediaNamespace);
+    const mediaRoom = currentMediaRoomName(initialRoom, proof.roomId, roomPrefix, mediaNamespace);
+    if (initialRoom?.managed) {
+      // Portal targets run LiveKit with auto_create:false: only the platform creates the room of the current epoch.
+      if (!mediaNamespace) return json(response, 503, { error: "identity_authority_unavailable" });
+      if (ttlSeconds <= 0) return json(response, 410, { error: "room_access_denied", reason: "access_expired" });
+      const control = managedMedia();
+      const limit = initialRoom.managed.maxParticipants ? initialRoom.managed.maxParticipants * 2 : null;
+      try {
+        if (!control) throw new Error("livekit_api_unavailable");
+        await control.ensureRoom(mediaRoom, { maxParticipants: limit });
+      } catch (error) {
+        incrementCounter(metrics.mediaJoinFailuresTotal, "media_room_unavailable");
+        logEvent({ service: "api", event: "managed_media_create_failed", alert: true, requestId, roomId: proof.roomId, message: error instanceof Error ? error.message : "unknown" });
+        return json(response, 503, { error: "media_unavailable", requestId });
+      }
+      // An epoch rotated meanwhile retires the room just created; the client asks again for the new one.
+      const latest = await storage.getRoom(proof.roomId);
+      if (latest?.managed?.accessEpoch !== initialRoom.managed.accessEpoch) {
+        await control.deleteRoom(mediaRoom).catch(() => undefined);
+        return json(response, 503, { error: "media_unavailable", reason: "media_epoch_changed", requestId });
+      }
+    }
     const mediaIdentity = proof.identityProtocolVersion === 2
       ? await createUserMediaIdentity(mediaRoom, { participantId: proof.participantId, scope: userMediaScope(publishSources)! })
       : { identity: proof.participantId };
@@ -4164,7 +4220,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       ttl: `${ttlSeconds}s`
     });
     accessToken.addGrant({
-      room: roomMediaGrantName(payload.roomId, process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-", mediaNamespace),
+      room: currentMediaRoomName(remoteBrowserRoom, payload.roomId, process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-", mediaNamespace),
       roomJoin: true,
       canPublish: true,
       canSubscribe: false
@@ -4287,9 +4343,10 @@ export function startApiServer(port = apiPort) {
       json(response, 500, roomDeletionFailure ? { error: "internal_error" } : { error: "internal_error", message: error instanceof Error ? error.message : "unknown" });
     });
   });
-  server.once("close", () => mediaScreenService.stop());
+  server.once("close", () => { mediaScreenService.stop(); void managedRoomEnforcer.stop(); });
   return server.listen(port, () => {
     mediaScreenService.start();
+    if (isPortalManagedDeployment()) managedRoomEnforcer.start();
     logEvent({ service: "api", event: "listening", env: process.env.NODE_ENV ?? "development", port, timestamp: new Date().toISOString() });
   });
 }

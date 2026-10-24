@@ -181,9 +181,16 @@ export interface RoomRecord {
   managed?: ManagedRoomState;
 }
 
-export type ManagedRoomKind = "reference";
+export type ManagedRoomKind = "reference" | "demo-instance";
 
-export type ManagedRoomStatus = "active" | "paused";
+export type ManagedRoomStatus = "active" | "paused" | "closed";
+
+/** Features a demo policy allows; upload and remote browser are always off for demos. */
+export interface ManagedRoomFeatures {
+  voice: boolean;
+  screenShare: boolean;
+  documents: boolean;
+}
 
 // Access terms of a room created through the integration API; only integration storage methods write them.
 export interface ManagedRoomState {
@@ -197,6 +204,14 @@ export interface ManagedRoomState {
   lastOperationId?: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Random id of the current LiveKit room generation; rotated when access is withdrawn. */
+  accessEpoch: string;
+  closedAt?: string | null;
+  closeReason?: string | null;
+  demoPolicyId?: string | null;
+  maxParticipants?: number | null;
+  idleTimeoutSeconds?: number | null;
+  features?: ManagedRoomFeatures | null;
 }
 
 export interface ManagedRoomCreateInput {
@@ -206,6 +221,74 @@ export interface ManagedRoomCreateInput {
   graceSeconds: number;
   ownerSubject?: string | null;
   operationId: string;
+  demoPolicyId?: string | null;
+  maxParticipants?: number | null;
+  idleTimeoutSeconds?: number | null;
+  features?: ManagedRoomFeatures | null;
+}
+
+export type ManagedRoomBlockReason = "room_closed" | "access_expired" | "room_paused";
+export type ManagedRoomGrantPurpose = "visit" | "invite";
+
+export interface ManagedRoomGrantRecord {
+  grantId: string;
+  roomId: string;
+  tenantId: string;
+  role: "guest";
+  purpose: ManagedRoomGrantPurpose;
+  maxUses: number;
+  usedCount: number;
+  expiresAt: string;
+  revokedAt: string | null;
+  revokeReason: string | null;
+  displayName: string | null;
+  returnContext: unknown;
+  revision: number;
+  lastOperationId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ManagedRoomGrantInput {
+  grantId: string;
+  roomId: string;
+  role: "guest";
+  purpose: ManagedRoomGrantPurpose;
+  maxUses: number;
+  expiresAt: string;
+  /** HMAC of the one-time code; the code itself is never stored. */
+  codeHash: string;
+  displayName?: string | null;
+  returnContext?: unknown;
+  operationId: string;
+}
+
+export type ManagedRoomGrantConsumeResult =
+  | { ok: true; grant: ManagedRoomGrantRecord; room: RoomRecord }
+  | { ok: false; code: "grant_invalid" | "grant_revoked" | "capacity_full" | ManagedRoomBlockReason };
+
+/** What the access enforcer needs to know about one managed room. */
+export interface ManagedRoomEnforcementRecord {
+  roomId: string;
+  tenantId: string;
+  kind: ManagedRoomKind;
+  status: ManagedRoomStatus;
+  cutoff: string;
+  accessEpoch: string;
+  /** The withdrawal the enforcer already acted on, null while the room is open. */
+  enforcedBlock: ManagedRoomBlockReason | null;
+  retiredEpochs: string[];
+  rotateRequestedAt: string | null;
+  idleTimeoutSeconds: number | null;
+  lastActivityAt: string | null;
+  createdAt: string;
+  revision: number;
+}
+
+export interface ManagedRoomActivity {
+  roomId: string;
+  tenantId: string;
+  participantSeconds: number;
 }
 
 export interface ManagedRoomAccessPatch {
@@ -275,7 +358,7 @@ export interface IntegrationStore {
   getIntegrationTenant(tenantId: string): Promise<IntegrationTenantRecord | null>;
   upsertIntegrationTenant(input: { tenantId: string; managedBy: string; displayName: string }): Promise<IntegrationTenantRecord | "tenant_mismatch">;
   createManagedRoom(input: Partial<RoomRecord>, managed: ManagedRoomCreateInput): Promise<RoomRecord>;
-  updateManagedRoomAccess(roomId: string, expectedRevision: number, patch: ManagedRoomAccessPatch, operationId: string): Promise<RoomRecord | "revision_mismatch" | null>;
+  updateManagedRoomAccess(roomId: string, expectedRevision: number, patch: ManagedRoomAccessPatch, operationId: string): Promise<RoomRecord | "revision_mismatch" | "room_closed" | null>;
   beginIntegrationOperation(input: IntegrationOperationStart): Promise<{ created: boolean; operation: IntegrationOperationRecord }>;
   claimIntegrationOperation(operationId: string, leaseSeconds: number): Promise<IntegrationOperationRecord | null>;
   completeIntegrationOperation(operationId: string, outcome: IntegrationOperationOutcome): Promise<IntegrationOperationRecord | null>;
@@ -283,6 +366,29 @@ export interface IntegrationStore {
   getIntegrationOperation(principal: string, operationId: string): Promise<IntegrationOperationRecord | null>;
   findIntegrationOperation(principal: string, idempotencyKey: string): Promise<IntegrationOperationRecord | null>;
   recordIntegrationAssertion(principal: string, jti: string, expiresAt: string): Promise<boolean>;
+  closeManagedRoom(roomId: string, expectedRevision: number, reason: string | null, operationId: string | null): Promise<RoomRecord | "revision_mismatch" | null>;
+  issueManagedRoomGrant(input: ManagedRoomGrantInput): Promise<ManagedRoomGrantRecord | ManagedRoomBlockReason | null>;
+  getManagedRoomGrant(grantId: string): Promise<ManagedRoomGrantRecord | null>;
+  revokeManagedRoomGrant(grantId: string, reason: string | null, operationId: string): Promise<ManagedRoomGrantRecord | null>;
+  consumeManagedRoomGrant(roomId: string, codeHash: string): Promise<ManagedRoomGrantConsumeResult>;
+  releaseManagedRoomGrantUse(grantId: string): Promise<void>;
+  recordManagedRoomGrantIdentity(grantId: string, identityId: string): Promise<void>;
+  listManagedRoomGrantIdentities(grantId: string): Promise<string[]>;
+  /** Asks the enforcer to move the room to a new access epoch (after the identities of a revoked grant are revoked). */
+  requestManagedRoomRotation(roomId: string): Promise<void>;
+  /** Revoked grants whose identities and media were not finished yet (a revoke interrupted on its way). */
+  listIncompleteManagedGrantRevocations(): Promise<ManagedRoomGrantRecord[]>;
+  /** Marks the revoke complete and, for a used grant, asks for a new epoch, once: a second caller does nothing. */
+  completeManagedGrantRevocation(grantId: string): Promise<void>;
+  listManagedRoomsForEnforcement(): Promise<ManagedRoomEnforcementRecord[]>;
+  /** Moves the room to a new access epoch if it is still on expectedEpoch; the old one is queued for deletion. */
+  rotateManagedRoomEpoch(roomId: string, expectedEpoch: string, enforcedBlock: ManagedRoomBlockReason | null): Promise<string | null>;
+  setManagedRoomEnforcedBlock(roomId: string, enforcedBlock: ManagedRoomBlockReason | null): Promise<void>;
+  completeRetiredManagedRoomEpoch(roomId: string, epoch: string): Promise<void>;
+  recordManagedRoomActivity(activity: ManagedRoomActivity[]): Promise<void>;
+  getIntegrationUsage(tenantId: string, day: string): Promise<{ participantSeconds: number; updatedAt: string | null }>;
+  /** Runs fn only in the one process holding the enforcer lock; resolves false when another holds it. */
+  withManagedRoomEnforcerLock(fn: () => Promise<void>): Promise<boolean>;
 }
 
 export interface RuntimeDiagnosticRecord {

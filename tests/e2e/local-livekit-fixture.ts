@@ -34,7 +34,7 @@ async function stop(child: ChildProcess) {
 
 /** Extract the checksum-pinned installed server into an owned test directory. Native loopback RTC works on both Linux CI
  * and WSL without depending on Docker Desktop's host/bridge routing. No deployment credentials or shared services. */
-export async function startLocalLiveKitFixture(version: keyof typeof IMAGES = "1.13.7") {
+export async function startLocalLiveKitFixture(version: keyof typeof IMAGES = "1.13.7", options: { autoCreate?: boolean } = {}) {
   const IMAGE = IMAGES[version];
   if (!IMAGE) throw new Error("local_livekit_fixture_version_invalid");
   const scratchRoot = resolve(process.env.E2E_RUN_DIR ?? "test-results");
@@ -68,7 +68,7 @@ export async function startLocalLiveKitFixture(version: keyof typeof IMAGES = "1
     while (rtcTcp === signal) rtcTcp = await tcpPort();
     const rtcUdp = await udpPort();
     const config = join(root, "server.yaml");
-    await writeFile(config, `port: ${signal}\nbind_addresses: [127.0.0.1]\nrtc:\n  tcp_port: ${rtcTcp}\n  udp_port: ${rtcUdp}\n  node_ip: 127.0.0.1\n  use_external_ip: false\n  enable_loopback_candidate: true\nkeys:\n  devkey: secret\n`);
+    await writeFile(config, `port: ${signal}\nbind_addresses: [127.0.0.1]\nrtc:\n  tcp_port: ${rtcTcp}\n  udp_port: ${rtcUdp}\n  node_ip: 127.0.0.1\n  use_external_ip: false\n  enable_loopback_candidate: true\nkeys:\n  devkey: secret\n${options.autoCreate === false ? "room:\n  auto_create: false\n" : ""}`);
     child = spawn(binary, ["--config", config, "--dev"], { stdio: "ignore" });
     phase = "ready";
     let spawnFailed = false; child.on("error", () => { spawnFailed = true; });

@@ -1,6 +1,7 @@
 import { RoomServiceClient } from "livekit-server-sdk";
 import type { RoomRecord, RoomSessionControlState, Storage } from "./storage-contracts.js";
 import { getLivekitCredentials, getMediaTokenConfigError } from "./livekit-config.js";
+import { currentMediaRoomName } from "./managed-media-names.js";
 import { createMediaScreenReconciler, MEDIA_RECONCILIATION_VERSION, type MediaScreenAuthority, type MediaScreenReconciliationStatus } from "./media-screen-reconciler.js";
 
 /** Both room lifecycle and its publisher identities come from one read-only storage snapshot. */
@@ -30,11 +31,13 @@ export function createMediaScreenService(storagePromise: Promise<Storage>, optio
       const namespace = await storage.identityProtocol.mediaNamespace();
       if (!namespace) throw new Error("media_screen_namespace_missing");
       if (!native) {
-        native = new RoomServiceClient(env.LIVEKIT_URL, apiKey, apiSecret, { requestTimeout: 2 });
+        // LIVEKIT_API_URL reaches the LiveKit HTTP API directly where the public URL serves only signaling.
+        native = new RoomServiceClient(env.LIVEKIT_API_URL?.trim() || env.LIVEKIT_URL, apiKey, apiSecret, { requestTimeout: 2 });
       }
       return { namespace, prefix: env.LIVEKIT_ROOM_PREFIX ?? "vrata-", native };
     },
     authority: async roomId => readMediaScreenAuthority(await storagePromise, roomId),
+    mediaRoomName: async (roomId, prefix, namespace) => currentMediaRoomName(await (await storagePromise).getRoom(roomId), roomId, prefix, namespace),
     event: options.event
   });
   return {

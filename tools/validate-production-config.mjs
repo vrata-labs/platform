@@ -406,6 +406,31 @@ function validatePortalManagedConfig(issues, env) {
   if (!valid) {
     addIssue(issues, "invalid_integration_keys", "VRATA_INTEGRATION_KEYS", "expected_ed25519_public_keys");
   }
+  // The API checks every policy field at startup; this preflight catches an unparsable value before a deploy.
+  const rawPolicies = trimmed(env.VRATA_DEMO_POLICIES);
+  if (rawPolicies) {
+    let policies;
+    try {
+      policies = JSON.parse(rawPolicies);
+    } catch {
+      policies = null;
+    }
+    if (!Array.isArray(policies) || !policies.every((policy) => policy && typeof policy.policyId === "string")) {
+      addIssue(issues, "invalid_demo_policies", "VRATA_DEMO_POLICIES", "expected_json_array_of_policies");
+    }
+  }
+  const apiUrl = trimmed(env.LIVEKIT_API_URL);
+  if (apiUrl) {
+    let url = null;
+    try {
+      url = new URL(apiUrl);
+    } catch {
+      url = null;
+    }
+    if (!url || !["http:", "https:"].includes(url.protocol) || url.username || url.password) {
+      addIssue(issues, "invalid_url", "LIVEKIT_API_URL", "expected_http_url_without_credentials");
+    }
+  }
 }
 
 export function validateProductionConfig(env = process.env) {

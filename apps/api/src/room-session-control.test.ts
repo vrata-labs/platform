@@ -228,7 +228,8 @@ function managedRoom(accessUntil: string, graceSeconds = 0, status: "active" | "
   return room(undefined, {
     managed: {
       managedBy: "portal:stage", kind: "reference", status, accessUntil, graceSeconds, revision: 0,
-      ownerSubject: null, lastOperationId: null, createdAt: "2026-10-22T00:00:00.000Z", updatedAt: "2026-10-22T00:00:00.000Z"
+      ownerSubject: null, lastOperationId: null, createdAt: "2026-10-22T00:00:00.000Z", updatedAt: "2026-10-22T00:00:00.000Z",
+      accessEpoch: "6f1c2d3e-4b5a-4c6d-8e7f-9a0b1c2d3e4f"
     },
     ...overrides
   });

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { RoomScreenSourceAuthority } from "./identity/contracts.js";
 import { roomMediaGrantName } from "./identity/media-room.js";
 import { validId } from "./identity/authority.js";
+import { parseMediaRoomName } from "./managed-media-names.js";
 import { mustEvictUserMedia, screenSourceLowering, screenSourcesRetired, verifiedSourcePeer } from "./media-source-permissions.js";
 
 export const MEDIA_RECONCILIATION_VERSION = 2;
@@ -40,6 +41,8 @@ const fingerprint = (namespace: string, value: MediaScreenAuthority) => JSON.str
 export function createMediaScreenReconciler(input: {
   context: () => Promise<Context | null>;
   authority: (roomId: string) => Promise<MediaScreenAuthority>;
+  /** The current LiveKit room of a platform room; portal-managed rooms add their access epoch. */
+  mediaRoomName?: (roomId: string, prefix: string, namespace: string) => Promise<string>;
   event?: (event: "observed" | "pending" | "unavailable" | "lowered" | "evicted") => void;
   now?: () => number;
   intervalMs?: number;
@@ -162,11 +165,11 @@ export function createMediaScreenReconciler(input: {
       unavailable = false;
       const rooms = await context.native.listRooms();
       if (!alive(captured)) return;
-      const prefix = `${context.prefix}v2:${context.namespace}:`;
       const owned = rooms.flatMap(room => {
-        if (!room.name.startsWith(prefix)) return [];
-        const roomId = room.name.slice(prefix.length);
-        return validId(roomId) && roomMediaGrantName(roomId, context.prefix, context.namespace) === room.name ? [{ roomId, name: room.name }] : [];
+        const parsed = parseMediaRoomName(room.name, context.prefix, context.namespace);
+        if (!parsed || !validId(parsed.roomId)) return [];
+        const base = roomMediaGrantName(parsed.roomId, context.prefix, context.namespace);
+        return (parsed.epoch ? `${base}:${parsed.epoch}` : base) === room.name ? [{ roomId: parsed.roomId, name: room.name }] : [];
       }).sort((a, b) => a.name.localeCompare(b.name));
       const present = new Set(owned.map(room => room.roomId));
       const count = Math.min(maxRooms, owned.length);
@@ -188,7 +191,9 @@ export function createMediaScreenReconciler(input: {
           const desired = await input.authority(roomId), key = fingerprint(context.namespace, desired);
           if (!alive(captured)) return;
           const atMs = now();
-          const native = await context.native.listRooms([roomMediaGrantName(roomId, context.prefix, context.namespace)]);
+          const mediaRoom = input.mediaRoomName ? await input.mediaRoomName(roomId, context.prefix, context.namespace)
+            : roomMediaGrantName(roomId, context.prefix, context.namespace);
+          const native = await context.native.listRooms([mediaRoom]);
           if (!alive(captured)) return;
           const after = await input.authority(roomId);
           if (!alive(captured)) return;

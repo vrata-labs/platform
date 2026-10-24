@@ -1,5 +1,5 @@
 import type { RoomRole } from "@vrata/shared-types";
-import type { RoomRecord, RoomSessionControlState } from "./storage.js";
+import type { ManagedRoomBlockReason, RoomRecord, RoomSessionControlState } from "./storage.js";
 
 import { isHostControlsEnabled } from "./feature-flags.js";
 
@@ -96,9 +96,11 @@ export function managedRoomCutoffMs(room: RoomRecord | null | undefined): number
   return Date.parse(room.managed.accessUntil) + room.managed.graceSeconds * 1000;
 }
 
-export function getManagedAccessBlockReason(room: RoomRecord | null | undefined, nowMs = Date.now()): "access_expired" | "room_paused" | null {
+export function getManagedAccessBlockReason(room: RoomRecord | null | undefined, nowMs = Date.now()): ManagedRoomBlockReason | null {
   const cutoffMs = managedRoomCutoffMs(room);
   if (cutoffMs === null) return null;
+  // A closed room is a tombstone: it never reopens, whatever its access window says.
+  if (room?.managed?.status === "closed") return "room_closed";
   if (nowMs >= cutoffMs) return "access_expired";
   return room?.managed?.status === "paused" ? "room_paused" : null;
 }
@@ -111,5 +113,5 @@ export function capTokenTtlSeconds(room: RoomRecord | null | undefined, ttlSecon
 }
 
 export function sessionBlockStatusCode(reason: string): 403 | 410 | 423 {
-  return reason === "access_expired" ? 410 : reason === "room_paused" ? 423 : 403;
+  return reason === "access_expired" || reason === "room_closed" ? 410 : reason === "room_paused" ? 423 : 403;
 }
