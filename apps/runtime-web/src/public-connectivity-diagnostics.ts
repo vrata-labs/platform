@@ -12,6 +12,7 @@ export type PublicDiagnosticCode =
   | "api_http_error"
   | "admin_details_protected"
   | "admin_details_public"
+  | "admin_details_unexpected"
   | "manifest_ok"
   | "manifest_unreachable"
   | "state_token_ok"
@@ -67,6 +68,8 @@ interface RuntimeManifest {
 
 interface StateTokenResponse {
   token: string;
+  /** Floor 2 issues the participant; the caller's ID is never adopted. */
+  participantId?: string;
 }
 
 interface MediaTokenResponse {
@@ -96,6 +99,8 @@ interface DiagnosticsContext {
   apiBaseUrl: string;
   roomId: string;
   participantId: string;
+  /** Read from /health: an activated deployment admits only v2 sessions and refuses anonymous room reads. */
+  identityProtocolVersion?: 2;
   displayName: string;
   timeoutMs: number;
   fetchImpl: FetchLike;
@@ -118,7 +123,7 @@ type LiveKitEngineDiagnosticsSource = {
   };
 };
 
-const secretKeyPattern = /(authorization|cookie|password|secret|token|invite)/i;
+const secretKeyPattern = /(authorization|cookie|password|secret|token|invite|credential)/i;
 
 function setDiagnosticsTimeout(callback: () => void, timeoutMs: number): ReturnType<typeof globalThis.setTimeout> {
   return globalThis.setTimeout(callback, timeoutMs);
@@ -175,7 +180,11 @@ async function fetchJsonWithTimeout<T>(context: DiagnosticsContext, path: string
       ...init,
       signal: controller.signal
     });
-    const payload = (await response.json().catch(() => ({}))) as T;
+    // A body cut off by the bound is a timeout, not an empty answer; only an unreadable body becomes {}.
+    const payload = (await response.json().catch((error: unknown) => {
+      if (controller.signal.aborted) throw error;
+      return {};
+    })) as T;
     return { response, payload };
   } finally {
     clearDiagnosticsTimeout(timeout);
@@ -233,6 +242,9 @@ async function checkApi(context: DiagnosticsContext): Promise<PublicDiagnosticCh
         details: { status: response.status, payload }
       });
     }
+    if ((payload as { features?: { identityProtocolVersion?: unknown } } | null)?.features?.identityProtocolVersion === 2) {
+      context.identityProtocolVersion = 2;
+    }
     return createCheck({
       name: "api",
       label: "API",
@@ -248,8 +260,12 @@ async function checkApi(context: DiagnosticsContext): Promise<PublicDiagnosticCh
 
 async function checkAdminDetailsProtected(context: DiagnosticsContext): Promise<PublicDiagnosticCheck> {
   return runTimedCheck(context, "adminDetails", async (startedAt) => {
-    const response = await fetchOkWithTimeout(context, new URL(`/api/rooms/${encodeURIComponent(context.roomId)}/diagnostics`, context.apiBaseUrl).toString());
-    if (response.status === 401 || response.status === 403) {
+    // Headers and body share one aborting bound, so a stalled body cannot hang the run and a timeout stays a timeout.
+    const { response, payload } = await fetchJsonWithTimeout<{ reason?: unknown }>(context,
+      `/api/rooms/${encodeURIComponent(context.roomId)}/diagnostics`, { method: "GET", cache: "no-store" });
+    // Floor 2 refuses the anonymous read at its identity boundary before the route itself; any other 409 is not that refusal.
+    const boundaryRefusal = context.identityProtocolVersion === 2 && response.status === 409 && payload?.reason === "identity_upgrade_required";
+    if (response.status === 401 || response.status === 403 || boundaryRefusal) {
       return createCheck({
         name: "adminDetails",
         label: "Admin details",
@@ -265,19 +281,35 @@ async function checkAdminDetailsProtected(context: DiagnosticsContext): Promise<
       name: "adminDetails",
       label: "Admin details",
       status: "failed",
-      code: "admin_details_public",
+      code: response.ok ? "admin_details_public" : "admin_details_unexpected",
       startedAt,
       now: context.now,
-      message: "Stored diagnostics were readable without authorization",
+      message: response.ok ? "Stored diagnostics were readable without authorization" : `Stored diagnostics returned unexpected HTTP ${response.status}`,
       details: { status: response.status }
     });
   });
 }
 
-async function checkManifest(context: DiagnosticsContext): Promise<{ check: PublicDiagnosticCheck; manifest: RuntimeManifest | null }> {
+async function checkManifest(context: DiagnosticsContext, sessionToken: string | null): Promise<{ check: PublicDiagnosticCheck; manifest: RuntimeManifest | null }> {
   const startedAt = context.now();
+  // Floor 2 serves the manifest only to an admitted session; without one an anonymous request would only add a second refusal.
+  if (context.identityProtocolVersion === 2 && !sessionToken) {
+    return {
+      check: createCheck({
+        name: "manifest",
+        label: "Room manifest",
+        status: "failed",
+        code: "manifest_unreachable",
+        startedAt,
+        now: context.now,
+        message: "Manifest needs an admitted room session"
+      }),
+      manifest: null
+    };
+  }
   try {
-    const { response, payload } = await fetchJsonWithTimeout<RuntimeManifest>(context, `/api/rooms/${encodeURIComponent(context.roomId)}/manifest`);
+    const { response, payload } = await fetchJsonWithTimeout<RuntimeManifest>(context, `/api/rooms/${encodeURIComponent(context.roomId)}/manifest`,
+      sessionToken ? { headers: { authorization: `Bearer ${sessionToken}` } } : undefined);
     if (!response.ok) {
       return {
         check: createCheck({
@@ -334,13 +366,12 @@ async function fetchStateTokenCheck(context: DiagnosticsContext): Promise<{ chec
     const { response, payload } = await fetchJsonWithTimeout<StateTokenResponse>(context, "/api/tokens/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        roomId: context.roomId,
-        participantId: context.participantId,
-        displayName: context.displayName
-      })
+      body: JSON.stringify(context.identityProtocolVersion === 2
+        ? { identityProtocolVersion: 2, roomId: context.roomId, displayName: context.displayName }
+        : { roomId: context.roomId, participantId: context.participantId, displayName: context.displayName })
     });
-    if (!response.ok || typeof payload.token !== "string") {
+    if (!response.ok || typeof payload.token !== "string"
+      || (context.identityProtocolVersion === 2 && (typeof payload.participantId !== "string" || !payload.participantId))) {
       return {
         check: createCheck({
           name: "stateToken",
@@ -355,6 +386,8 @@ async function fetchStateTokenCheck(context: DiagnosticsContext): Promise<{ chec
         token: null
       };
     }
+    // Room-state and media requests below act as the server-issued participant.
+    if (context.identityProtocolVersion === 2) context.participantId = payload.participantId!;
     return {
       check: createCheck({
         name: "stateToken",
@@ -772,7 +805,11 @@ export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Pr
 }
 
 export function redactString(value: string): string {
-  return value.replace(/([?&][^=&]*(?:authorization|password|secret|token|invite)[^=&]*=)[^&]+/gi, `$1[redacted]`);
+  // Bearer values first: a query value may itself be "Bearer <secret>", and the parameter rule stops at the space.
+  // Issued v2 session/identity proofs may appear inside another word or percent-encoded. No lookbehind: older Safari cannot parse it.
+  return value.replace(/(Bearer\s+)[A-Za-z0-9._~+/=%-]+/gi, "$1[redacted]")
+    .replace(/([?&][^=&]*(?:authorization|password|secret|token|invite|credential)[^=&]*=)[^&\s#]+/gi, `$1[redacted]`)
+    .replace(/(^|[^A-Za-z0-9])(?:rs2|ri2)(?:\.|%2E)[A-Za-z0-9._~+/=%-]+/gi, "$1[redacted]");
 }
 
 export function redactConnectivityReport(value: unknown, key = ""): unknown {
@@ -820,9 +857,11 @@ export async function runPublicConnectivityDiagnostics(options: PublicConnectivi
   emit(checkClientCapabilities(context.now(), context.now, capabilities));
   emit(await checkApi(context));
   emit(await checkAdminDetailsProtected(context));
-  const manifestResult = await checkManifest(context);
+  // Floor 2 reads the manifest only with an admitted session, so admission comes first; the report order is unchanged.
+  const admittedFirst = context.identityProtocolVersion === 2 ? await fetchStateTokenCheck(context) : null;
+  const manifestResult = await checkManifest(context, admittedFirst?.token ?? null);
   emit(manifestResult.check);
-  const stateTokenResult = await fetchStateTokenCheck(context);
+  const stateTokenResult = admittedFirst ?? await fetchStateTokenCheck(context);
   emit(stateTokenResult.check);
   emit(await checkRoomStateWebSocket(context, manifestResult.manifest, stateTokenResult.token, options.roomStateUrlOverride));
   emit(await checkStorage(context, manifestResult.manifest));

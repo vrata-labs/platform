@@ -717,7 +717,8 @@ test.describe("@staging runtime HUD space selector", () => {
   });
 
   test("staging selector exposes canonical rooms with avatars enabled", async ({ request, baseURL }) => {
-    const spacesResponse = await request.get(`/api/rooms/${stagingRoomId}/spaces`);
+    // Floor 2 refuses anonymous room reads at its identity boundary; the administrator may read them.
+    const spacesResponse = await request.get(`/api/rooms/${stagingRoomId}/spaces`, { headers: stagingAdmin });
     expect(spacesResponse.ok()).toBeTruthy();
     const payload = await spacesResponse.json() as {
       items: Array<{ roomId: string; name: string; roomLink: string }>;
@@ -730,7 +731,7 @@ test.describe("@staging runtime HUD space selector", () => {
       expect(names).toContain(expected);
     }
 
-    const manifestResponse = await request.get(`/api/rooms/${stagingRoomId}/manifest`);
+    const manifestResponse = await request.get(`/api/rooms/${stagingRoomId}/manifest`, { headers: stagingAdmin });
     expect(manifestResponse.ok()).toBeTruthy();
     const manifest = await manifestResponse.json() as {
       avatars?: { avatarsEnabled?: boolean; avatarPoseBinaryEnabled?: boolean };
