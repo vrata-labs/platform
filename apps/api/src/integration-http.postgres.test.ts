@@ -182,7 +182,8 @@ test("portal-managed rooms on PostgreSQL: grants, exchange, cutoff, close, epoch
 
     // Usage: room-state verifications are counted as participant-seconds of the tenant.
     const session = (await renew(demoId, host.body!.identityCredential)).body!;
-    for (let index = 0; index < 5; index++) {
+    // Presence over several enforcer ticks: a tick bills its own window, fractions carry to the next.
+    for (let index = 0; index < 16; index++) {
       assert.equal((await verify(demoId, host.body!.participantId, session.token)).status, 200);
       await delay(150);
     }
