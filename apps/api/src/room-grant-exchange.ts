@@ -73,14 +73,14 @@ export async function exchangeRoomGrant(input: {
     return failure(consumed.code, messages[consumed.code], requestId, consumed.code === "capacity_full" ? 60 : undefined);
   }
   const { grant } = consumed;
-  const sessionLifetimeSeconds = v2RoomSessionLifetimeSeconds(consumed.room, now());
-  if (sessionLifetimeSeconds <= 0) {
+  const cutoffMs = managedRoomCutoffMs(consumed.room)!;
+  if (v2RoomSessionLifetimeSeconds(consumed.room, now()) <= 0) {
     await storage.releaseManagedRoomGrantUse(grant.grantId);
     return failure("access_expired", "Room access has expired", requestId);
   }
   const scope = { tenantId: consumed.room.tenantId, roomId };
   const service = createRoomIdentityService(storage.roomIdentities, input.secret, now,
-    { identityLifetimeSeconds: IDENTITY_LIFETIME_SECONDS, sessionLifetimeSeconds });
+    { identityLifetimeSeconds: IDENTITY_LIFETIME_SECONDS, sessionLifetimeSeconds: 900, sessionDeadlineSeconds: Math.floor(cutoffMs / 1000) });
   let issued: Awaited<ReturnType<typeof service.admitGrant>>;
   try {
     issued = await service.admitGrant({ ...scope, displayName: displayName || grant.displayName || "Guest", grantId: grant.grantId });
@@ -89,16 +89,29 @@ export async function exchangeRoomGrant(input: {
     if (error instanceof IdentityStorageError && error.code === "room_blocked") return failure("room_closed", "The room does not admit new participants", requestId);
     throw error;
   }
+  const withdraw = () => storage.roomIdentities.revoke(scope, issued.identity.identityId, issued.identity.authEpoch).catch(() => undefined);
   try {
     await storage.recordManagedRoomGrantIdentity(grant.grantId, issued.identity.identityId);
   } catch (error) {
     // An identity the grant cannot revoke later must not stay usable.
-    await storage.roomIdentities.revoke(scope, issued.identity.identityId, issued.identity.authEpoch).catch(() => undefined);
+    await withdraw();
     await storage.releaseManagedRoomGrantUse(grant.grantId).catch(() => undefined);
     throw error;
   }
-  const session = await service.issueSession(issued.credential, scope);
-  const cutoffMs = managedRoomCutoffMs(consumed.room)!;
+  // A revoke reads the identities of the grant after it marked the grant revoked. Reading the grant after the
+  // identity is recorded closes the gap: either the revoke lists this identity, or this exchange sees the revoke.
+  const current = await storage.getManagedRoomGrant(grant.grantId);
+  if (!current || current.revokedAt) {
+    await withdraw();
+    return failure("grant_revoked", "The invitation was withdrawn", requestId);
+  }
+  let session: Awaited<ReturnType<typeof service.issueSession>>;
+  try {
+    session = await service.issueSession(issued.credential, scope);
+  } catch (error) {
+    if (error instanceof IdentityStorageError && error.code === "identity_session_expired") return failure("access_expired", "Room access has expired", requestId);
+    throw error;
+  }
   return {
     status: 200,
     body: {
@@ -106,7 +119,7 @@ export async function exchangeRoomGrant(input: {
       participantId: issued.identity.participantId,
       role: "guest",
       sessionToken: session.sessionToken,
-      sessionExpiresAt: new Date(Math.min(cutoffMs, now() + sessionLifetimeSeconds * 1000)).toISOString(),
+      sessionExpiresAt: new Date(session.expiresAtSeconds * 1000).toISOString(),
       cutoff: new Date(cutoffMs).toISOString(),
       identityProtocolVersion: 2,
       identityCredential: issued.credential,

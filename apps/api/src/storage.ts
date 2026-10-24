@@ -1041,6 +1041,7 @@ export class MemoryStorage implements Storage {
     if (!room?.managed) return null;
     if (room.managed.status === "closed") return "room_closed";
     if (room.managed.revision !== expectedRevision) return "revision_mismatch";
+    this.managedRooms.noteManagedRoomAccessChange(room, patch.status ?? room.managed.status);
     room.managed = {
       ...room.managed,
       accessUntil: patch.accessUntil ?? room.managed.accessUntil,
@@ -1066,6 +1067,9 @@ export class MemoryStorage implements Storage {
   consumeManagedRoomGrant(roomId: string, codeHash: string): Promise<ManagedRoomGrantConsumeResult> { return this.managedRooms.consumeManagedRoomGrant(roomId, codeHash); }
   releaseManagedRoomGrantUse(grantId: string): Promise<void> { return this.managedRooms.releaseManagedRoomGrantUse(grantId); }
   recordManagedRoomGrantIdentity(grantId: string, identityId: string): Promise<void> { return this.managedRooms.recordManagedRoomGrantIdentity(grantId, identityId); }
+  requestManagedRoomRotation(roomId: string): Promise<void> { return this.managedRooms.requestManagedRoomRotation(roomId); }
+  listIncompleteManagedGrantRevocations(): Promise<ManagedRoomGrantRecord[]> { return this.managedRooms.listIncompleteManagedGrantRevocations(); }
+  completeManagedGrantRevocation(grantId: string): Promise<void> { return this.managedRooms.completeManagedGrantRevocation(grantId); }
   listManagedRoomGrantIdentities(grantId: string): Promise<string[]> { return this.managedRooms.listManagedRoomGrantIdentities(grantId); }
   listManagedRoomsForEnforcement(): Promise<ManagedRoomEnforcementRecord[]> { return this.managedRooms.listManagedRoomsForEnforcement(); }
   rotateManagedRoomEpoch(roomId: string, expectedEpoch: string, enforcedBlock: ManagedRoomBlockReason | null): Promise<string | null> { return this.managedRooms.rotateManagedRoomEpoch(roomId, expectedEpoch, enforcedBlock); }
@@ -2355,7 +2359,10 @@ export class PostgresStorage implements Storage {
     const result = await this.pool.query(
       `update integration_rooms
           set access_until = coalesce($3::timestamptz, access_until), grace_seconds = coalesce($4::integer, grace_seconds),
-              status = coalesce($5::text, status), revision = revision + 1, last_operation_id = $6, updated_at = now()
+              status = coalesce($5::text, status), revision = revision + 1, last_operation_id = $6, updated_at = now(),
+              -- A pause, or any change after the window lapsed, opens a new media epoch; the enforcer may not have seen it yet.
+              rotate_requested_at = case when coalesce($5::text, status) = 'paused'
+                or access_until + grace_seconds * interval '1 second' <= now() then now() else rotate_requested_at end
         where room_id = $1 and revision = $2 and status <> 'closed'`,
       [roomId, expectedRevision, patch.accessUntil ?? null, patch.graceSeconds ?? null, patch.status ?? null, operationId]
     );
@@ -2380,6 +2387,9 @@ export class PostgresStorage implements Storage {
   consumeManagedRoomGrant(roomId: string, codeHash: string): Promise<ManagedRoomGrantConsumeResult> { return this.managedRooms.consumeManagedRoomGrant(roomId, codeHash); }
   releaseManagedRoomGrantUse(grantId: string): Promise<void> { return this.managedRooms.releaseManagedRoomGrantUse(grantId); }
   recordManagedRoomGrantIdentity(grantId: string, identityId: string): Promise<void> { return this.managedRooms.recordManagedRoomGrantIdentity(grantId, identityId); }
+  requestManagedRoomRotation(roomId: string): Promise<void> { return this.managedRooms.requestManagedRoomRotation(roomId); }
+  listIncompleteManagedGrantRevocations(): Promise<ManagedRoomGrantRecord[]> { return this.managedRooms.listIncompleteManagedGrantRevocations(); }
+  completeManagedGrantRevocation(grantId: string): Promise<void> { return this.managedRooms.completeManagedGrantRevocation(grantId); }
   listManagedRoomGrantIdentities(grantId: string): Promise<string[]> { return this.managedRooms.listManagedRoomGrantIdentities(grantId); }
   listManagedRoomsForEnforcement(): Promise<ManagedRoomEnforcementRecord[]> { return this.managedRooms.listManagedRoomsForEnforcement(); }
   rotateManagedRoomEpoch(roomId: string, expectedEpoch: string, enforcedBlock: ManagedRoomBlockReason | null): Promise<string | null> { return this.managedRooms.rotateManagedRoomEpoch(roomId, expectedEpoch, enforcedBlock); }

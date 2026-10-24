@@ -216,6 +216,9 @@ test("portal-managed rooms on PostgreSQL: grants, exchange, cutoff, close, epoch
     const expiringGuest = await exchange(expiringId, codeOf(expiringGrant.body!.entryUrl));
     assert.equal(expiringGuest.status, 200, JSON.stringify(expiringGuest.body));
     assert(Date.parse(expiringGuest.body!.sessionExpiresAt) <= Date.parse(expiring.body!.effectiveCutoff), "a session never outlives the cutoff");
+    const claims = JSON.parse(Buffer.from((expiringGuest.body!.sessionToken as string).split(".")[1]!, "base64url").toString("utf8")) as { expiresAtSeconds: number };
+    assert(claims.expiresAtSeconds * 1000 <= Date.parse(expiring.body!.effectiveCutoff), "the signed rs2 exp, not only the reported date");
+    assert.equal(new Date(claims.expiresAtSeconds * 1000).toISOString(), expiringGuest.body!.sessionExpiresAt);
     await delay(Math.max(0, Date.parse(expiring.body!.effectiveCutoff) - Date.now()) + 300);
     const expiredRenewal = await renew(expiringId, expiringGuest.body!.identityCredential);
     assert.deepEqual([expiredRenewal.status, expiredRenewal.body?.reason], [410, "access_expired"]);

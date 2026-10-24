@@ -107,12 +107,29 @@ test("a portal grant opens one demo instance, an invite brings the others, and c
       try { await room.connect(input.url, input.token); return true; } catch { return false; }
     }, { url: livekit.url, token });
     expect(await connect(mediaToken)).toBe(true);
+    // A room-state client of its own, not the runtime: the server must close it, the runtime leaving voluntarily proves nothing.
+    const participantId = await creator.evaluate(() => (window as any).__VRATA_DEBUG__?.participantId as string);
+    const socketUrl = new URL(fixture.stateOrigin.replace(/^http/, "ws"));
+    socketUrl.search = new URLSearchParams({ roomId, participantId, accessToken: (await session.json()).token }).toString();
+    const socket = new WebSocket(socketUrl);
+    const socketClosed = new Promise<{ code: number; at: number }>(done => socket.addEventListener("close", event => done({ code: event.code, at: Date.now() })));
+    // Admitted means the server sent room state; a socket refused at its first verification never gets that far.
+    const admitted = new Promise<void>((done, fail) => {
+      socket.addEventListener("message", () => done(), { once: true });
+      socket.addEventListener("close", () => fail(new Error("room_state_socket_refused")), { once: true });
+    });
+    await admitted;
+    await new Promise(done => setTimeout(done, 2500));
+    expect(socket.readyState).toBe(WebSocket.OPEN);
     const validate = async (token: string) => (await fetch(`${livekit.httpUrl}/rtc/validate?access_token=${encodeURIComponent(token)}`)).status;
     expect(await validate(mediaToken)).toBe(200);
 
     // Close: room-state sockets end within a second, the old epoch room is deleted and its JWT no longer joins anything.
+    const closedAt = Date.now();
     const closed = await integration(request, "POST", `/integration/v1/tenants/${tenantId}/rooms/${roomId}/close`, { expectedRevision: 0, reason: "e2e" });
     expect(closed.body.status).toBe("closed");
+    const ended = await socketClosed;
+    expect([ended.code, ended.at >= closedAt, ended.at - closedAt < 15_000]).toEqual([1008, true, true]);
     for (const page of [creator, guest]) {
       await expect(page.locator("#room-access-ended")).toBeVisible({ timeout: 60_000 });
       await expect(page.locator("#room-access-ended-title")).toHaveText("This room has ended");

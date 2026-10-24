@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import test from "node:test";
 
 import { createIntegrationRoutes } from "./integration-routes.js";
+import { completeGrantRevocation } from "./grant-revocation.js";
 import { exchangeRoomGrant } from "./room-grant-exchange.js";
 import { MemoryStorage } from "./storage.js";
 import { createIntegrationTestKey, integrationKeysEnv, signIntegrationAssertion, type IntegrationTestKey } from "./testing/integration-assertions.js";
@@ -139,4 +140,29 @@ test("a grant exchange needs identity v2, a valid body and admission budget", as
   const limited = await exchangeRoomGrant({ ...base, reserveAdmission: async () => false, payload: { roomId: room.roomId, code } });
   assert.deepEqual([limited.status, limited.retryAfterSeconds, (limited.body.error as { code: string }).code], [429, 60, "rate_limited"]);
   assert.equal(((await exchangeRoomGrant({ ...base, payload: { roomId: room.roomId, code } })).body.error as { code: string }).code, "grant_invalid");
+});
+
+test("finishing a revoke skips identities already revoked meanwhile and still asks for the new epoch", async () => {
+  const storage = new MemoryStorage();
+  await storage.identityProtocol.raise(2);
+  const room = await storage.createManagedRoom({ roomId: randomUUID(), tenantId: "pt_01JBQ7Z8K3M4N5P6Q7R8S9T0VW", name: "Demo", visibility: "private" }, {
+    managedBy: "portal:stage", kind: "demo-instance", accessUntil: future(), graceSeconds: 0, operationId: randomUUID(), maxParticipants: 4 });
+  const grant = (await storage.issueManagedRoomGrant({ grantId: randomUUID(), roomId: room.roomId, role: "guest", purpose: "invite", maxUses: 3,
+    expiresAt: future(), codeHash: "c".repeat(64), operationId: randomUUID() }))!;
+  assert(typeof grant !== "string");
+  const scope = { tenantId: room.tenantId, roomId: room.roomId };
+  const identities = [];
+  for (let index = 0; index < 2; index++) {
+    assert.equal((await storage.consumeManagedRoomGrant(room.roomId, "c".repeat(64))).ok, true);
+    const identity = await storage.roomIdentities.create({ ...scope, displayName: `Guest ${index}`, baseRole: "guest", provenance: { kind: "grant", grantId: grant.grantId, role: "guest" } });
+    await storage.recordManagedRoomGrantIdentity(grant.grantId, identity.identityId);
+    identities.push(identity);
+  }
+  // An exchange withdrew its own identity at the same time as the revoke.
+  await storage.roomIdentities.revoke(scope, identities[0]!.identityId, identities[0]!.authEpoch);
+  const revoked = (await storage.revokeManagedRoomGrant(grant.grantId, null, randomUUID()))!;
+  await completeGrantRevocation(storage, revoked);
+  assert((await storage.roomIdentities.get(scope, identities[1]!.identityId))?.revokedAt);
+  assert.equal((await storage.listIncompleteManagedGrantRevocations()).length, 0);
+  assert((await storage.listManagedRoomsForEnforcement()).some(record => record.roomId === room.roomId && record.rotateRequestedAt));
 });

@@ -97,6 +97,8 @@ export async function ensureIntegrationStorageSchema(client: PoolClient): Promis
       )
     `);
   await client.query(`create index if not exists integration_grants_room_idx on integration_grants (room_id)`);
+  // A revoke is complete once every identity of the grant is revoked and the media epoch rotation is asked for.
+  await client.query(`alter table integration_grants add column if not exists revocation_completed_at timestamptz`);
   await client.query(`
       create table if not exists integration_grant_identities (
         grant_id uuid not null references integration_grants(grant_id),
@@ -115,4 +117,20 @@ export async function ensureIntegrationStorageSchema(client: PoolClient): Promis
       )
     `);
   await client.query(`create index if not exists integration_rooms_open_idx on integration_rooms (access_until) where enforced_block is null`);
+  // A closed room stays closed and expired whichever build writes it: a rollback build that does not know
+  // the closed status can neither reopen it nor extend its window.
+  await client.query(`
+      create or replace function integration_rooms_closed_terminal() returns trigger language plpgsql as $$
+      begin
+        if old.status = 'closed' and (new.status is distinct from 'closed' or new.access_until > old.access_until
+            or new.grace_seconds > old.grace_seconds) then
+          raise exception 'managed_room_closed' using errcode = 'check_violation';
+        end if;
+        return new;
+      end $$
+    `);
+  await client.query(`
+      create or replace trigger integration_rooms_closed_terminal before update on integration_rooms
+        for each row execute function integration_rooms_closed_terminal()
+    `);
 }

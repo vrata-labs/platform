@@ -15,14 +15,16 @@ async function fixture(options: { kind?: "reference" | "demo-instance"; idleTime
     ...(options.idleTimeoutSeconds ? { idleTimeoutSeconds: options.idleTimeoutSeconds, maxParticipants: 4, demoPolicyId: "qa-demo-v1" } : {})
   });
   const deleted: string[] = [];
+  const livekit = new Set<string>();
   const events: Array<Record<string, unknown>> = [];
   let failing = false;
   let clock = Date.now();
   const enforcer = createManagedRoomEnforcer({
     storage: Promise.resolve(storage),
     media: () => ({
-      async ensureRoom() { /* not used by the enforcer */ },
-      async deleteRoom(name) { if (failing) throw new Error("livekit unavailable"); deleted.push(name); }
+      async ensureRoom(name) { livekit.add(name); },
+      async deleteRoom(name) { if (failing) throw new Error("livekit unavailable"); deleted.push(name); livekit.delete(name); },
+      async listRooms() { if (failing) throw new Error("livekit unavailable"); return [...livekit]; }
     }),
     mediaPrefix: () => "vrata-",
     logEvent: event => events.push(event),
@@ -30,7 +32,7 @@ async function fixture(options: { kind?: "reference" | "demo-instance"; idleTime
   });
   const epoch = async () => (await storage.getRoom(room.roomId))!.managed!.accessEpoch;
   return {
-    storage, room, enforcer, deleted, events, epoch, nameOf: (value: string) => managedMediaRoomName(room.roomId, value, "vrata-", namespace),
+    storage, room, enforcer, deleted, livekit, events, epoch, nameOf: (value: string) => managedMediaRoomName(room.roomId, value, "vrata-", namespace),
     fail: (value: boolean) => { failing = value; }, advance: (ms: number) => { clock += ms; }
   };
 }
@@ -55,10 +57,12 @@ test("a withdrawn room moves to a new media epoch once and deletes the old LiveK
   assert.equal(await f.epoch(), second, "the same withdrawal is enforced once");
   assert.equal(f.deleted.length, 1);
 
-  // Paused, then closed: the epoch already changed, the tombstone needs no second rotation.
+  // A close is recorded as a rotation request with the close itself, so it ends the epoch whatever the enforcer saw before.
   await f.storage.closeManagedRoom(f.room.roomId, 1, "ended", null);
   await f.enforcer.runOnce();
-  assert.equal(await f.epoch(), second);
+  assert.notEqual(await f.epoch(), second);
+  assert.deepEqual(f.deleted, [f.nameOf(first), f.nameOf(second)]);
+  await f.enforcer.runOnce();
   assert.equal((await f.storage.listManagedRoomsForEnforcement()).length, 0, "a fully enforced tombstone leaves the work list");
 });
 
@@ -77,8 +81,11 @@ test("a revoked grant that was used rotates the epoch of an open room", async ()
     expiresAt: new Date(Date.now() + 600_000).toISOString(), codeHash: "b".repeat(64), operationId: randomUUID() });
   assert(used && typeof used !== "string");
   assert.equal((await f.storage.consumeManagedRoomGrant(f.room.roomId, "b".repeat(64))).ok, true);
+  // The revoke stops right after marking the grant (as if the request died): the enforcer finishes it.
   await f.storage.revokeManagedRoomGrant(used.grantId, "removed", randomUUID());
+  assert.equal((await f.storage.listIncompleteManagedGrantRevocations()).length, 1);
   await f.enforcer.runOnce();
+  assert.equal((await f.storage.listIncompleteManagedGrantRevocations()).length, 0);
   assert.notEqual(await f.epoch(), first);
   assert.deepEqual(f.deleted, [f.nameOf(first)]);
 });
@@ -103,4 +110,33 @@ test("a demo instance closes after its idle timeout unless somebody is connected
   const closed = (await f.storage.getRoom(room.roomId))!.managed!;
   assert.deepEqual([closed.status, closed.closeReason], ["closed", "idle"]);
   assert(f.events.some(event => event.event === "managed_room_idle_closed"));
+});
+
+test("a close right after a resume, before the enforcer saw the resume, still ends the epoch in use", async () => {
+  const f = await fixture();
+  await f.storage.updateManagedRoomAccess(f.room.roomId, 0, { status: "paused" }, randomUUID());
+  await f.enforcer.runOnce();
+  const resumed = await f.epoch();
+  await f.storage.updateManagedRoomAccess(f.room.roomId, 1, { status: "active" }, randomUUID());
+  f.livekit.add(f.nameOf(resumed));
+  await f.storage.closeManagedRoom(f.room.roomId, 2, "ended", null);
+  await f.enforcer.runOnce();
+  assert.notEqual(await f.epoch(), resumed);
+  assert(f.deleted.includes(f.nameOf(resumed)));
+  assert.equal(f.livekit.size, 0);
+});
+
+test("an old epoch room that reappears after its deletion is swept, the current one stays", async () => {
+  const f = await fixture();
+  const first = await f.epoch();
+  await f.storage.updateManagedRoomAccess(f.room.roomId, 0, { status: "paused" }, randomUUID());
+  await f.enforcer.runOnce();
+  await f.storage.updateManagedRoomAccess(f.room.roomId, 1, { status: "active" }, randomUUID());
+  const current = await f.epoch();
+  // A CreateRoom for the first epoch delayed past its deletion, and a legitimate room of the current one.
+  f.livekit.add(f.nameOf(first));
+  f.livekit.add(f.nameOf(current));
+  await f.enforcer.runOnce();
+  assert.deepEqual([...f.livekit], [f.nameOf(current)]);
+  assert(f.events.some(event => event.event === "managed_media_stale_epoch_deleted"));
 });

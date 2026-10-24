@@ -15,9 +15,16 @@ export interface PendingGrantStorage {
  * so it is not kept in history or shared by copying the URL, and waits in the tab until the exchange,
  * which runs after the guest has chosen a display name.
  */
+async function codeDigest(code: string): Promise<string> {
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(code)));
+  return [...bytes].map(value => value.toString(16).padStart(2, "0")).join("");
+}
+
 export function takeRoomGrant(location: Pick<Location, "hash" | "pathname" | "search">, history: Pick<History, "replaceState" | "state">,
   storage: PendingGrantStorage, roomId: string) {
   const key = `vrata.grant.${encodeURIComponent(roomId)}`;
+  // Digest of the code this tab already exchanged: opening the same link again must not spend another use.
+  const spentKey = `${key}.spent`;
   const fragment = new URLSearchParams(location.hash.replace(/^#/, ""));
   const fromAddress = fragment.get("grant");
   if (fromAddress !== null) {
@@ -40,7 +47,13 @@ export function takeRoomGrant(location: Pick<Location, "hash" | "pathname" | "se
       try { storage.removeItem(key); } catch { /* ignored */ }
     },
     /** Whether a refusal leaves the code usable for another attempt. */
-    retryable: (reason: string) => RETRYABLE.has(reason)
+    retryable: (reason: string) => RETRYABLE.has(reason),
+    async markSpent(value: string) {
+      try { storage.setItem(spentKey, await codeDigest(value)); } catch { /* the tab may still exchange it again */ }
+    },
+    async wasSpent(value: string) {
+      try { return storage.getItem(spentKey) === await codeDigest(value); } catch { return false; }
+    }
   };
 }
 

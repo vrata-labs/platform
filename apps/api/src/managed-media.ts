@@ -7,6 +7,8 @@ export interface ManagedMediaControl {
   ensureRoom(name: string, options: { maxParticipants?: number | null }): Promise<void>;
   /** Ends every connection of the room; a missing room counts as deleted. */
   deleteRoom(name: string): Promise<void>;
+  /** Names of the rooms LiveKit has now. */
+  listRooms(): Promise<string[]>;
 }
 
 const EMPTY_TIMEOUT_SECONDS = 300;
@@ -41,6 +43,9 @@ export function createManagedMediaControl(env: NodeJS.ProcessEnv = process.env):
       } catch (error) {
         if (!isNotFound(error)) throw error;
       }
+    },
+    async listRooms() {
+      return (await client.listRooms()).map(room => room.name);
     }
   };
 }

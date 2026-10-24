@@ -8,6 +8,7 @@ import { isPortalManagedDeployment } from "./feature-flags.js";
 import { json } from "./http-responses.js";
 import { INTEGRATION_CONTRACT, loadIntegrationKeyring, verifyIntegrationAssertion, type IntegrationPrincipal, type IntegrationScope } from "./integration-auth.js";
 import { parseBody } from "./request-body.js";
+import { completeGrantRevocation } from "./grant-revocation.js";
 import { createGrantCode, grantCodeHash, grantEntryUrl } from "./room-grants.js";
 import { resolveRoomTemplateCreate, templateInputError } from "./room-template-policy.js";
 import { stableJson, templateVersionContentHash } from "./storage-room-records.js";
@@ -575,19 +576,15 @@ export function createIntegrationRoutes(context: IntegrationRoutesContext) {
     const reason = parseReason(body.reason);
     if (!UUID_PATTERN.test(grantId)) throw new IntegrationRequestError("invalid_request", "grantId must be a UUID");
     await requireTenant(storage, principal, tenantId);
-    const room = await requireRoom(storage, principal, tenantId, roomId);
+    await requireRoom(storage, principal, tenantId, roomId);
     await runOperation(response, storage, {
       principal, idempotencyKey, kind: "grant.revoke", requestHash: integrationRequestHash("POST", `/integration/v1/tenants/${tenantId}/rooms/${roomId}/grants/${grantId}/revoke`, body), resourceType: "grant", resourceId: grantId, requestId
     }, async (operation) => {
       const grant = await storage.getManagedRoomGrant(grantId);
       if (!grant || grant.roomId !== roomId) throw new IntegrationRequestError("grant_invalid", "Grant not found");
       const revoked = (await storage.revokeManagedRoomGrant(grantId, reason, operation.operationId))!;
-      // Everyone who entered with the grant loses the identity: sessions, room-state sockets and renewals end with it.
-      const scope = { tenantId: room.tenantId, roomId };
-      for (const identityId of await storage.listManagedRoomGrantIdentities(grantId)) {
-        const identity = await storage.roomIdentities.get(scope, identityId);
-        if (identity && !identity.revokedAt) await storage.roomIdentities.revoke(scope, identityId, identity.authEpoch);
-      }
+      // Everyone who entered with the grant loses the identity; if this stops halfway, the enforcer finishes it.
+      await completeGrantRevocation(storage, revoked);
       context.logEvent({ service: "api", event: "integration_grant_revoked", requestId, roomId, grantId, reason });
       context.accessChanged?.(roomId);
       return { status: 200, revision: revoked.revision, body: serializeManagedGrant(revoked) };

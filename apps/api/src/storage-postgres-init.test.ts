@@ -36,7 +36,8 @@ test("Postgres integration schema is additive and keeps managed rows from being 
   const sql = h.queries.map(query => query.sql.replace(/\s+/g, " ").trim());
   // Only new integration tables, indexes and columns: an older build ignores all of them.
   assert(sql.every(statement => /^create (table|index) if not exists integration_/.test(statement)
-    || /^alter table integration_[a-z_]+ (add column if not exists [^,]+(, )?)+$/.test(statement)), sql.join("\n"));
+    || /^alter table integration_[a-z_]+ (add column if not exists [^,]+(, )?)+$/.test(statement)
+    || /^create or replace (function|trigger) integration_rooms_closed_terminal\b/.test(statement)), sql.join("\n"));
   assert(!sql.some(statement => /on delete cascade|drop |alter table (rooms|tenants)|alter column/.test(statement)));
   assert(sql.some(statement => statement.includes("room_id text primary key references rooms(room_id),")));
   assert(sql.some(statement => statement.includes("constraint integration_operations_principal_key_unique unique (principal, idempotency_key)")));

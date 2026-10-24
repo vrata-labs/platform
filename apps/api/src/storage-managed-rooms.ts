@@ -42,6 +42,7 @@ interface MemoryEnforcement {
 
 interface MemoryGrant extends ManagedRoomGrantRecord {
   codeHash: string;
+  revocationCompletedAt?: string | null;
 }
 
 // Single-process grants and enforcement state over the MemoryStorage room map; no method yields mid-update.
@@ -73,7 +74,7 @@ export class MemoryManagedRooms {
   }
 
   private publicGrant(grant: MemoryGrant): ManagedRoomGrantRecord {
-    const { codeHash: _codeHash, ...record } = grant;
+    const { codeHash: _codeHash, revocationCompletedAt: _completed, ...record } = grant;
     return structuredClone(record);
   }
 
@@ -83,6 +84,7 @@ export class MemoryManagedRooms {
     if (room.managed!.status === "closed") return structuredClone(room);
     if (room.managed!.revision !== expectedRevision) return "revision_mismatch";
     const timestamp = this.timestamp();
+    this.state(roomId).rotateRequestedAt = timestamp;
     room.managed = {
       ...room.managed!,
       status: "closed",
@@ -125,7 +127,6 @@ export class MemoryManagedRooms {
     if (!grant.revokedAt) {
       const timestamp = this.timestamp();
       Object.assign(grant, { revokedAt: timestamp, revokeReason: reason, revision: grant.revision + 1, lastOperationId: operationId, updatedAt: timestamp });
-      if (grant.usedCount > 0) this.state(grant.roomId).rotateRequestedAt = timestamp;
     }
     return this.publicGrant(grant);
   }
@@ -160,6 +161,24 @@ export class MemoryManagedRooms {
 
   async listManagedRoomGrantIdentities(grantId: string): Promise<string[]> {
     return [...(this.grantIdentities.get(grantId) ?? [])];
+  }
+
+  async requestManagedRoomRotation(roomId: string): Promise<void> {
+    if (this.managedRoom(roomId)) this.state(roomId).rotateRequestedAt = this.timestamp();
+  }
+
+  async listIncompleteManagedGrantRevocations(): Promise<ManagedRoomGrantRecord[]> {
+    return [...this.grants.values()].filter(grant => grant.revokedAt && !grant.revocationCompletedAt).map(grant => this.publicGrant(grant));
+  }
+
+  async completeManagedGrantRevocation(grantId: string): Promise<void> {
+    const grant = this.grants.get(grantId);
+    if (grant) grant.revocationCompletedAt = this.timestamp();
+  }
+
+  /** Memory twin of the access update rule in PostgreSQL: a pause or a lapsed window asks for a new epoch. */
+  noteManagedRoomAccessChange(room: RoomRecord, nextStatus: string): void {
+    if (nextStatus === "paused" || this.now() >= cutoffMs(room)) this.state(room.roomId).rotateRequestedAt = this.timestamp();
   }
 
   async listManagedRoomsForEnforcement(): Promise<ManagedRoomEnforcementRecord[]> {
@@ -294,7 +313,7 @@ export class PostgresManagedRooms {
       await client.query(
         `update integration_rooms
             set status = 'closed', closed_at = now(), close_reason = $2, access_until = least(access_until, now()), grace_seconds = 0,
-                revision = revision + 1, last_operation_id = coalesce($3, last_operation_id), updated_at = now()
+                revision = revision + 1, last_operation_id = coalesce($3, last_operation_id), rotate_requested_at = now(), updated_at = now()
           where room_id = $1`,
         [roomId, reason, operationId]
       );
@@ -329,22 +348,15 @@ export class PostgresManagedRooms {
     return result.rows[0] ? mapGrant(result.rows[0]) : null;
   }
 
+  // Touches only the grant row: an exchange locks the room before the grant, so this never waits in the other order.
   async revokeManagedRoomGrant(grantId: string, reason: string | null, operationId: string): Promise<ManagedRoomGrantRecord | null> {
-    return this.transaction(async client => {
-      const updated = await client.query<GrantRow>(
-        `update integration_grants
-            set revoked_at = now(), revoke_reason = $2, revision = revision + 1, last_operation_id = $3, updated_at = now()
-          where grant_id = $1 and revoked_at is null
-          returning ${GRANT_COLUMNS}`, [grantId, reason, operationId]);
-      const row = updated.rows[0];
-      if (!row) {
-        const existing = await client.query<GrantRow>(`select ${GRANT_COLUMNS} from integration_grants where grant_id = $1`, [grantId]);
-        return existing.rows[0] ? mapGrant(existing.rows[0]) : null;
-      }
-      // Media of everyone who entered with this grant ends with the current epoch.
-      if (row.used_count > 0) await client.query(`update integration_rooms set rotate_requested_at = now() where room_id = $1`, [row.room_id]);
-      return mapGrant(row);
-    });
+    const updated = await this.pool.query<GrantRow>(
+      `update integration_grants
+          set revoked_at = now(), revoke_reason = $2, revision = revision + 1, last_operation_id = $3, updated_at = now()
+        where grant_id = $1 and revoked_at is null
+        returning ${GRANT_COLUMNS}`, [grantId, reason, operationId]);
+    if (updated.rows[0]) return mapGrant(updated.rows[0]);
+    return this.getManagedRoomGrant(grantId);
   }
 
   async consumeManagedRoomGrant(roomId: string, codeHash: string): Promise<ManagedRoomGrantConsumeResult> {
@@ -385,6 +397,20 @@ export class PostgresManagedRooms {
   async listManagedRoomGrantIdentities(grantId: string): Promise<string[]> {
     const result = await this.pool.query<{ identity_id: string }>(`select identity_id from integration_grant_identities where grant_id = $1 order by created_at`, [grantId]);
     return result.rows.map(row => row.identity_id);
+  }
+
+  async requestManagedRoomRotation(roomId: string): Promise<void> {
+    await this.pool.query(`update integration_rooms set rotate_requested_at = now() where room_id = $1`, [roomId]);
+  }
+
+  async listIncompleteManagedGrantRevocations(): Promise<ManagedRoomGrantRecord[]> {
+    const result = await this.pool.query<GrantRow>(
+      `select ${GRANT_COLUMNS} from integration_grants where revoked_at is not null and revocation_completed_at is null order by revoked_at limit 100`);
+    return result.rows.map(mapGrant);
+  }
+
+  async completeManagedGrantRevocation(grantId: string): Promise<void> {
+    await this.pool.query(`update integration_grants set revocation_completed_at = now() where grant_id = $1 and revocation_completed_at is null`, [grantId]);
   }
 
   async listManagedRoomsForEnforcement(): Promise<ManagedRoomEnforcementRecord[]> {

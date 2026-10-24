@@ -31,6 +31,18 @@ test("the grant code leaves the address at once and survives a reload of the sam
   assert(pending.retryable("rate_limited") && !pending.retryable("grant_invalid") && !pending.retryable("room_closed"));
 });
 
+test("a tab remembers which code it exchanged, so the same link opened again spends no new use", async () => {
+  const storage = tab();
+  const history = { state: null, replaceState: () => undefined };
+  const pending = takeRoomGrant({ hash: `#grant=${code}`, pathname: `/rooms/${roomId}`, search: "" }, history, storage, roomId);
+  assert.equal(await pending.wasSpent(code), false);
+  await pending.markSpent(code);
+  assert.equal(await pending.wasSpent(code), true);
+  assert.equal(await pending.wasSpent(code.replace(/^Q/, "R")), false, "another code is a new invitation");
+  pending.clear();
+  assert(![...storage.values.values()].includes(code), "after the exchange the tab keeps a digest of the code, not the code");
+});
+
 test("the exchange returns the identity credential and turns refusals into access errors with the contract code", async () => {
   const requests: Array<{ url: string; init: RequestInit }> = [];
   const answer = (status: number, body: unknown): typeof fetch => (async (url: string | URL | Request, init?: RequestInit) => {

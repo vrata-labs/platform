@@ -374,6 +374,11 @@ export interface IntegrationStore {
   releaseManagedRoomGrantUse(grantId: string): Promise<void>;
   recordManagedRoomGrantIdentity(grantId: string, identityId: string): Promise<void>;
   listManagedRoomGrantIdentities(grantId: string): Promise<string[]>;
+  /** Asks the enforcer to move the room to a new access epoch (after the identities of a revoked grant are revoked). */
+  requestManagedRoomRotation(roomId: string): Promise<void>;
+  /** Revoked grants whose identities and media were not finished yet (a revoke interrupted on its way). */
+  listIncompleteManagedGrantRevocations(): Promise<ManagedRoomGrantRecord[]>;
+  completeManagedGrantRevocation(grantId: string): Promise<void>;
   listManagedRoomsForEnforcement(): Promise<ManagedRoomEnforcementRecord[]>;
   /** Moves the room to a new access epoch if it is still on expectedEpoch; the old one is queued for deletion. */
   rotateManagedRoomEpoch(roomId: string, expectedEpoch: string, enforcedBlock: ManagedRoomBlockReason | null): Promise<string | null>;

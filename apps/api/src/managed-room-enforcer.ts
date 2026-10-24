@@ -1,7 +1,8 @@
 import type { ManagedMediaControl } from "./managed-media.js";
-import { managedMediaRoomName } from "./managed-media-names.js";
+import { completeGrantRevocation } from "./grant-revocation.js";
+import { managedMediaRoomName, parseMediaRoomName } from "./managed-media-names.js";
 import { managedRoomBlock } from "./storage-managed-rooms.js";
-import type { ManagedRoomEnforcementRecord, RoomRecord, Storage } from "./storage-contracts.js";
+import type { ManagedRoomActivity, ManagedRoomEnforcementRecord, RoomRecord, Storage } from "./storage-contracts.js";
 
 const DEFAULT_INTERVAL_MS = 10_000;
 const KICK_DELAY_MS = 50;
@@ -48,20 +49,55 @@ export function createManagedRoomEnforcer(input: ManagedRoomEnforcerInput) {
     entry.identities.add(identityId);
   }
 
+  // Seconds already computed but not written yet; retried as they are, never recomputed from later observations.
+  let unwritten: ManagedRoomActivity[] = [];
+
   async function flushActivity(storage: Storage): Promise<void> {
     const atMs = now();
     // A gap longer than two intervals (a stalled process) is not billed as presence.
     const seconds = Math.min(atMs - flushedAtMs, intervalMs * 2) / 1000;
     flushedAtMs = atMs;
-    const activity = [...observed.entries()].map(([roomId, entry]) => {
+    const batch = new Map<string, ManagedRoomActivity>(unwritten.map(entry => [entry.roomId, { ...entry }]));
+    for (const [roomId, entry] of observed) {
       const total = (carried.get(roomId) ?? 0) + entry.identities.size * seconds;
       const whole = Math.floor(total);
       carried.set(roomId, total - whole);
-      return { roomId, tenantId: entry.tenantId, participantSeconds: whole };
-    });
+      const pending = batch.get(roomId);
+      if (pending) pending.participantSeconds += whole;
+      else batch.set(roomId, { roomId, tenantId: entry.tenantId, participantSeconds: whole });
+    }
     for (const roomId of carried.keys()) if (!observed.has(roomId)) carried.delete(roomId);
     observed.clear();
-    await storage.recordManagedRoomActivity(activity);
+    unwritten = [...batch.values()];
+    await storage.recordManagedRoomActivity(unwritten);
+    unwritten = [];
+  }
+
+  // A backstop for every way an old epoch room can reappear (a CreateRoom delayed past the rotation and its
+  // deletion, a failed compensating delete, a crash): any LiveKit room of a managed room that is not on its
+  // current epoch is deleted.
+  async function sweepStaleEpochs(storage: Storage, namespace: string | null): Promise<void> {
+    const media = input.media();
+    if (!namespace || !media) return;
+    let names: string[];
+    try {
+      names = await media.listRooms();
+    } catch (error) {
+      input.logEvent({ service: "api", event: "managed_media_list_failed", alert: true, message: error instanceof Error ? error.message : "unknown" });
+      return;
+    }
+    for (const name of names) {
+      const parsed = parseMediaRoomName(name, input.mediaPrefix(), namespace);
+      if (!parsed?.epoch) continue;
+      const room = await storage.getRoom(parsed.roomId);
+      if (!room?.managed || room.managed.accessEpoch === parsed.epoch) continue;
+      try {
+        await media.deleteRoom(name);
+        input.logEvent({ service: "api", event: "managed_media_stale_epoch_deleted", roomId: parsed.roomId });
+      } catch (error) {
+        input.logEvent({ service: "api", event: "managed_media_delete_failed", alert: true, roomId: parsed.roomId, message: error instanceof Error ? error.message : "unknown" });
+      }
+    }
   }
 
   async function deleteRetired(storage: Storage, room: ManagedRoomEnforcementRecord, namespace: string | null): Promise<void> {
@@ -91,6 +127,14 @@ export function createManagedRoomEnforcer(input: ManagedRoomEnforcerInput) {
 
   async function enforce(storage: Storage): Promise<void> {
     const namespace = await storage.identityProtocol.mediaNamespace();
+    for (const grant of await storage.listIncompleteManagedGrantRevocations()) {
+      try {
+        await completeGrantRevocation(storage, grant);
+        input.logEvent({ service: "api", event: "managed_grant_revocation_completed", roomId: grant.roomId, grantId: grant.grantId });
+      } catch (error) {
+        input.logEvent({ service: "api", event: "managed_grant_revocation_failed", alert: true, roomId: grant.roomId, message: error instanceof Error ? error.message : "unknown" });
+      }
+    }
     for (const room of await storage.listManagedRoomsForEnforcement()) {
       const atMs = now();
       const block = managedRoomBlock({ status: room.status, cutoffMs: Date.parse(room.cutoff) }, atMs);
@@ -115,6 +159,7 @@ export function createManagedRoomEnforcer(input: ManagedRoomEnforcerInput) {
         }
       }
     }
+    await sweepStaleEpochs(storage, namespace);
   }
 
   async function tick(): Promise<void> {

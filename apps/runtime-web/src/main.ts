@@ -7768,15 +7768,22 @@ async function main(): Promise<void> {
   guestJoinMutedCheckbox.checked = templatePreferences.joinMuted(true);
   await waitForGuestOnboardingIfNeeded();
   const grantCode = pendingRoomGrant.code();
-  if (grantCode && !roomIdentityTab.identityCredential()) {
+  if (grantCode) {
+    // A new link wins over an identity left in the tab (it may be revoked); a link this tab already spent
+    // falls back to the identity it gave.
+    const previousIdentity = roomIdentityTab.identityCredential();
     try {
-      roomIdentityTab.rememberIdentity((await exchangeRoomGrant(apiBaseUrl, roomId, grantCode, displayName)).identityCredential);
-      pendingRoomGrant.clear();
+      if (previousIdentity && await pendingRoomGrant.wasSpent(grantCode)) pendingRoomGrant.clear();
+      else {
+        roomIdentityTab.rememberIdentity((await exchangeRoomGrant(apiBaseUrl, roomId, grantCode, displayName)).identityCredential);
+        await pendingRoomGrant.markSpent(grantCode);
+        pendingRoomGrant.clear();
+      }
     } catch (error) {
       if (!(error instanceof RuntimeAccessError) || !pendingRoomGrant.retryable(error.reason)) pendingRoomGrant.clear();
-      throw error;
+      if (!(previousIdentity && error instanceof RuntimeAccessError && error.reason === "grant_invalid")) throw error;
     }
-  } else if (grantCode) pendingRoomGrant.clear();
+  }
   const pluginTokenRequest = roomPluginTokenBound.begin();
   const boot = await bootRuntime(apiBaseUrl, roomId, navigator.userAgent, {
     participantId,
