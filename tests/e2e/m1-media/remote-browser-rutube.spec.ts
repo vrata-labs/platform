@@ -69,7 +69,8 @@ async function readDebug(page: Page): Promise<RemoteBrowserDebug | undefined> {
 }
 
 async function createTemporaryBlueOfficeRoom(request: APIRequestContext): Promise<string> {
-  const manifestResponse = await request.get(`/api/rooms/${blueOfficeRoomId}/manifest`, { timeout: 15000 });
+  // Anonymous room reads are refused on floor 2; the administrator reads the canonical scene.
+  const manifestResponse = await request.get(`/api/rooms/${blueOfficeRoomId}/manifest`, { timeout: 15000, headers: { "x-vrata-admin-token": stagingAdminToken } });
   expect(manifestResponse.ok()).toBeTruthy();
   const manifest = await manifestResponse.json() as { sceneBundle?: { url?: string } };
   expect(manifest.sceneBundle?.url).toBeTruthy();
