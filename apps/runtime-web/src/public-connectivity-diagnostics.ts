@@ -256,11 +256,11 @@ async function checkApi(context: DiagnosticsContext): Promise<PublicDiagnosticCh
 
 async function checkAdminDetailsProtected(context: DiagnosticsContext): Promise<PublicDiagnosticCheck> {
   return runTimedCheck(context, "adminDetails", async (startedAt) => {
-    const response = await fetchOkWithTimeout(context, new URL(`/api/rooms/${encodeURIComponent(context.roomId)}/diagnostics`, context.apiBaseUrl).toString());
+    // Headers and body share one aborting bound, so a stalled body cannot hang the run and a timeout stays a timeout.
+    const { response, payload } = await fetchJsonWithTimeout<{ reason?: unknown }>(context,
+      `/api/rooms/${encodeURIComponent(context.roomId)}/diagnostics`, { method: "GET", cache: "no-store" });
     // Floor 2 refuses the anonymous read at its identity boundary before the route itself; any other 409 is not that refusal.
-    // The body is read under the same bound as the request: headers alone must not let the check hang.
-    const boundaryRefusal = context.identityProtocolVersion === 2 && response.status === 409
-      && (await withTimeout(response.json(), context.timeoutMs).catch(() => null) as { reason?: unknown } | null)?.reason === "identity_upgrade_required";
+    const boundaryRefusal = context.identityProtocolVersion === 2 && response.status === 409 && payload?.reason === "identity_upgrade_required";
     if (response.status === 401 || response.status === 403 || boundaryRefusal) {
       return createCheck({
         name: "adminDetails",
@@ -801,10 +801,10 @@ export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Pr
 }
 
 export function redactString(value: string): string {
-  return value.replace(/([?&][^=&]*(?:authorization|password|secret|token|invite|credential)[^=&]*=)[^&\s#]+/gi, `$1[redacted]`)
-    // Error text may quote a header or an issued v2 session/identity proof outside a query string,
-    // including inside another word or percent-encoded. No lookbehind: older Safari cannot parse it.
-    .replace(/(Bearer\s+)[A-Za-z0-9._~+/=%-]+/gi, "$1[redacted]")
+  // Bearer values first: a query value may itself be "Bearer <secret>", and the parameter rule stops at the space.
+  // Issued v2 session/identity proofs may appear inside another word or percent-encoded. No lookbehind: older Safari cannot parse it.
+  return value.replace(/(Bearer\s+)[A-Za-z0-9._~+/=%-]+/gi, "$1[redacted]")
+    .replace(/([?&][^=&]*(?:authorization|password|secret|token|invite|credential)[^=&]*=)[^&\s#]+/gi, `$1[redacted]`)
     .replace(/(^|[^A-Za-z0-9])(?:rs2|ri2)(?:\.|%2E)[A-Za-z0-9._~+/=%-]+/gi, "$1[redacted]");
 }
 

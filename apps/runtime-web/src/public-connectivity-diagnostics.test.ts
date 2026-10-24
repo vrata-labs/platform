@@ -18,6 +18,9 @@ test("redactString redacts issued v2 proofs and bearer values in free text", () 
   const quoted = redactString("x_rs2.abc.def and rs2%2Eabc%2Edef; GET /a?token=secret-value HTTP 500");
   assert.equal(/abc|secret-value/.test(quoted), false);
   assert.match(quoted, /HTTP 500$/, "the rest of an error message stays readable");
+  const header = redactString("GET /a?authorization=Bearer opaque-secret HTTP 500");
+  assert.equal(header.includes("opaque-secret"), false);
+  assert.match(header, /HTTP 500$/);
 });
 
 test("redactConnectivityReport redacts secret-like keys recursively", () => {
