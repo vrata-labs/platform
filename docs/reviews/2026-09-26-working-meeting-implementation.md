@@ -2458,3 +2458,14 @@ Authoritative accepted-release.json до и после публичного read
 - Readback: accepted-release — image b399acf, asset 0a3b492e788bad82bf20a92476a628bf30c6dfbe, run 39990787903; api, room-state и remote-browser на b399acf и healthy; health, demo-room, control-plane и manifests Hall/BlueOffice — 200; общий floor1 сохранён.
 - На floor 1 новые staging-тесты прошли по прежним путям: отказ author API для legacy Host, discovery без plugin-трафика, входы по настоящим приглашениям. Передача Host в сохранённых комнатах и положительные v2-сценарии выполняются только на floor 2 и будут проверены активационным gate.
 - Активация floor 2 не выполнялась: по D-026 она ждёт слияния ветки в main. После слияния — Staging Deploy с activate_identity_v2=true на SHA из main и полный gate на floor 2.
+
+## T01a — публичная активация floor 2, 2026-10-23
+
+- PR #128 влит в main squash-коммитом 84b3a55 (дерево совпадает с принятым b399acf и docs). Auto-deploy main [40005818492](https://github.com/vrata-labs/platform/actions/runs/40005818492) не выкатывал ничего: ожидание CI на SHA ограничено 30 минутами, а полный CI идёт около 1,5 часа (бэклог main-auto-deploy-ci-wait).
+- После зелёного [CI40005256365](https://github.com/vrata-labs/platform/actions/runs/40005256365) запущен [Staging40017768456](https://github.com/vrata-labs/platform/actions/runs/40017768456) с activate_identity_v2=true. Preflight кандидата 84b3a55 и цели отката b399acf прошёл, floor поднят до 2, health объявляет identityProtocolVersion 2. Это необратимо.
+- Gate на floor 2: 14 passed, включая положительные author API и запуск внешнего SDK-артефакта, отказ устаревшего ключа (426), докладчиков, документы и обновление сессии. Затем отказ телеметрии (ожидалось 401 на анонимный запрос, на floor 2 граница отвечает 409); штатный откат образов на b399acf, floor остаётся 2.
+- [Smoke40020581780](https://github.com/vrata-labs/platform/actions/runs/40020581780) на floor 2 без остановки: 62 passed, 19 failed. Причины: тесты читали манифест и пространства анонимно (на floor 2 это намеренно отклоняется), телеметрия, публичная страница /diagnostics (дефект продукта: legacy-запрос токена и анонимный манифест), meeting-tools (локальный повтор против того же стенда 4/4, не воспроизводится). Плановый Rutube Canary на main падал по той же причине анонимного манифеста.
+
+### D-030 — 2026-10-24 — Публичная диагностика поддерживает floor 2, тесты читают комнаты как администратор
+- Страница /diagnostics читает floor из health; на floor 2 сначала получает v2-сессию (identityProtocolVersion 2, без участника от клиента), затем читает манифест с выданным токеном и действует как выданный участник; ответ 409 на чтение сохранённых отчётов без сессии засчитывается как защита. Ключи с credential вырезаются из отчёта.
+- Staging-тесты читают манифесты и пространства с admin-токеном, которому граница floor 2 разрешает эти маршруты; анонимное чтение привязанных комнат на floor 2 по проекту отклоняется.
