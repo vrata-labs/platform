@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type BrowserContext, type Page } from "@playwright/test";
 import { createRequire } from "node:module";
 import { randomInt, randomUUID } from "node:crypto";
 import { resolve } from "node:path";
@@ -65,59 +65,66 @@ test("a portal grant opens one demo instance, an invite brings the others, and c
   const invite = await integration(request, "POST", grants, { role: "guest", purpose: "invite", maxUses: 3 });
   expect(visit.body.entryUrl, JSON.stringify(visit.body)).toMatch(new RegExp(`^${fixture.origin}/rooms/${roomId}#grant=`));
 
-  const creator = await (await browser.newContext()).newPage();
-  const guest = await (await browser.newContext()).newPage();
-  const late = await (await browser.newContext()).newPage();
-  await enter(creator, visit.body.entryUrl, "Creator");
-  await enter(guest, invite.body.entryUrl, "Guest");
-  for (const page of [creator, guest]) {
-    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected), { timeout: 60_000 }).toBe(true);
-  }
-  // The visit link was spent by the creator: the same link in another browser is not an entry.
-  await late.goto(visit.body.entryUrl);
-  await late.locator("#guest-name-input").fill("Late");
-  await late.locator("#guest-enter-without-audio").click({ noWaitAfter: true });
-  await expect(late.locator("#room-access-ended")).toBeVisible({ timeout: 30_000 });
-  await expect(late.locator("#room-access-ended-title")).toHaveText("This invitation is not valid");
-  await late.context().close();
+  // The browser is shared by the worker: every context is closed at the end, or its rooms keep rendering in later tests.
+  const contexts: BrowserContext[] = [];
+  const open = async () => { const context = await browser.newContext(); contexts.push(context); return context.newPage(); };
+  try {
+    const creator = await open();
+    const guest = await open();
+    const late = await open();
+    await enter(creator, visit.body.entryUrl, "Creator");
+    await enter(guest, invite.body.entryUrl, "Guest");
+    for (const page of [creator, guest]) {
+      await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected), { timeout: 60_000 }).toBe(true);
+    }
+    // The visit link was spent by the creator: the same link in another browser is not an entry.
+    await late.goto(visit.body.entryUrl);
+    await late.locator("#guest-name-input").fill("Late");
+    await late.locator("#guest-enter-without-audio").click({ noWaitAfter: true });
+    await expect(late.locator("#room-access-ended")).toBeVisible({ timeout: 30_000 });
+    await expect(late.locator("#room-access-ended-title")).toHaveText("This invitation is not valid");
+    await late.context().close();
 
-  // Media: the platform created the LiveKit room of the current epoch; nobody else can create one.
-  const identityCredential = await creator.evaluate(roomId => sessionStorage.getItem(`vrata.identity.v2.${roomId}`), roomId);
-  const session = await request.post(`${fixture.origin}/api/tokens/state`, { data: { identityProtocolVersion: 2, roomId, identityCredential } });
-  expect(session.status()).toBe(200);
-  const media = await request.post(`${fixture.origin}/api/tokens/media`, { data: { roomId, canPublishAudio: true, canPublishVideo: false },
-    headers: { authorization: `Bearer ${(await session.json()).token}` } });
-  expect(media.status()).toBe(200);
-  const mediaToken = (await media.json()).token as string;
-  const native = new RoomServiceClient(livekit.httpUrl, "devkey", "secret");
-  const epochRooms = async () => (await native.listRooms()).map((value: { name: string }) => value.name).filter((name: string) => name.includes(roomId));
-  const [epochRoom] = await epochRooms();
-  expect(epochRoom).toMatch(new RegExp(`:${roomId}:[0-9a-f-]{36}$`));
-  const observer = await (await browser.newContext()).newPage();
-  await observer.goto(`${fixture.origin}/health`);
-  await observer.addScriptTag({ path: resolve("apps/runtime-web/node_modules/livekit-client/dist/livekit-client.umd.js") });
-  const connect = (token: string) => observer.evaluate(async input => {
-    const L = (window as any).LivekitClient, room = new L.Room();
-    (window as any).__managedObserver = { room, disconnected: null as string | null };
-    room.on(L.RoomEvent.Disconnected, (reason: unknown) => { (window as any).__managedObserver.disconnected = String(reason); });
-    try { await room.connect(input.url, input.token); return true; } catch { return false; }
-  }, { url: livekit.url, token });
-  expect(await connect(mediaToken)).toBe(true);
-  const validate = async (token: string) => (await fetch(`${livekit.httpUrl}/rtc/validate?access_token=${encodeURIComponent(token)}`)).status;
-  expect(await validate(mediaToken)).toBe(200);
+    // Media: the platform created the LiveKit room of the current epoch; nobody else can create one.
+    const identityCredential = await creator.evaluate(roomId => sessionStorage.getItem(`vrata.identity.v2.${roomId}`), roomId);
+    const session = await request.post(`${fixture.origin}/api/tokens/state`, { data: { identityProtocolVersion: 2, roomId, identityCredential } });
+    expect(session.status()).toBe(200);
+    const media = await request.post(`${fixture.origin}/api/tokens/media`, { data: { roomId, canPublishAudio: true, canPublishVideo: false },
+      headers: { authorization: `Bearer ${(await session.json()).token}` } });
+    expect(media.status()).toBe(200);
+    const mediaToken = (await media.json()).token as string;
+    const native = new RoomServiceClient(livekit.httpUrl, "devkey", "secret");
+    const epochRooms = async () => (await native.listRooms()).map((value: { name: string }) => value.name).filter((name: string) => name.includes(roomId));
+    const [epochRoom] = await epochRooms();
+    expect(epochRoom).toMatch(new RegExp(`:${roomId}:[0-9a-f-]{36}$`));
+    const observer = await open();
+    await observer.goto(`${fixture.origin}/health`);
+    await observer.addScriptTag({ path: resolve("apps/runtime-web/node_modules/livekit-client/dist/livekit-client.umd.js") });
+    const connect = (token: string) => observer.evaluate(async input => {
+      const L = (window as any).LivekitClient, room = new L.Room();
+      (window as any).__managedObserver = { room, disconnected: null as string | null };
+      room.on(L.RoomEvent.Disconnected, (reason: unknown) => { (window as any).__managedObserver.disconnected = String(reason); });
+      try { await room.connect(input.url, input.token); return true; } catch { return false; }
+    }, { url: livekit.url, token });
+    expect(await connect(mediaToken)).toBe(true);
+    const validate = async (token: string) => (await fetch(`${livekit.httpUrl}/rtc/validate?access_token=${encodeURIComponent(token)}`)).status;
+    expect(await validate(mediaToken)).toBe(200);
 
-  // Close: room-state sockets end within a second, the old epoch room is deleted and its JWT no longer joins anything.
-  const closed = await integration(request, "POST", `/integration/v1/tenants/${tenantId}/rooms/${roomId}/close`, { expectedRevision: 0, reason: "e2e" });
-  expect(closed.body.status).toBe("closed");
-  for (const page of [creator, guest]) {
-    await expect(page.locator("#room-access-ended")).toBeVisible({ timeout: 60_000 });
-    await expect(page.locator("#room-access-ended-title")).toHaveText("This room has ended");
-    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected)).toBe(false);
+    // Close: room-state sockets end within a second, the old epoch room is deleted and its JWT no longer joins anything.
+    const closed = await integration(request, "POST", `/integration/v1/tenants/${tenantId}/rooms/${roomId}/close`, { expectedRevision: 0, reason: "e2e" });
+    expect(closed.body.status).toBe("closed");
+    for (const page of [creator, guest]) {
+      await expect(page.locator("#room-access-ended")).toBeVisible({ timeout: 60_000 });
+      await expect(page.locator("#room-access-ended-title")).toHaveText("This room has ended");
+      await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected)).toBe(false);
+    }
+    await expect.poll(epochRooms, { timeout: 15_000 }).toEqual([]);
+    await expect.poll(() => observer.evaluate(() => (window as any).__managedObserver.disconnected), { timeout: 15_000 }).not.toBeNull();
+    // With auto_create:false nothing recreates the deleted epoch room, so the still unexpired JWT joins nothing.
+    expect(await validate(mediaToken)).toBe(404);
+    const reopened = await request.post(`${fixture.origin}/api/tokens/state`, { data: { identityProtocolVersion: 2, roomId, identityCredential } });
+    expect(reopened.status()).toBe(410);
+  } finally {
+    await Promise.allSettled(contexts.map(context => context.close()));
   }
-  await expect.poll(epochRooms, { timeout: 15_000 }).toEqual([]);
-  await expect.poll(() => observer.evaluate(() => (window as any).__managedObserver.disconnected), { timeout: 15_000 }).not.toBeNull();
-  // With auto_create:false nothing recreates the deleted epoch room, so the still unexpired JWT joins nothing.
-  expect(await validate(mediaToken)).toBe(404);
-  const reopened = await request.post(`${fixture.origin}/api/tokens/state`, { data: { identityProtocolVersion: 2, roomId, identityCredential } });
-  expect(reopened.status()).toBe(410);
 });
