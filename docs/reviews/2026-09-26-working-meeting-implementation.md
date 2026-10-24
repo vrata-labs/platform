@@ -2475,3 +2475,16 @@ Authoritative accepted-release.json до и после публичного read
 - Решение: чтение комнаты с admin-токеном, как у снимка сцен для отката. Сценарий workflow в tools/staging-scene-snapshot.test.mjs теперь отвечает 409 на анонимное чтение и без исправления падает.
 - По итогам независимой проверки: диагностика засчитывает 409 как защиту только с причиной identity_upgrade_required и вырезает Bearer, rs2/ri2 и credential из любого текста отчёта. Потеря настроек шаблона до входа на floor 2 вынесена в бэклог prejoin-template-defaults-floor-two.
 
+
+## T01a — публичная активация v2 принята на floor 2, 2026-10-25
+
+| Gate | Точный результат |
+|---|---|
+| Исполняемый SHA | b490260caf33033973d85d81e85c6fd9eadeb3c3: 81c230b (диагностика и staging-проверки на floor 2), 92d890b (инструмент обновления сцен), 55b1cb3, e3427ae и b490260 (ограничение времени и вырезание в диагностике) поверх main 84b3a55 |
+| [CI40134325043](https://github.com/vrata-labs/platform/actions/runs/40134325043) | Success |
+| [Docker40134322272](https://github.com/vrata-labs/platform/actions/runs/40134322272) | Success |
+| [Staging40139769979](https://github.com/vrata-labs/platform/actions/runs/40139769979) | Success на floor 2: 81 passed, 0 skipped, обязательный Rutube 1/1 |
+
+- Readback: accepted-release — image b490260, asset 0a3b492e788bad82bf20a92476a628bf30c6dfbe, run 40139769979; api, room-state и remote-browser на b490260 и healthy; health объявляет identityProtocolVersion 2; demo-room, control-plane и /diagnostics — 200.
+- На floor 2 прошли положительные author API и запуск внешнего SDK-артефакта (общий v2-сценарий больше не пропускается), публичная диагностика, селектор, сценовые комнаты Hall/BlueOffice/ArtGallery, телеметрия и Rutube. Предыдущее развёртывание 81c230b (40131019851) остановилось на инструменте обновления сцен и штатно откатилось на b399acf (D-031).
+- Полный local для этих исправлений не запускался: после перезагрузки машины недоступен Docker в WSL (Postgres-фикстура); локально пройдены runtime-web 1498/1498, tools-тесты сценариев отката, диагностика на floor 1 и 16 исправленных staging-тестов против стенда на floor 2. Новый тест диагностики на собственной схеме с floor 2 прошёл в CI.
