@@ -106,7 +106,7 @@ const signal = (page: Page, sid: string) => page.evaluate(sid => {
   return samples.some(sample => Math.abs(sample - 128) > 2);
 }, sid);
 
-for (const version of ["1.13.7", "1.13.9"] as const) test(`server media reconciliation ${version}: screen revoke, terminal eviction and original/refreshed JWT replay`, async ({ browser, request }) => {
+for (const version of ["1.13.9"] as const) test(`server media reconciliation ${version}: screen revoke, terminal eviction and original/refreshed JWT replay`, async ({ browser, request }) => {
   test.setTimeout(240_000);
   const native = await startLocalLiveKitFixture(version), bridge = await faultBridge(native.httpUrl);
   let fixture: Awaited<ReturnType<typeof startReferenceTemplateFixture>> | undefined;
@@ -248,7 +248,7 @@ for (const version of ["1.13.7", "1.13.9"] as const) test(`server media reconcil
   }
 });
 
-for (const version of ["1.13.7", "1.13.9"] as const) {
+for (const version of ["1.13.9"] as const) {
   for (const action of ["disable", "delete"] as const) test(`server media lifecycle ${version}: ${action} retires live microphone and listening connections`, async ({ browser, request }) => {
     test.setTimeout(180_000);
     const native = await startLocalLiveKitFixture(version);
@@ -306,7 +306,7 @@ for (const version of ["1.13.7", "1.13.9"] as const) {
   });
 }
 
-for (const version of ["1.13.7", "1.13.9"] as const) test(`server media lineage ${version}: codec-3 recovery and room recreation retire only the old lineage`, async ({ browser, request }) => {
+for (const version of ["1.13.9"] as const) test(`server media lineage ${version}: codec-3 recovery and room recreation retire only the old lineage`, async ({ browser, request }) => {
   test.setTimeout(240_000);
   const native = await startLocalLiveKitFixture(version), bridge = await faultBridge(native.httpUrl);
   let fixture: Awaited<ReturnType<typeof startReferenceTemplateFixture>> | undefined;

@@ -1,0 +1,82 @@
+name: Staging Extended
+
+# Heavy multi-participant staging scenarios kept out of the deploy gate (@staging-extended): two sequential
+# Presenters, native screen capture and the four-party public demo. Run it under a vrata-stage lease before a
+# release or around an irreversible activation; the schedule only runs while the on-demand stand exists.
+run-name: ${{ inputs.request && format('Staging Extended {0}', inputs.request) || '' }}
+
+on:
+  schedule:
+    - cron: "37 2 * * *"
+  workflow_dispatch:
+    inputs:
+      request:
+        description: Identifier of an automated dispatch, shown in the run name
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+# Never overlap a rollout or a catalog transition on the same stand.
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: false
+
+jobs:
+  extended:
+    if: github.event_name == 'workflow_dispatch' || vars.STAGING_AUTO_DEPLOY_ENABLED != 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      PLAYWRIGHT_NO_WEB_SERVER: "1"
+      PLAYWRIGHT_REPORT_NAME: staging-extended
+      STAGING_ADMIN_TOKEN: ${{ secrets.STAGING_ADMIN_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Wait for staging health
+        run: |
+          test -n "$BASE_URL"
+          test -n "$STAGING_ADMIN_TOKEN"
+          for _ in $(seq 1 12); do
+            if curl --fail --silent "$BASE_URL/health" >/dev/null; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "staging_health_timeout" >&2
+          exit 1
+
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run extended staging scenarios
+        run: pnpm test:e2e:staging-extended
+
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-extended-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            playwright-report/staging-extended/
+            test-results/staging-extended/
+            test-results/staging-extended.json

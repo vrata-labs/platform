@@ -104,9 +104,12 @@ It runs after the internal Docker publish workflow succeeds and then:
 - deploys immutable SHA-tagged images;
 - patches canonical staging scene bundle URLs;
 - checks `/health`, `/rooms/demo-room`, and `/control-plane`;
-- runs `pnpm test:e2e:staging` against the public staging URL;
+- runs `pnpm test:e2e:staging` against the public staging URL (on a new host's bootstrap only the smoke checks above: its reference catalog activation runs the full suite);
+- reports Rutube in a separate non-blocking job after a successful deploy;
 - persists the successful SHA;
 - rolls back automatically on verification failure.
+
+The staging suite holds checks that need the real stand. Client-side logic with a local twin stays in local e2e. The heaviest multi-participant scenarios are tagged `@staging-extended` and run in `.github/workflows/staging-extended.yml` (`pnpm test:e2e:staging-extended`) under a `vrata-stage` lease before a release or around an irreversible activation.
 
 ## Test Artifacts
 

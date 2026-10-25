@@ -7,12 +7,11 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const execute = promisify(execFile);
+// The version every deployment pins (staging, production, self-host and demo-local compose).
 const IMAGES = {
-  "1.13.7": "livekit/livekit-server@sha256:6fd3b7088874c4d119160dd688798dfec852bc014786d392caad15f6f63912a3",
   "1.13.9": "livekit/livekit-server@sha256:d0c04791bf63ca8dcea123571827d56ba9504bd57c8d5de60ee03b5408cc3154"
 };
 const BINARY_SHA256 = {
-  "1.13.7": "defde46e938e431cb23fc92fe793e503034fb5117cfa506796776a818f97afa3",
   "1.13.9": "53b9630e2e2d179ba7ceab8ba810a8c899eebc1ed5aa0a12633c53461630de77"
 };
 async function tcpPort() {
@@ -34,7 +33,7 @@ async function stop(child: ChildProcess) {
 
 /** Extract the checksum-pinned installed server into an owned test directory. Native loopback RTC works on both Linux CI
  * and WSL without depending on Docker Desktop's host/bridge routing. No deployment credentials or shared services. */
-export async function startLocalLiveKitFixture(version: keyof typeof IMAGES = "1.13.7", options: { autoCreate?: boolean } = {}) {
+export async function startLocalLiveKitFixture(version: keyof typeof IMAGES = "1.13.9", options: { autoCreate?: boolean } = {}) {
   const IMAGE = IMAGES[version];
   if (!IMAGE) throw new Error("local_livekit_fixture_version_invalid");
   const scratchRoot = resolve(process.env.E2E_RUN_DIR ?? "test-results");

@@ -3,7 +3,8 @@ import { startReferenceTemplateFixture } from "./reference-template-fixture";
 import { chooseMeetingPanel, meetingRequest, installMeetingPerformanceObservation, readMeetingPerformance } from "./meeting-tools-acceptance";
 
 test.use({ trace: "off", screenshot: "off", video: "off", actionTimeout: 30_000 });
-for (const staging of [false, true]) for (const mobile of [false, true]) test(`${staging ? "@staging " : ""}replacement dialog normal-DPR ${mobile ? "Android viewport" : "desktop"}: focus, warning and reconnect cancellation`, async ({ browser, request }, testInfo) => {
+// Focus and dialog behaviour run in the browser; the reconnect is forced locally, so the staging twin added nothing.
+for (const staging of [false]) for (const mobile of [false, true]) test(`${staging ? "@staging " : ""}replacement dialog normal-DPR ${mobile ? "Android viewport" : "desktop"}: focus, warning and reconnect cancellation`, async ({ browser, request }, testInfo) => {
   // This is cumulative functional/visual work on a software-rendered full-DPR
   // scene, not an interaction-latency benchmark. Individual waits stay bounded.
   test.setTimeout(mobile ? 180_000 : 300_000); if (!staging) expect(!!process.env.VRATA_TEST_POSTGRES_URL).toBe(true);

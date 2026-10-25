@@ -55,7 +55,6 @@ jobs:
       cancel-in-progress: false
     outputs:
       deploy_sha: ${{ steps.deploy.outputs.deploy_sha }}
-      rutube_blocking: ${{ steps.remote_browser_impact.outputs.rutube_blocking }}
     env:
       STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
       STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
@@ -173,18 +172,6 @@ jobs:
       - name: Freeze asset SHA
         run: echo "ASSET_SHA=$(git -C private-scene-assets rev-parse HEAD)" >> "$GITHUB_ENV"
       - run: pnpm install --frozen-lockfile
-
-      - name: Detect remote browser changes
-        id: remote_browser_impact
-        env:
-          SHA: ${{ steps.deploy.outputs.deploy_sha }}
-          PREVIOUS_SHA: ${{ steps.previous.outputs.previous_sha }}
-        run: |
-          if [ -z "$PREVIOUS_SHA" ]; then BLOCKING=true; else
-            git fetch --no-tags --depth=1 origin "$PREVIOUS_SHA"
-            if git diff --quiet "$PREVIOUS_SHA" "$SHA" -- .github/workflows/staging-deploy.yml .github/workflows/rutube-canary.yml apps/api apps/remote-browser apps/room-state apps/runtime-web/src/main.ts apps/runtime-web/src/media apps/runtime-web/public/remote-browser-demo.html apps/runtime-web/public/remote-browser-media-demo.html apps/shared-types infra/docker package.json pnpm-lock.yaml playwright.config.ts tests/e2e/m1-media tools/run-staging-e2e.mjs; then BLOCKING=false; else BLOCKING=true; fi
-          fi
-          echo "rutube_blocking=$BLOCKING" >> "$GITHUB_OUTPUT"
 
       - name: Upload candidate source without replacing accepted files
         env:
@@ -311,15 +298,14 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
       - name: Verification gate
         id: gate
-        # The full reference/RTC catalog and mandatory Rutube share this budget.
-        # The 79-case catalog reached 77 passes at 50 minutes; retain time for
-        # its final capture cases, the bounded Rutube test and report flushing.
+        # The deployment-specific staging suite: the full catalog took 46 minutes before client-only twins moved
+        # to local e2e and the heaviest scenarios to staging-extended.yml (about 30 minutes estimated); retain
+        # time for the final capture cases and report flushing. Rutube runs after the gate and never blocks.
         # Stop on the first failure so its report survives instead of timing out.
-        timeout-minutes: 70
+        timeout-minutes: 50
         if: steps.rollout.outcome == 'success'
         continue-on-error: true
         env:
-          RUTUBE_BLOCKING: ${{ steps.remote_browser_impact.outputs.rutube_blocking }}
           FORCE_FAIL: ${{ inputs.force_fail_gate || false }}
           PLAYWRIGHT_REPORT_NAME: staging-gate
           VRATA_REFERENCE_CATALOG_ACTIVE: ${{ steps.catalog.outputs.reference_active }}
@@ -331,8 +317,9 @@ jobs:
           if [ -f apps/api/src/plugins/verify-private-storage.ts ]; then
             ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo docker compose --env-file '$STAGING_APP_DIR/infra/docker/.env.staging' -f '$STAGING_APP_DIR/infra/docker/compose.staging.yml' exec -T -w /app api node apps/api/dist/plugins/verify-private-storage.js"
           fi
-          pnpm test:e2e:staging -- --max-failures=1
-          if [ "$RUTUBE_BLOCKING" = true ]; then PLAYWRIGHT_REPORT_NAME=staging-rutube-blocking pnpm test:e2e:rutube; fi
+          # A new host continues with the gated reference catalog activation, which runs the full staging suite on
+          # the same SHA; its own first gate only proves that the deployment answers (the checks above).
+          if [ "$BOOTSTRAP" != true ]; then pnpm test:e2e:staging -- --max-failures=1; fi
 
       - name: Publish accepted release and finalize catalog
         id: publish
@@ -394,7 +381,8 @@ jobs:
   rutube-canary:
     name: Rutube canary (no rollback)
     needs: deploy
-    if: needs.deploy.result == 'success' && needs.deploy.outputs.rutube_blocking != 'true'
+    # Rutube is a third-party service: it reports after every successful deploy and never blocks or rolls back.
+    if: needs.deploy.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 12
     concurrency:

@@ -75,7 +75,8 @@ test("seat marker component renders volume, forward chevron and state transition
   await testInfo.attach("component-renderer", { body: JSON.stringify(hovered, null, 2), contentType: "application/json" });
 });
 
-for (const staging of [false, true]) test.describe(`${staging ? "@staging " : ""}seat markers in actual reference rooms`, () => {
+// The local fixture renders the same pinned reference assets; seat-marker-checks.yml also guards this path.
+for (const staging of [false]) test.describe(`${staging ? "@staging " : ""}seat markers in actual reference rooms`, () => {
   test.describe.configure({ mode: "serial" });
   test.skip(staging && process.env.VRATA_REFERENCE_CATALOG_ACTIVE !== "1",
     "Wave 2 compatibility deployment precedes reference activation");

@@ -1,7 +1,8 @@
 import { test, expect } from "playwright/test";
 import { readFile } from "node:fs/promises";
 
-for (const mode of ["local", "@staging"]) {
+// The benchmark runs Workers in the runner's Chromium; a staging copy measured the runner, not the stand.
+for (const mode of ["local"]) {
   test.describe(`plugin resource probe ${mode}`, () => {
     test("production Workers complete 100 dual-instance cycles, real sustained CPU and both cumulative budget stops", async ({ page, context, baseURL }, testInfo) => {
       test.setTimeout(330_000);

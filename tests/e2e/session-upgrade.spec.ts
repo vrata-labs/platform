@@ -40,7 +40,8 @@ async function enter(page: Page, link: string) {
 const denial = (reason = "identity_upgrade_required") => ({ status: reason === "identity_upgrade_required" ? 426 : 409,
   contentType: "application/json", body: JSON.stringify({ error: "identity_required", reason, detail: "NEVER_RENDER_SERVER_DETAIL" }) });
 
-for (const staging of [false, true]) {
+// Server denials are fulfilled in the browser (route.fulfill), so a staging twin exercised no deployment.
+for (const staging of [false]) {
   test.describe(staging ? "@staging session upgrade preparation" : "session upgrade preparation", () => {
     test("boot denial explains rejoin, retains identity and prevents same-build reload loops", async ({ page, request }) => {
       test.setTimeout(90_000);
