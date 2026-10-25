@@ -40,7 +40,7 @@ function parseArgs(argv) {
     if (arg === "--") continue;
     if (arg === "--suite") {
       suite = argv[++index];
-      if (!["staging", "rutube-full", "rutube-canary"].includes(suite)) throw new Error("invalid_staging_suite");
+      if (!["staging", "staging-extended", "rutube-full", "rutube-canary"].includes(suite)) throw new Error("invalid_staging_suite");
       continue;
     }
     if (arg === "--env-file") {
@@ -114,7 +114,8 @@ function ensureStagingEnv() {
 
 function runPlaywright(playwrightArgs, suite) {
   const command = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-  const selection = suite === "staging" ? ["--grep", "@staging", "--grep-invert", "@rutube"] : ["--grep", `@${suite}`];
+  // The deploy gate excludes Rutube and the extended suite (staging-extended.yml), which run outside it.
+  const selection = suite === "staging" ? ["--grep", "@staging", "--grep-invert", "@rutube|@staging-extended"] : ["--grep", `@${suite}`];
   const args = ["exec", "playwright", "test", ...selection, ...playwrightArgs];
   const hasWorkerOverride = playwrightArgs.some((arg) => arg === "--workers" || arg.startsWith("--workers="));
   if (!hasWorkerOverride) {

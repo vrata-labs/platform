@@ -37,7 +37,7 @@ This document is the source of truth for where Vrata tests live, where they run,
 `.github/workflows/ci.yml` runs:
 
 - `core`: build (the per-package `tsc` that `lint` and `typecheck` also run), compose config validation, production preflight, rollback bases and unit/integration tests;
-- `e2e`: local Playwright e2e excluding `@staging` and `@private-assets`, including the M0.5 acceptance specs, split into four parallel shards by measured duration (`tools/e2e-shard.mjs`, weights in `tools/e2e-shard-weights.json`); each shard starts its own services and runs one worker;
+- `e2e`: local Playwright e2e excluding `@staging` and `@private-assets`, including the M0.5 acceptance specs, split into six parallel shards by measured duration (`tools/e2e-shard.mjs`, weights in `tools/e2e-shard-weights.json`); each shard starts its own services and runs one worker;
 - `changes`: a diff made only of `docs/` and Markdown skips the e2e shards, unit tests still run;
 - `checks`: the required check; it passes only when `core` and every e2e shard succeeded (or e2e was skipped for a documentation-only change);
 - asset pipeline validation.
@@ -104,9 +104,12 @@ It runs after the internal Docker publish workflow succeeds and then:
 - deploys immutable SHA-tagged images;
 - patches canonical staging scene bundle URLs;
 - checks `/health`, `/rooms/demo-room`, and `/control-plane`;
-- runs `pnpm test:e2e:staging` against the public staging URL;
+- runs `pnpm test:e2e:staging` against the public staging URL (on a new host's bootstrap only the smoke checks above: its reference catalog activation runs the full suite);
+- reports Rutube in a separate non-blocking job after a successful deploy;
 - persists the successful SHA;
 - rolls back automatically on verification failure.
+
+The staging suite holds checks that need the real stand. Client-side logic with a local twin stays in local e2e. The heaviest multi-participant scenarios are tagged `@staging-extended` and run in `.github/workflows/staging-extended.yml` (`pnpm test:e2e:staging-extended`) under a `vrata-stage` lease before a release or around an irreversible activation.
 
 ## Test Artifacts
 

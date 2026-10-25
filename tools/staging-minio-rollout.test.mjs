@@ -141,7 +141,7 @@ test("workflow snapshots compatibility helper before old checkout and uses it fo
   assert.match(remote, /self\.raw_rollout\(image_sha\)/);
   assert.match(remote, /self\.raw_rollout\(target\)/);
   assert.match(workflow, /pnpm test:e2e:staging/);
-  assert.match(workflow, /PLAYWRIGHT_REPORT_NAME=staging-rutube-blocking pnpm test:e2e:rutube/);
+  assert.doesNotMatch(workflow, /staging-rutube-blocking/);
 });
 
 test("verification fails fast and leaves job headroom for every declared step including rollback", () => {
@@ -151,18 +151,20 @@ test("verification fails fast and leaves job headroom for every declared step in
   assert.ok(job >= steps.reduce((sum, value) => sum + value, 0) + 15, "job must retain explicit setup/cleanup headroom beyond step budgets");
   const gate = deploy.split("- name: Verification gate")[1].split("- name: Publish accepted release")[0];
   assert.match(gate, /pnpm test:e2e:staging -- --max-failures=1/);
-  assert.match(gate, /PLAYWRIGHT_REPORT_NAME=staging-rutube-blocking pnpm test:e2e:rutube/);
+  // Rutube is reported by the non-blocking canary job; a new host gets the full suite in its catalog activation.
+  assert.doesNotMatch(gate, /test:e2e:rutube/);
+  assert.match(gate, /if \[ "\$BOOTSTRAP" != true \]; then pnpm test:e2e:staging -- --max-failures=1; fi/);
+  assert.match(workflow, /  rutube-canary:\n(?:    .*\n)*?    if: needs\.deploy\.result == 'success'\n/);
   assert.match(deploy, /if: steps\.gate\.outcome == 'success'/);
 });
 
-test("expanded staging catalog retains budget for final capture cases and mandatory Rutube", () => {
+test("the staging gate retains budget for its suite and final capture cases", () => {
   const workflow = readFileSync(new URL("../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
   const deploy = workflow.split("  deploy:\n")[1].split("  rutube-canary:\n")[0];
   const gate = deploy.split("- name: Verification gate")[1].split("- name: Publish accepted release")[0];
   const gateMinutes = Number(gate.match(/timeout-minutes: (\d+)/)[1]);
-  // The 79-case run reached 77 passes at the old 50-minute outer deadline.
-  // Preserve the remaining two 3-minute cases, the 7-minute Rutube test and
-  // 5 minutes for runner startup/reporting without relaxing their own limits.
-  const minimumGateMinutes = 50 + 2 * 3 + 7 + 5;
-  assert.ok(gateMinutes >= minimumGateMinutes, "gate must fit the measured catalog plus final capture cases and Rutube");
+  // About 30 minutes for the deployment-specific suite after the client-only twins and the extended scenarios
+  // left the gate, two 3-minute final capture cases and 5 minutes for runner startup/reporting.
+  const minimumGateMinutes = 30 + 2 * 3 + 5;
+  assert.ok(gateMinutes >= minimumGateMinutes, "gate must fit the staging suite plus final capture cases");
 });

@@ -9,7 +9,8 @@ const STATE_SECRET = "owned-t14-orchestration-state-secret-32-bytes";
 
 test.use({ trace: "off", screenshot: "off", video: "off", launchOptions: { args: ["--autoplay-policy=no-user-gesture-required",
   "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--auto-select-desktop-capture-source=Entire screen"] } });
-for (const protocol of [1, 2] as const) test(`v${protocol} independent wall, revision-bound consent and PDF/screen capture lifecycle`, async ({ browser, request }) => {
+// Only identity v2: floor 1 is not a supported product path, and a v1 twin repeated the whole scenario.
+for (const protocol of [2] as const) test(`v${protocol} independent wall, revision-bound consent and PDF/screen capture lifecycle`, async ({ browser, request }) => {
   test.setTimeout(600_000); expect(!!process.env.VRATA_TEST_POSTGRES_URL).toBe(true);
   const livekit = await startLocalLiveKitFixture();
   try {

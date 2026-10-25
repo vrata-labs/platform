@@ -106,6 +106,8 @@ test("real Worker boots transferred WASM under restricted production CSP; VM can
   expect(network.wasmRequests).toHaveLength(1);
 });
 
+// Worker isolation runs in the runner's browser; on the stand only the CSP served by the API differs.
+if (mode === "local") {
 test("catastrophic regex/native call terminates only its Worker while companion and host UI remain usable", async ({ page, context }) => {
   const network = watchNetwork(context);
   await openProbe(page);
@@ -298,5 +300,6 @@ test("simulated hidden document fails UI evidence even with a browser-trusted du
   expect(report?.deviceGate).toBe("NOT_EVALUATED");
   await expect(page.locator("#verdict")).toHaveText("FAIL — ТРЕБУЕТСЯ РАЗБОР");
 });
+}
 });
 }

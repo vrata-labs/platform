@@ -8,7 +8,8 @@ import { startLocalLiveKitFixture } from "./local-livekit-fixture";
 test.use({ trace: "off", screenshot: "off", video: "off", launchOptions: { args: ["--autoplay-policy=no-user-gesture-required"] } });
 const { RoomServiceClient } = createRequire(resolve("apps/api/package.json"))("livekit-server-sdk");
 
-for (const version of ["1.13.7", "1.13.9"] as const) {
+// One LiveKit version: the one every deployment pins.
+for (const version of ["1.13.9"] as const) {
   test(`scoped identity transport on LiveKit ${version} preserves microphone and cannot widen a different source class`, async ({ browser }) => {
     test.setTimeout(180_000);
     const livekit = await startLocalLiveKitFixture(version), pages: Page[] = [];

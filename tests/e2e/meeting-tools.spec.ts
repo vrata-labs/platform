@@ -60,7 +60,8 @@ async function enter(page: Page, invitation: string, displayName: string) {
 }
 
 for (const mobile of [false, true]) {
-  for (const role of ["host", "member", "guest"] as const) test(`meeting tools ${mobile ? "Android viewport" : "desktop"}: ${role} finds tools without capture or implicit surface changes`, async ({ browser, request }) => {
+  // Roles differ only in permission texts; the Android viewport keeps one touch pass on the host.
+  for (const role of (mobile ? ["host"] : ["host", "member", "guest"]) as ("host" | "member" | "guest")[]) test(`meeting tools ${mobile ? "Android viewport" : "desktop"}: ${role} finds tools without capture or implicit surface changes`, async ({ browser, request }) => {
     test.setTimeout(180_000);
     let context: BrowserContext | undefined;
     try {
