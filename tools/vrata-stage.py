@@ -293,34 +293,33 @@ class GitHub:
     def set_variable(self, repo, name, value):
         self.gh("variable", "set", name, "--repo", repo, "--body", value)
 
+    def recent_runs(self, path, hours=48, max_pages=20):
+        """Every run created in the window, all pages. Runs finish in any order, so neither a status filter nor
+        the position on a page proves that older runs are done; a window longer than any run of ours does."""
+        since = urllib.parse.quote(">=" + iso(utcnow() - dt.timedelta(hours=hours)))
+        runs = {}
+        for page in range(1, max_pages + 1):
+            data = json.loads(self.gh("api", f"{path}?per_page=100&page={page}&created={since}"))
+            # New runs shift older ones to later pages: a run may repeat, but none is skipped.
+            runs.update((run["id"], run) for run in data["workflow_runs"])
+            if not data["workflow_runs"] or page * 100 >= data["total_count"]:
+                return list(runs.values())
+        raise StageError("too_many_recent_runs:" + path)
+
     def busy_runs(self, repo, workflows, others_except=None):
-        """Active runs that may use the stand. Each listed workflow ("CI@main" limits one to a branch) is read as
-        one snapshot of its latest runs regardless of status: a status filter per query could miss a run moving
-        between statuses (queued -> pending under a concurrency group) while the queries run. With others_except,
-        any other active run among the latest runs of the repository counts too, unless its workflow is listed
-        there: ad-hoc diagnostic workflows reach the stand as well."""
-        ids = {workflow["name"]: workflow["id"] for workflow in
-               json.loads(self.gh("api", f"repos/{repo}/actions/workflows?per_page=100"))["workflows"]}
+        """Active runs that may use the stand: listed workflows ("CI@main" limits one to a branch) and, with
+        others_except, any other workflow that is not excepted (ad-hoc diagnostics reach the stand as well)."""
+        wanted = [entry.partition("@") for entry in workflows]
+        names = {name for name, _, _ in wanted}
+        listed = names | set(others_except or ())
         busy = []
-        pages = []
-        for name, _, branch in (entry.partition("@") for entry in workflows):
-            if name not in ids:
-                raise StageError("unknown_workflow:" + name)
-            query = f"repos/{repo}/actions/workflows/{ids[name]}/runs?per_page=100" + (f"&branch={branch}" if branch else "")
-            pages.append((name, json.loads(self.gh("api", query))["workflow_runs"]))
-        if others_except is not None:
-            listed = {entry.partition("@")[0] for entry in workflows} | set(others_except)
-            runs = json.loads(self.gh("api", f"repos/{repo}/actions/runs?per_page=100"))["workflow_runs"]
-            pages.append(("other workflows", [run for run in runs if run["name"] not in listed]))
-            if len(runs) == 100 and runs[-1]["status"] in BUSY_STATUSES:
-                busy.append({"databaseId": 0, "workflowName": "older active runs", "status": "unknown"})
-        for name, runs in pages:
-            busy += [{"databaseId": run["id"], "workflowName": run.get("name") if name == "other workflows" else name,
-                      "status": run["status"], "headBranch": run["head_branch"]}
-                     for run in runs if run["status"] in BUSY_STATUSES]
-            if len(runs) == 100 and runs[-1]["status"] in BUSY_STATUSES:
-                # Even the oldest run of a full page is active: older ones may be too, keep the stand.
-                busy.append({"databaseId": 0, "workflowName": name + " (more active runs)", "status": "unknown"})
+        for run in self.recent_runs(f"repos/{repo}/actions/runs"):
+            if run["status"] not in BUSY_STATUSES:
+                continue
+            if any(run["name"] == name and (not branch or run["head_branch"] == branch) for name, _, branch in wanted) \
+                    or (others_except is not None and run["name"] not in listed):
+                busy.append({"databaseId": run["id"], "workflowName": run["name"], "status": run["status"],
+                             "headBranch": run["head_branch"]})
         return busy
 
     def latest_success_sha(self, repo, workflow):

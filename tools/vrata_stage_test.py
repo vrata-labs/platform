@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.parse
 
 spec = importlib.util.spec_from_file_location("vrata_stage", Path(__file__).with_name("vrata-stage.py"))
 vs = importlib.util.module_from_spec(spec)
@@ -575,48 +576,55 @@ class HelperTests(Base):
         self.assertNotIn("imageRef", body)
         self.assertTrue(body["block_device_mapping_v2"][0]["delete_on_termination"])
 
-    def api(self, runs_by_workflow):
-        """Fake gh api: workflow list plus one runs page per workflow id; records the queries."""
+    def api(self, runs, page_size=100, insert_on_page=None):
+        """Fake gh api for the runs list: pages of the newest-first list, optional run inserted between pages."""
         queries = []
+        listing = list(runs)
 
         def runner(args, **kwargs):
             query = args[2]
             queries.append(query)
-            if query.endswith("/actions/workflows?per_page=100"):
-                body = {"workflows": [{"name": name, "id": index} for index, name in enumerate(runs_by_workflow)]}
-            elif query.endswith("/actions/runs?per_page=100"):
-                body = {"workflow_runs": [dict(run, name=name) for name, runs in runs_by_workflow.items() for run in runs]}
-            else:
-                workflow = list(runs_by_workflow)[int(query.split("/workflows/")[1].split("/")[0])]
-                branch = query.split("branch=")[1] if "branch=" in query else None
-                body = {"workflow_runs": [run for run in runs_by_workflow[workflow] if not branch or run["head_branch"] == branch]}
+            page = int(urllib.parse.parse_qs(urllib.parse.urlsplit(query).query)["page"][0])
+            if insert_on_page and page == insert_on_page[0]:
+                listing.insert(0, insert_on_page[1])
+            chunk = listing[(page - 1) * page_size:page * page_size]
+            body = {"total_count": len(listing), "workflow_runs": chunk}
             return type("Done", (), {"returncode": 0, "stderr": "", "stdout": json.dumps(body)})()
         return vs.GitHub(runner=runner), queries
 
-    def test_busy_runs_take_one_snapshot_per_workflow(self):
-        github, queries = self.api({
-            "CI": [{"id": 1, "status": "in_progress", "head_branch": "feature"}, {"id": 2, "status": "pending", "head_branch": "main"},
-                   {"id": 3, "status": "completed", "head_branch": "main"}],
-            "Deliver": [{"id": 4, "status": "waiting", "head_branch": "main"}],
-            "Docs": [{"id": 5, "status": "in_progress", "head_branch": "main"}]})
+    @staticmethod
+    def mkrun(run_id, name, status, branch="main"):
+        return {"id": run_id, "name": name, "status": status, "head_branch": branch}
+
+    def test_busy_runs_filter_by_workflow_branch_and_status(self):
+        github, queries = self.api([self.mkrun(1, "CI", "in_progress", "feature"), self.mkrun(2, "CI", "pending"),
+                                    self.mkrun(3, "CI", "completed"), self.mkrun(4, "Deliver", "waiting"),
+                                    self.mkrun(5, "Docs", "in_progress")])
         self.assertEqual(sorted(run["databaseId"] for run in github.busy_runs("o/r", ["CI@main", "Deliver"])), [2, 4])
-        self.assertTrue(all("status=" not in query for query in queries))
-        self.assertIn("repos/o/r/actions/workflows/0/runs?per_page=100&branch=main", queries)
+        self.assertTrue(all("status=" not in query and "created=%3E%3D" in query for query in queries))
+
+    def test_an_old_active_run_behind_a_full_page_is_found(self):
+        finished = [self.mkrun(n, "Staging Deploy", "completed") for n in range(100, 300)]
+        github, queries = self.api(finished + [self.mkrun(1, "Staging Deploy", "in_progress")])
+        self.assertEqual([run["databaseId"] for run in github.busy_runs("o/r", ["Staging Deploy"])], [1])
+        self.assertEqual(len(queries), 3)
+
+    def test_a_run_created_during_paging_does_not_hide_others(self):
+        runs = [self.mkrun(n, "Staging Deploy", "completed") for n in range(10, 110)] + [self.mkrun(2, "Staging Deploy", "queued")]
+        github, _ = self.api(runs, insert_on_page=(2, self.mkrun(500, "CI", "completed")))
+        self.assertEqual([run["databaseId"] for run in github.busy_runs("o/r", ["Staging Deploy"])], [2])
 
     def test_other_active_workflows_count_unless_excepted(self):
-        github, _ = self.api({
-            "Staging Deploy": [{"id": 1, "status": "completed", "head_branch": "main"}],
-            "CI": [{"id": 2, "status": "in_progress", "head_branch": "feature"}],
-            "PR70 staging read-only verification": [{"id": 3, "status": "queued", "head_branch": "pr70"}]})
+        github, _ = self.api([self.mkrun(1, "Staging Deploy", "completed"), self.mkrun(2, "CI", "in_progress", "feature"),
+                              self.mkrun(3, "PR70 staging read-only verification", "queued", "pr70")])
         busy = github.busy_runs("o/r", ["Staging Deploy"], others_except=["CI"])
         self.assertEqual([(run["databaseId"], run["workflowName"]) for run in busy], [(3, "PR70 staging read-only verification")])
         self.assertEqual(github.busy_runs("o/r", ["Staging Deploy"]), [])
 
-    def test_busy_runs_stay_conservative_on_a_full_page_and_unknown_names(self):
-        github, _ = self.api({"Deploy": [{"id": n, "status": "queued", "head_branch": "main"} for n in range(100)]})
-        self.assertIn("more active runs", github.busy_runs("o/r", ["Deploy"])[-1]["workflowName"])
-        with self.assertRaisesRegex(vs.StageError, "unknown_workflow:Renamed"):
-            github.busy_runs("o/r", ["Renamed"])
+    def test_too_many_recent_runs_refuse_to_guess(self):
+        github, _ = self.api([self.mkrun(n, "CI", "completed") for n in range(2100)])
+        with self.assertRaisesRegex(vs.StageError, "too_many_recent_runs"):
+            github.busy_runs("o/r", ["CI"])
 
     def test_gh_timeout_is_a_stage_error(self):
         def runner(args, **kwargs):
