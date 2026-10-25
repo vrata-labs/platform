@@ -4153,12 +4153,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       return json(response, 503, { error: "identity_authority_unavailable" });
     }
     // Codec 3 binds the original proof's epoch and the room generation; the fence re-checks both.
+    // A managed room's grant also names its access epoch; the fence re-checks it against a rotation.
     let media: MediaGrantPin | undefined;
+    const accessEpoch = initialRoom?.managed ? { accessEpoch: initialRoom.managed.accessEpoch } : {};
     if (boundary?.codec === 3) {
       const incarnation = await storage.roomIdentities.mediaIncarnation({ tenantId: proof.tenantId, roomId: proof.roomId });
       if (!incarnation) return writeRoomStateChanged(response);
-      media = Object.freeze({ codec: 3, namespace: boundary.namespace, incarnation });
-    } else if (boundary) media = Object.freeze({ codec: 2, namespace: boundary.namespace });
+      media = Object.freeze({ codec: 3, namespace: boundary.namespace, incarnation, ...accessEpoch });
+    } else if (boundary) media = Object.freeze({ codec: 2, namespace: boundary.namespace, ...accessEpoch });
     const mediaNamespace = boundary?.namespace ?? null;
     const mediaRoom = currentMediaRoomName(initialRoom, proof.roomId, roomPrefix, mediaNamespace, media?.incarnation);
     if (initialRoom?.managed) {
@@ -4264,7 +4266,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       return json(response, 409, { error: "remote_browser_session_not_authoritative" });
     }
     // The signed room name is released only while its codec and room generation are still current.
-    const pin: MediaGrantPin = Object.freeze({ codec: boundary.codec, namespace: boundary.namespace, ...(incarnation ? { incarnation } : {}) });
+    const pin: MediaGrantPin = Object.freeze({ codec: boundary.codec, namespace: boundary.namespace, ...(incarnation ? { incarnation } : {}),
+      ...(remoteBrowserRoom?.managed ? { accessEpoch: remoteBrowserRoom.managed.accessEpoch } : {}) });
     const scope = Object.freeze({ tenantId: currentRoom.tenantId, roomId: payload.roomId });
     try {
       await releaseFrameCredential(send => storage.releaseMediaGrant(scope, pin,

@@ -98,4 +98,15 @@ test("the media codec boundary is monotonic, needs floor two and is raised only 
   await assert.rejects(storage.releaseMediaGrant(scope, { codec: 3, namespace, incarnation: "f".repeat(32) }, () => { released++; }), MediaBoundaryChanged);
   await storage.releaseMediaGrant(scope, { codec: 3, namespace, incarnation }, () => { released++; });
   assert.equal(released, 2);
+  // A managed room's epoch row is locked too: a rotation is seen, and an unmanaged pin never matches it.
+  const managed = await storage.createManagedRoom({ roomId: randomUUID(), tenantId: "demo-tenant", name: "Managed fence", visibility: "private" }, {
+    managedBy: "portal:stage", kind: "reference", accessUntil: new Date(Date.now() + 3_600_000).toISOString(), graceSeconds: 0, operationId: randomUUID() });
+  const managedScope = { tenantId: managed.tenantId, roomId: managed.roomId };
+  const managedPin = { codec: 3 as const, namespace, incarnation: (await storage.roomIdentities.mediaIncarnation(managedScope))!, accessEpoch: managed.managed!.accessEpoch };
+  await storage.releaseMediaGrant(managedScope, managedPin, () => { released++; });
+  assert.equal(released, 3);
+  assert.ok(await storage.rotateManagedRoomEpoch(managed.roomId, managed.managed!.accessEpoch, null));
+  await assert.rejects(storage.releaseMediaGrant(managedScope, managedPin, () => { released++; }), MediaBoundaryChanged);
+  await assert.rejects(storage.releaseMediaGrant(managedScope, { ...managedPin, accessEpoch: undefined }, () => { released++; }), MediaBoundaryChanged);
+  assert.equal(released, 3);
 });

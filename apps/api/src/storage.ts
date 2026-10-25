@@ -366,7 +366,8 @@ export class MemoryStorage implements Storage {
   async withRoomIdentityEffect<T>(guard: RoomEffectGuard, effect: (scoped: RoomIdentityEffectStorage, current: RoomEffectActor) => Promise<T>): Promise<T> {
     let active = true;
     const media = () => assertMediaGrantPin(guard.media, { codec: this.identityPolicy.currentMediaCodec(),
-      namespace: this.identityPolicy.currentMediaNamespace(), incarnation: this.mediaIncarnation(guard.roomId) });
+      namespace: this.identityPolicy.currentMediaNamespace(), incarnation: this.mediaIncarnation(guard.roomId),
+      accessEpoch: this.rooms.get(guard.roomId)?.managed?.accessEpoch });
     const current = this.identityAdapter.assertCurrentEffect(guard);
     media();
     const check = () => {
@@ -385,7 +386,7 @@ export class MemoryStorage implements Storage {
     const room = this.rooms.get(scope.roomId);
     if (!room || room.tenantId !== scope.tenantId) throw new IdentityStorageError("room_not_found");
     assertMediaGrantPin(media, { codec: this.identityPolicy.currentMediaCodec(), namespace: this.identityPolicy.currentMediaNamespace(),
-      incarnation: this.mediaIncarnation(scope.roomId) });
+      incarnation: this.mediaIncarnation(scope.roomId), accessEpoch: room.managed?.accessEpoch });
     release();
   }
   async withLegacyRoomEffect<T>(scope: { tenantId: string; roomId: string }, options: LegacyRoomEffectOptions,
@@ -1288,7 +1289,8 @@ export class PostgresStorage implements Storage {
         // fence), so a concurrent codec raise waits for this release or refuses it afterwards.
         const incarnation = (await client.query("select media_incarnation from rooms where tenant_id=$1 and room_id=$2", [guard.tenantId, guard.roomId])).rows[0]?.media_incarnation;
         const policy = (await client.query("select media_codec, media_namespace from room_identity_protocol_policy where singleton=true for share")).rows[0];
-        assertMediaGrantPin(guard.media, { codec: policy?.media_codec, namespace: policy?.media_namespace, incarnation });
+        assertMediaGrantPin(guard.media, { codec: policy?.media_codec, namespace: policy?.media_namespace, incarnation,
+          accessEpoch: await this.lockedAccessEpoch(client, guard.roomId) });
       }
       const current = await assertPostgresEffect(client, guard, this.identityNow);
       // The parent lock pins role/epoch, but awaited SQL can outlive the original
@@ -1309,10 +1311,15 @@ export class PostgresStorage implements Storage {
       const room = (await client.query("select media_incarnation from rooms where tenant_id=$1 and room_id=$2 for share", [scope.tenantId, scope.roomId])).rows[0];
       if (!room) throw new IdentityStorageError("room_not_found");
       const policy = (await client.query("select media_codec, media_namespace from room_identity_protocol_policy where singleton=true for share")).rows[0];
-      assertMediaGrantPin(media, { codec: policy?.media_codec, namespace: policy?.media_namespace, incarnation: room.media_incarnation });
+      assertMediaGrantPin(media, { codec: policy?.media_codec, namespace: policy?.media_namespace, incarnation: room.media_incarnation,
+        accessEpoch: await this.lockedAccessEpoch(client, scope.roomId) });
       checkAlive();
       release();
     });
+  }
+  /** A managed room's epoch row FOR SHARE: a rotation (an UPDATE of that row) waits for the release or is seen by it. */
+  private async lockedAccessEpoch(client: PoolClient, roomId: string): Promise<string | null> {
+    return (await client.query("select access_epoch::text as access_epoch from integration_rooms where room_id=$1 for share", [roomId])).rows[0]?.access_epoch ?? null;
   }
   async withLegacyRoomEffect<T>(scope: { tenantId: string; roomId: string }, options: LegacyRoomEffectOptions,
     effect: (scoped: RoomIdentityEffectStorage) => Promise<T>): Promise<T> {

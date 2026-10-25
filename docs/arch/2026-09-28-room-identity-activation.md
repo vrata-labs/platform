@@ -655,8 +655,11 @@ This preparatory slice adds, without changing what is issued:
 - Portal-managed rooms (PR #129) keep their access epoch as the last name segment:
   `...:${roomId}:${accessEpoch}`, on top of the codec-2 or codec-3 base. One parser
   (`managed-media-names.ts`) owns both codecs, the generation and the epoch. The
-  reconciler treats a managed room of any other epoch as a retired generation too,
-  and the managed-room enforcer deletes retired-epoch rooms under both codecs and,
+  reconciler treats a managed room of any other epoch as a retired generation too.
+  Both media fences also pin the managed room's access epoch, reading its
+  `integration_rooms` row FOR SHARE: a rotation waits for an in-flight release, and
+  a grant prepared for the previous epoch is refused afterwards. The managed-room
+  enforcer deletes retired-epoch rooms under both codecs and,
   past the boundary, current-epoch rooms of codec 2 or another generation.
 - Runtime resolves `vmi2` and `vmi3` peers and, while two lineages of one
   participant overlap, plays the newer epoch. This is a UI aid, not enforcement.
