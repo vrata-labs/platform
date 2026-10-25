@@ -8,7 +8,35 @@ on:
   workflow_dispatch:
 
 jobs:
-  checks:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      e2e: ${{ steps.scope.outputs.e2e }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Skip browser e2e for documentation-only changes
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        # Unit tests always run; only a diff made of docs/ and Markdown skips the browser shards.
+        run: |
+          e2e=true
+          if [ "$EVENT" != workflow_dispatch ] && [[ "$BASE" =~ ^[0-9a-f]{40}$ ]] && [ "$BASE" != 0000000000000000000000000000000000000000 ]; then
+            if files="$(git diff --name-only "$BASE" "$HEAD")" && [ -n "$files" ] && ! grep -qvE '^(docs/|.*\.md$)' <<<"$files"; then
+              e2e=false
+            fi
+          fi
+          echo "e2e=$e2e" >> "$GITHUB_OUTPUT"
+          echo "browser e2e: $e2e"
+
+  core:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -40,12 +68,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Lint
-        run: pnpm lint
-
-      - name: Typecheck
-        run: pnpm typecheck
-
+      # `lint` and `typecheck` are the same `tsc --noEmit` per package that `build` runs with emit.
       - name: Build
         run: pnpm build
 
@@ -157,6 +180,49 @@ jobs:
           VRATA_PLUGIN_ROLLBACK_STORAGE_MODULE: ${{ github.workspace }}/.plugin-rollback/apps/api/dist/storage.js
         run: pnpm test
 
+
+  e2e:
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Balanced by measured duration (tools/e2e-shard.mjs); workers=1 inside each runner.
+        shard: [1, 2, 3, 4]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
       - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium
 
@@ -171,28 +237,41 @@ jobs:
 
       - name: E2E
         env:
-          PLAYWRIGHT_REPORT_NAME: local-e2e
+          PLAYWRIGHT_REPORT_NAME: local-e2e-${{ matrix.shard }}
           PLAYWRIGHT_TRACE: "1"
           VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
-        run: pnpm test:e2e
-
-      - name: M0.5 acceptance
-        env:
-          PLAYWRIGHT_REPORT_NAME: local-m0-5
-          PLAYWRIGHT_TRACE: "1"
-        # Lint, typecheck, build and unit tests have already passed above.
-        run: pnpm exec playwright test tests/e2e/m0.5 --workers=1
+        run: |
+          mapfile -t specs < <(node tools/e2e-shard.mjs "${{ matrix.shard }}" "${{ strategy.job-total }}")
+          test "${#specs[@]}" -gt 0
+          pnpm test:e2e -- "${specs[@]}"
 
       - name: Upload Playwright artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-local-${{ github.run_id }}-${{ github.run_attempt }}
+          name: playwright-local-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
           retention-days: 14
           if-no-files-found: ignore
           path: |
             playwright-report/
             test-results/
+
+  # Branch protection requires a check named "checks": it now gates the unit job and every e2e shard.
+  checks:
+    needs: [changes, core, e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the unit job and every browser shard
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          CORE: ${{ needs.core.result }}
+          E2E: ${{ needs.e2e.result }}
+          E2E_SCOPE: ${{ needs.changes.outputs.e2e }}
+        run: |
+          test "$CHANGES" = success
+          test "$CORE" = success
+          if [ "$E2E_SCOPE" = false ]; then test "$E2E" = skipped; else test "$E2E" = success; fi
 
   scene-repositories:
     runs-on: ubuntu-latest

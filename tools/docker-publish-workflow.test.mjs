@@ -28,5 +28,5 @@ test("CI permits an explicit run on a feature SHA", async () => {
   const workflow = await readFile(resolve(root, ".github/workflows/ci.yml"), "utf8");
   assert.match(workflow, /^  workflow_dispatch:$/m);
   assert.match(workflow, /VRATA_TEST_POSTGRES_URL: postgres:\/\/postgres:postgres@127\.0\.0\.1:5432\/vrata_test/);
-  assert.match(workflow, /run: pnpm test:e2e/);
+  assert.match(workflow, /pnpm test:e2e -- "\$\{specs\[@\]\}"/);
 });
