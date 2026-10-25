@@ -3,7 +3,7 @@ name: e2e-suite-revision
 date: 2026-10-23
 source: T01a, CI 39964029611 и 40005256365, полный local 2026-10-23
 area: ci
-status: parked
+status: promoted
 jira: не заведена
 ---
 
@@ -92,3 +92,9 @@ jira: не заведена
 - playwright.config.ts — workers=1 в CI.
 - tools/run-local-e2e.mjs — локальный запуск.
 - docs/reviews/2026-09-26-working-meeting-implementation.md — D-014, D-025, D-029.
+
+## Сделано 2026-10-26
+
+- #135: локальный e2e разбит на параллельные шарды по измеренной длительности (`tools/e2e-shard.mjs`), unit-тесты и сборка идут отдельной job. Убраны повтор M0.5 и дублирующие lint/typecheck, e2e не идёт для изменений только в документации. CI: 62 → ~16 минут (6 шардов, #136).
+- #136: в staging gate остались только проверки, которым нужен реальный стенд: 81 → 54 теста, 46 → 14,2 минуты (Staging Deploy 40242139289). Тяжёлые многоклиентные сценарии перенесены в `@staging-extended` (Staging Extended). Rutube больше не блокирует, на bootstrap идёт только smoke, тяжёлые v1-двойники удалены, LiveKit 1.13.9 закреплён во всех compose.
+- Осталось: identity floor 1 и пять rollback-баз (`floor-one-product-default`), фиксированные sleep и ограничитель кадров в тяжёлых UI-фикстурах, real-time ожидания в `identity-expiry.test.ts`, параллельный запуск файлов `apps/api` без Postgres.
