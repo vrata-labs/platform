@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { OWNERLESS_REFERENCE_PERSONAL_SQL, ROOM_RECORD_SCHEMA_SQL } from "./identity-rollback-guard.mjs";
@@ -423,4 +424,39 @@ with tempfile.TemporaryDirectory() as directory:
 print("schema probe assertions passed")
 `], { encoding: "utf8" });
   assert.match(output, /assertions passed/);
+});
+
+test("catalog state for the gate comes from the database and a new host starts on Wave 2", () => {
+  const output = execFileSync("python3", ["-B", "-c", `
+import importlib.util, json, tempfile
+spec = importlib.util.spec_from_file_location("catalog", ${JSON.stringify(fileURLToPath(new URL("./staging-template-catalog.py", import.meta.url)))})
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+with tempfile.TemporaryDirectory() as directory:
+    host = m.CatalogHost(directory)
+    schema, answer, queries = "absent", "active", []
+    host.schema_state = lambda: {"schema": schema}
+    def run(args):
+        assert "api" not in args, "the candidate API must not decide the catalog state"
+        queries.append(args[-1]); return answer
+    host.run = run
+    assert host.catalog_state() == {"state": "wave2", "schema": "absent"} and queries == []
+    schema = "empty"
+    assert host.catalog_state()["state"] == "wave2"
+    schema = "initialized"
+    assert host.catalog_state() == {"state": "active", "schema": "initialized"}
+    assert queries[-1] == m.CATALOG_STATE_SQL
+    answer = "wave2"
+    assert host.catalog_state()["state"] == "wave2"
+    answer = "broken"
+    try: host.catalog_state()
+    except ValueError as error: assert str(error) == "template_rollout_catalog_state_invalid"
+    else: raise AssertionError("an unknown state was accepted")
+print("catalog state assertions passed")
+`], { encoding: "utf8" });
+  assert.match(output, /assertions passed/);
+  const workflow = readFileSync(new URL("../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
+  assert(workflow.indexOf("- name: Read catalog state before rollout") < workflow.indexOf("- name: Roll out staging images"));
+  assert.match(workflow, /staging-template-catalog\.py' catalog-state --root/);
+  assert.match(workflow, /VRATA_REFERENCE_CATALOG_ACTIVE: \$\{\{ steps\.catalog\.outputs\.reference_active \}\}/);
 });

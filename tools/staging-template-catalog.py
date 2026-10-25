@@ -42,6 +42,11 @@ OWNERLESS_REFERENCE_PERSONAL_SQL = (
     " and (s.snapshot is null or jsonb_typeof(s.snapshot) <> 'object' or s.snapshot ?| array['defaults', 'scene', 'assetLock']))")
 
 
+# Active means a reference template is current; read from PostgreSQL so a candidate API cannot misreport it.
+CATALOG_STATE_SQL = ("select case when exists (select 1 from templates where status = 'active' and current_version <> '0.1.0')"
+                     " then 'active' else 'wave2' end")
+
+
 def sha(value):
     if not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{40}", value):
         raise ValueError("template_rollout_invalid_sha")
@@ -291,7 +296,7 @@ class CatalogHost:
         # Query PostgreSQL directly; only CLI mutations need a healthy API image.
         result = self.run(self.compose + ["exec", "-T", "postgres", "sh", "-c",
                          'psql -XAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"', "sh",
-                         "select json_build_object('state', case when exists (select 1 from templates where status = 'active' and current_version <> '0.1.0') then 'active' else 'wave2' end, 'referenceRoomCount', (select count(*) from rooms where template_version <> '0.1.0'))"])
+                         f"select json_build_object('state', ({CATALOG_STATE_SQL}), 'referenceRoomCount', (select count(*) from rooms where template_version <> '0.1.0'))"])
         status = json.loads(result)
         minimum_identity_protocol = self.minimum_identity_protocol()
         if minimum_identity_protocol >= 2 and self.read_only_compose_environment().get("VRATA_INTERNAL_SERVICE_TOKEN") == "unconfigured-read-only-preflight":
@@ -307,6 +312,18 @@ class CatalogHost:
         return {"targetSha": target, "wave2Marker": marker, "state": status["state"],
                 "minimumIdentityProtocol": minimum_identity_protocol, "identityAuthorityBound": identity_bound,
                 "ownerlessReferencePersonal": ownerless}
+
+    def catalog_state(self):
+        """Catalog of the accepted database before a rollout. A host without a database yet starts on Wave 2;
+        the staging gate may skip reference-catalog checks only then."""
+        schema = self.schema_state()["schema"]
+        if schema != "initialized":
+            return {"state": "wave2", "schema": schema}
+        value = self.run(self.compose + ["exec", "-T", "postgres", "sh", "-c",
+                         'psql -XAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"', "sh", CATALOG_STATE_SQL])
+        if value not in ("active", "wave2"):
+            raise ValueError("template_rollout_catalog_state_invalid")
+        return {"state": value, "schema": schema}
 
     def identity_bound(self):
         command = self.compose + ["exec", "-T", "postgres", "sh", "-c",
@@ -417,7 +434,7 @@ class CatalogHost:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["status", "preflight", "schema-state", "verify-wave2", "record-wave2", "guard-accepted", "prepare", "activate", "rollback"])
+    parser.add_argument("command", choices=["status", "preflight", "schema-state", "catalog-state", "verify-wave2", "record-wave2", "guard-accepted", "prepare", "activate", "rollback"])
     parser.add_argument("--root", required=True)
     parser.add_argument("--sha")
     parser.add_argument("--gate-proof")
@@ -436,6 +453,8 @@ def main():
         result = host.guard_accepted(sha(args.sha))
     elif args.command == "schema-state":
         result = host.schema_state()
+    elif args.command == "catalog-state":
+        result = host.catalog_state()
     elif args.command == "prepare":
         result = host.prepare(sha(args.sha))
     else:
