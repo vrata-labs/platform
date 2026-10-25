@@ -29,7 +29,8 @@ import urllib.parse
 PURPOSE_TTL = {"deploy": 3 * 3600, "e2e": 2 * 3600, "debug": 2 * 3600, "manual": 4 * 3600, "user": 8 * 3600}
 MAX_TTL = 24 * 3600
 AGENT_COMMANDS = {"claude", "opencode"}
-BUSY_STATUSES = {"queued", "in_progress", "waiting", "requested", "pending"}
+# Lifecycle order: a run only moves forward, so querying in this order cannot miss an active run.
+BUSY_STATUSES = ("requested", "pending", "waiting", "queued", "in_progress")
 HOST_KEY_TYPES = ("ed25519", "ecdsa", "rsa")
 DEFAULT_CONFIG = Path.home() / "inprojects/vrata/.secrets/stage/stages.json"
 DEFAULT_STATE = Path.home() / ".local/state/vrata-stage"
@@ -176,6 +177,11 @@ def record(state, event, **details):
     state["history"].append({"at": iso(utcnow()), "event": event, **details})
 
 
+def owns(state, identity):
+    """The running operation of the stand is this process (and not a recycled PID)."""
+    return bool(state["op"] and identity and state["op"]["pid"] == identity["pid"] and state["op"]["start"] == identity["start"])
+
+
 def lease_alive(lease, now):
     if parse_iso(lease["expires"]) <= now:
         return False
@@ -277,7 +283,10 @@ class GitHub:
         self.runner = runner
 
     def gh(self, *args, input_text=None):
-        result = self.runner(["gh", *args], input=input_text, text=True, capture_output=True, timeout=120)
+        try:
+            result = self.runner(["gh", *args], input=input_text, text=True, capture_output=True, timeout=120)
+        except (subprocess.TimeoutExpired, OSError) as error:
+            raise StageError("gh_unavailable:" + " ".join(args[:3]) + ":" + type(error).__name__) from None
         if result.returncode:
             raise StageError("gh_failed:" + " ".join(args[:3]) + ":" + result.stderr.strip()[:300])
         return result.stdout
@@ -290,7 +299,7 @@ class GitHub:
         lost behind newer ones; "CI@main" limits a workflow to one branch."""
         wanted = [entry.partition("@") for entry in workflows]
         busy = []
-        for status in sorted(BUSY_STATUSES):
+        for status in BUSY_STATUSES:
             data = json.loads(self.gh("api", f"repos/{repo}/actions/runs?status={status}&per_page=100"))
             if data["total_count"] > len(data["workflow_runs"]):
                 # More active runs than one page: keep the stand rather than guess.
@@ -413,6 +422,8 @@ class Stands:
         if phase == "failed":
             # Other users may still inspect the failed instance; it is replaced once they are gone.
             result["failed_stand_held_by"] = others
+        elif phase == "destroying":
+            result["note"] = "the current instance is being removed; this lease gets a new one"
         return result
 
     def ensure_locked(self, name, state, sha=None, requester=None):
@@ -521,7 +532,7 @@ class Stands:
                 return {"stage": name, "removed": False, "reason": "operation_running", "phase": state["phase"]}
             if state["phase"] == "absent" and not state["server"]:
                 return {"stage": name, "removed": False, "reason": "absent"}
-            previous = state["phase"]
+            previous, recorded = state["phase"], state["server"]
             state["phase"], state["op"] = "destroying", me
             record(state, "destroy_started", force=force)
         switched = False
@@ -541,38 +552,48 @@ class Stands:
                 if busy:
                     return self.cancel_destroy(name, previous, switched, [], busy)
             self.save_caddy(name)
+            servers = self.owned_servers(name, recorded, strict=False)
             with self.registry.locked(name) as state:
-                # Final barrier: a lease or a CI run that arrived while certificates were saved keeps this
-                # instance. Deletion is requested under the lock, so a later lease waits for a new instance.
+                # Commit point, short and without network calls: a lease taken before it keeps this instance,
+                # a later one sees "destroying" and gets a new instance.
                 live = [] if force else sorted(prune(state, utcnow()))
-                busy = [] if force or live else self.ci_busy(name)
-                if not live and not busy:
-                    servers = self.owned_servers(name, state["server"], strict=False)
-                    for server_id in servers:
-                        self.request_delete(name, server_id)
-                    record(state, "delete_requested", servers=servers)
-            if live or busy:
-                return self.cancel_destroy(name, previous, switched, live, busy)
+                if not live:
+                    record(state, "delete_committed", servers=servers)
+            if live:
+                return self.cancel_destroy(name, previous, switched, live, [])
+            if not force:
+                busy = self.ci_busy(name)
+                if busy:
+                    return self.cancel_destroy(name, previous, switched, [], busy)
+            for server_id in servers:
+                self.request_delete(name, server_id)
             for server_id in servers:
                 self.wait_deleted(server_id)
             with self.registry.locked(name) as state:
-                state["phase"], state["server"], state["op"] = "absent", None, None
-                record(state, "destroyed", servers=servers)
-                if prune(state, utcnow()):
-                    self.ensure_locked(name, state)
+                if owns(state, me):
+                    state["phase"], state["server"], state["op"] = "absent", None, None
+                    record(state, "destroyed", servers=servers)
+                    if prune(state, utcnow()):
+                        self.ensure_locked(name, state)
             return {"stage": name, "removed": bool(servers), "servers": servers}
         except Exception as error:
             with self.registry.locked(name) as state:
-                state["phase"], state["op"] = "failed", None
-                record(state, "destroy_failed", error=str(error)[:300])
+                if owns(state, me):
+                    state["phase"], state["op"] = "failed", None
+                    record(state, "destroy_failed", error=str(error)[:300])
             raise
 
     def cancel_destroy(self, name, previous, switched, leases, runs):
-        with self.registry.locked(name) as state:
-            state["phase"], state["op"] = previous, None
-            record(state, "destroy_cancelled", leases=leases, runs=[run["databaseId"] for run in runs])
+        # CI is switched back while this operation still owns the stand, so a later removal cannot be overtaken.
         if switched and previous == "ready":
-            self.set_ci(name, True)
+            try:
+                self.set_ci(name, True)
+            except StageError as error:
+                self.log(f"ci variable not restored, automatic deploy stays off: {error}")
+        with self.registry.locked(name) as state:
+            if owns(state, process_identity(os.getpid())):
+                state["phase"], state["op"] = previous, None
+                record(state, "destroy_cancelled", leases=leases, runs=[run["databaseId"] for run in runs])
         if leases:
             return {"stage": name, "removed": False, "reason": "leases", "leases": leases}
         return {"stage": name, "removed": False, "reason": "ci_busy",
@@ -611,6 +632,10 @@ class Stands:
     def reap(self, name, poll=60, busy_retry=300):
         """Watch the stand while it exists; remove it after the grace period without leases and operations."""
         grace = int(self.config.stage(name).get("grace_minutes", 20)) * 60
+        with self.registry.locked(name) as state:
+            if state["reaper"] and state["reaper"]["pid"] != os.getpid() and process_alive(state["reaper"]):
+                return {"stage": name, "watcher": "already_running", "pid": state["reaper"]["pid"]}
+            state["reaper"] = process_identity(os.getpid())
         idle_since = None
         while True:
             with self.registry.locked(name) as state:
@@ -631,7 +656,7 @@ class Stands:
                 continue
             try:
                 result = self.down(name)
-            except StageError as error:
+            except Exception as error:  # the watcher is the only cleanup without further commands; it must live on
                 self.log(f"removal failed, retrying later: {error}")
                 self.sleep(busy_retry)
                 continue
@@ -683,24 +708,29 @@ class Stands:
     def up(self, name, sha=None, requester=None, force=False):
         stage = self.config.stage(name)
         me = process_identity(os.getpid())
+        refusal = None
         with self.registry.locked(name) as state:
-            if state["op"] and state["op"]["pid"] != os.getpid() and process_alive(state["op"]):
-                raise StageError("operation_running:" + state["phase"])
-            others = sorted(set(prune(state, utcnow())) - {requester})
-            refusal = None
-            if state["phase"] == "ready" and not force:
-                refusal = "stage_ready"
-            elif state["server"] and others and not force:
-                refusal = "failed_stand_in_use:" + ",".join(others)
-            if refusal:
-                if state["op"] and state["op"]["pid"] == os.getpid():
-                    state["phase"] = "failed" if state["server"] else "absent"
-                    state["op"] = None
-                raise StageError(refusal)
-            state["phase"], state["op"] = "creating", me
-            self.schedule_watcher_locked(name, state)
-            leftover = state["server"]
+            if state["op"] and not owns(state, me) and process_alive(state["op"]):
+                refusal = "operation_running:" + state["phase"]
+            else:
+                others = sorted(set(prune(state, utcnow())) - {requester})
+                if state["phase"] == "ready" and not force:
+                    refusal = "stage_ready"
+                elif state["server"] and others and not force:
+                    refusal = "failed_stand_in_use:" + ",".join(others)
+                if refusal:
+                    if owns(state, me):
+                        state["phase"], state["op"] = ("failed" if state["server"] else "absent"), None
+                        record(state, "create_refused", reason=refusal)
+                else:
+                    state["phase"], state["op"] = "creating", me
+                    self.schedule_watcher_locked(name, state)
+                    leftover = state["server"]
+        if refusal:
+            raise StageError(refusal)
         try:
+            # Automatic deploys stay off until the first deploy of this instance succeeded.
+            self.set_ci(name, False)
             stale = self.owned_servers(name, leftover)
             if stale:
                 # Replacing a failed instance is a removal too: CI must not be using it.
@@ -708,6 +738,10 @@ class Stands:
                 if busy and not force:
                     raise StageError("ci_busy:" + ",".join(f"{run['workflowName']}#{run['databaseId']}" for run in busy))
                 self.save_caddy(name)
+                with self.registry.locked(name) as state:
+                    late = sorted(set(prune(state, utcnow())) - {requester}) if leftover and not force else []
+                if late:
+                    raise StageError("failed_stand_in_use:" + ",".join(late))
                 for server_id in stale:
                     self.request_delete(name, server_id)
                 for server_id in stale:
@@ -744,7 +778,11 @@ class Stands:
                 # Only now may CI deploy: an earlier automatic run could put a newer SHA on the empty host
                 # and the first deploy would then roll it back to the older one.
                 self.set_ci(name, True)
-            newest = self.github.latest_success_sha(github["repo"], github["deploy_after"])
+            try:
+                newest = self.github.latest_success_sha(github["repo"], github["deploy_after"])
+            except StageError as error:
+                self.log(f"newer SHA not checked: {error}")
+                newest = sha
             with self.registry.locked(name) as state:
                 state["phase"], state["op"] = "ready", None
                 state["server"]["ready"] = iso(utcnow())
@@ -755,8 +793,9 @@ class Stands:
             return {"stage": name, "phase": "ready", "server": server_id, "sha": sha, "url": self.url(name)}
         except Exception as error:
             with self.registry.locked(name) as state:
-                state["phase"], state["op"] = "failed", None
-                record(state, "create_failed", error=str(error)[:300])
+                if owns(state, me):
+                    state["phase"], state["op"] = "failed", None
+                    record(state, "create_failed", error=str(error)[:300])
             self.log(f"creation failed: {error}")
             raise
 
