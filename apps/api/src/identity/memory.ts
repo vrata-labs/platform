@@ -48,7 +48,9 @@ export function createMemoryRoomIdentities(getRoom: (roomId: string) => Identity
       identityCount: selection.admissionCount ? identities.get(scope.roomId)?.size ?? 0 : null,
       identities: new Map([...(identities.get(scope.roomId) ?? new Map<string, RoomIdentityRecord>())].filter(([id, identity]) =>
         selected.has(id) || (participantId !== undefined && identity.participantId === participantId)
-        || participantIds.has(identity.participantId))) });
+        || participantIds.has(identity.participantId)
+        || (selection.accountSubject !== undefined && identity.provenance.kind === "grant" && "subject" in identity.provenance
+          && identity.provenance.subject === selection.accountSubject))) });
   };
   const persistence: IdentityPersistence = {
     async read(scope, selection) { return snapshot(scope, selection); },

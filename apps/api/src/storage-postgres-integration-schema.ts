@@ -99,6 +99,9 @@ export async function ensureIntegrationStorageSchema(client: PoolClient): Promis
   await client.query(`create index if not exists integration_grants_room_idx on integration_grants (room_id)`);
   // A revoke is complete once every identity of the grant is revoked and the media epoch rotation is asked for.
   await client.query(`alter table integration_grants add column if not exists revocation_completed_at timestamptz`);
+  // The portal account of a member, presenter or host grant (T12); guest grants have none. Older builds ignore it.
+  await client.query(`alter table integration_grants add column if not exists subject text`);
+  await client.query(`create index if not exists integration_grants_subject_idx on integration_grants (room_id, subject) where subject is not null`);
   await client.query(`
       create table if not exists integration_grant_identities (
         grant_id uuid not null references integration_grants(grant_id),

@@ -1,4 +1,4 @@
-import { activeIdentity, assertActorSession, assertRoomActive, bumpAuthority, checkRevision, fail, validCounter, validId } from "./authority.js";
+import { activeIdentity, assertActorSession, assertRoomActive, bumpAuthority, checkRevision, fail, portalGuest, validCounter, validId } from "./authority.js";
 import type { IdentityTransaction, RoomIdentityActor, RoomIdentityCommand } from "./contracts.js";
 
 /** Runs under the same parent-room lock as admission, recovery and revocation. */
@@ -46,6 +46,7 @@ export function transitionIdentityAuthority(state: IdentityTransaction, actor: R
         break;
       case "transfer-host":
         if (target.identityId === state.authority.hostIdentityId) fail("invalid_identity_input");
+        if (portalGuest(target)) fail("identity_forbidden");
         state.authority.hostIdentityId = target.identityId;
         if (target.identityId === state.authority.presenterIdentityId) revokePresenter();
         break;

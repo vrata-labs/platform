@@ -80,6 +80,14 @@ test("a portal-managed API serves no ad-hoc rooms and keeps direct paths off man
     const tenants = await (await fetch(`${api.baseUrl}/api/tenants`, { headers: admin })).json() as { items: Array<{ tenantId: string; name: string }> };
     assert.equal(tenants.items.find(tenant => tenant.tenantId === managedTenant)?.name, "Acme");
 
+    // The managed tenant, its name and its assets are no public catalogue: only the admin token lists them.
+    assert.equal((await post(api.baseUrl, "/api/assets", { tenantId: managedTenant, kind: "scene", url: "https://cdn.example.test/acme.glb" }, admin)).status, 201);
+    const listed = async (path: string, headers: Record<string, string> = {}) =>
+      (await (await fetch(`${api.baseUrl}${path}`, { headers })).json() as { items: Array<{ tenantId: string }> }).items.map(item => item.tenantId);
+    assert.deepEqual([(await listed("/api/tenants")).includes(managedTenant), (await listed("/api/tenants")).includes("demo-tenant")], [false, true]);
+    assert.equal((await listed("/api/assets")).includes(managedTenant), false);
+    assert.equal((await listed("/api/assets", admin)).includes(managedTenant), true);
+
     assert.equal((await post(api.baseUrl, "/api/rooms", { tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Operator room" }, admin)).status, 201);
     assert.equal((await post(api.baseUrl, "/api/tenants", { tenantId: "operator-tenant", name: "Operator" }, admin)).status, 201);
   } finally {

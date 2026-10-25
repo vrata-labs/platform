@@ -61,9 +61,11 @@ async function load(client: PoolClient, scope: RoomIdentityScope, selection: Ide
     ...(selection.authoritySlots && typeof authority?.owner_identity_id === "string" ? [authority.owner_identity_id] : [])];
   const participantId = selection.participantId ?? recovery?.targetParticipantId ?? null;
   const participantIds = [...(selection.participantIds ?? [])];
-  const rows = ids.length || participantId !== null || participantIds.length ? (await client.query(`select * from room_identities_v2
-    where tenant_id=$1 and room_id=$2 and (identity_id=any($3::text[]) or participant_id=$4 or participant_id=any($5::text[]))`,
-  [scope.tenantId, scope.roomId, ids, participantId, participantIds])).rows : [];
+  const accountSubject = selection.accountSubject ?? null;
+  const rows = ids.length || participantId !== null || participantIds.length || accountSubject !== null ? (await client.query(`select * from room_identities_v2
+    where tenant_id=$1 and room_id=$2 and (identity_id=any($3::text[]) or participant_id=$4 or participant_id=any($5::text[])
+      or (provenance->>'kind' = 'grant' and provenance->>'subject' = $6))`,
+  [scope.tenantId, scope.roomId, ids, participantId, participantIds, accountSubject])).rows : [];
   const identities = new Map<string, RoomIdentityRecord>(rows.map(row => [row.identity_id, {
     tenantId: row.tenant_id, roomId: row.room_id, identityId: row.identity_id, participantId: row.participant_id,
     authEpoch: row.auth_epoch, baseRole: row.base_role, provenance: row.provenance, displayName: row.display_name,

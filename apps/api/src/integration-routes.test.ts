@@ -184,7 +184,9 @@ test("createRoom lets the server own template, owner and scene; unsupported requ
     assert.equal(personal.status, 201, JSON.stringify(personal.body));
     assert.equal(personal.body?.ownerSubject, subject);
     const stored = await h.storage.getRoom(personal.body!.roomId);
-    assert.deepEqual([stored?.roomType, stored?.ownerParticipantId, stored?.visibility, stored?.guestAllowed], ["personal", subject, "private", false]);
+    // The subject stays in managed metadata: no participant id or host hint carries it into the manifest.
+    assert.deepEqual([stored?.roomType, stored?.ownerParticipantId ?? null, stored?.sessionControl?.hostParticipantId ?? null, stored?.managed?.ownerSubject, stored?.visibility, stored?.guestAllowed],
+      ["personal", null, null, subject, "private", false]);
     assert(stored?.sceneBundleUrl?.includes("personal-workspace-v1@"));
   } finally { await h.close(); }
 });

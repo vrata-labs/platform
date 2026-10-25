@@ -55,6 +55,11 @@ export function createRoomIdentityService(storage: RoomIdentityStorage, secret: 
       return issue(await storage.create({ tenantId: input.tenantId, roomId: input.roomId, displayName: input.displayName,
         baseRole: "guest", provenance: { kind: "grant", grantId: input.grantId, role: "guest" } }));
     },
+    /** A portal account: the same identity on every device while its generation is active, a fresh credential each time. */
+    async admitAccountGrant(input: Parameters<RoomIdentityStorage["admitAccount"]>[0]) {
+      const { identity, resumed } = await storage.admitAccount(input);
+      return { ...issue(identity), resumed };
+    },
     async beginWaiting(input: RoomIdentityScope & { inviteTokenHash: string; displayName: string; expiresAt: string }) {
       const waiting = codec.createWaiting(input);
       const pending = await storage.beginWaiting({ ...input, pendingId: waiting.pendingId, secretHash: waiting.secretHash });

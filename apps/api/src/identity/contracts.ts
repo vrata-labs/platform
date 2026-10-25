@@ -13,7 +13,9 @@ export type IdentityProvenance =
   | { kind: "waiting-room"; inviteId: string; requestId: string; role: "guest" | "member" | "presenter" | "host" }
   | { kind: "personal-owner" }
   | { kind: "administrator-recovery"; recoveryId: string }
-  | { kind: "grant"; grantId: string; role: "guest" };
+  | { kind: "grant"; grantId: string; role: "guest" }
+  // A portal account: subject is the portal's acct_<ULID>, kept inside the platform, never a participant id.
+  | { kind: "grant"; grantId: string; role: "member" | "presenter" | "host"; subject: string };
 
 export interface RoomIdentityRecord extends RoomIdentityProof {
   displayName: string;
@@ -120,9 +122,13 @@ export class IdentityStorageError extends Error {
 export interface RoomIdentityStorage {
   create(input: RoomIdentityScope & { displayName: string; baseRole: "guest" | "member"; provenance: IdentityProvenance }): Promise<RoomIdentityRecord>;
   admit(input: RoomIdentityScope & { displayName: string; inviteTokenHash?: string }): Promise<RoomIdentityRecord>;
+  /** The current generation of a portal account in the room, or a new one when it has none active; the grant was consumed before. */
+  admitAccount(input: RoomIdentityScope & { displayName: string; grantId: string; role: "member" | "presenter" | "host"; subject: string; owner?: boolean }): Promise<{ identity: RoomIdentityRecord; resumed: boolean }>;
   beginWaiting(input: RoomIdentityScope & { inviteTokenHash: string; displayName: string; pendingId: string; secretHash: string; expiresAt: string }): Promise<RoomIdentityPending>;
   redeemWaiting(scope: RoomIdentityScope, pendingId: string, secretHash: string): Promise<RoomIdentityRecord>;
   get(scope: RoomIdentityScope, identityId: string): Promise<RoomIdentityRecord | null>;
+  /** The active generation of a portal account in the room, if it entered and was neither revoked nor removed. */
+  accountIdentity(scope: RoomIdentityScope, subject: string): Promise<RoomIdentityRecord | null>;
   authority(scope: RoomIdentityScope): Promise<RoomIdentityAuthority | null>;
   /** Selected participants are read in the same snapshot as the room authority (at most 4096). */
   screenSourceAuthority(scope: RoomIdentityScope, participantIds?: readonly string[]): Promise<RoomScreenSourceAuthority | null>;
@@ -140,7 +146,7 @@ export interface RoomIdentityStorage {
   redeemRecovery(scope: RoomIdentityScope, recoveryId: string, secretHash: string): Promise<RoomIdentityRecord>;
 }
 
-export interface IdentitySelection { identityIds?: string[]; participantId?: string; participantIds?: readonly string[]; recoveryId?: string; inviteTokenHash?: string; pendingId?: string; admissionCount?: boolean; screenPublishers?: boolean; authoritySlots?: boolean }
+export interface IdentitySelection { identityIds?: string[]; participantId?: string; participantIds?: readonly string[]; accountSubject?: string; recoveryId?: string; inviteTokenHash?: string; pendingId?: string; admissionCount?: boolean; screenPublishers?: boolean; authoritySlots?: boolean }
 export interface IdentityTransaction {
   room: IdentityRoomBinding;
   /** Volatile row/object observation token, not a credential or durable room incarnation. */

@@ -229,12 +229,15 @@ export interface ManagedRoomCreateInput {
 
 export type ManagedRoomBlockReason = "room_closed" | "access_expired" | "room_paused";
 export type ManagedRoomGrantPurpose = "visit" | "invite";
+export type ManagedRoomGrantRole = "guest" | "member" | "presenter" | "host";
 
 export interface ManagedRoomGrantRecord {
   grantId: string;
   roomId: string;
   tenantId: string;
-  role: "guest";
+  role: ManagedRoomGrantRole;
+  /** The portal account (acct_<ULID>) of a member, presenter or host grant; null for a guest. */
+  subject: string | null;
   purpose: ManagedRoomGrantPurpose;
   maxUses: number;
   usedCount: number;
@@ -252,7 +255,8 @@ export interface ManagedRoomGrantRecord {
 export interface ManagedRoomGrantInput {
   grantId: string;
   roomId: string;
-  role: "guest";
+  role: ManagedRoomGrantRole;
+  subject?: string | null;
   purpose: ManagedRoomGrantPurpose;
   maxUses: number;
   expiresAt: string;
@@ -378,6 +382,8 @@ export interface IntegrationStore {
   requestManagedRoomRotation(roomId: string): Promise<void>;
   /** Revoked grants whose identities and media were not finished yet (a revoke interrupted on its way). */
   listIncompleteManagedGrantRevocations(): Promise<ManagedRoomGrantRecord[]>;
+  /** Revoked grants of one account in one room whose identities are not yet revoked; an entry finishes them first. */
+  listIncompleteManagedAccountRevocations(roomId: string, subject: string): Promise<ManagedRoomGrantRecord[]>;
   /** Marks the revoke complete and, for a used grant, asks for a new epoch, once: a second caller does nothing. */
   completeManagedGrantRevocation(grantId: string): Promise<void>;
   listManagedRoomsForEnforcement(): Promise<ManagedRoomEnforcementRecord[]>;

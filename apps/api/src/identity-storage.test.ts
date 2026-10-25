@@ -244,6 +244,87 @@ for (const backend of ["memory", "postgres"] as const) {
     assert.equal(Object.getPrototypeOf(lineage), Object.prototype);
   });
 
+  test(`${backend}: a portal account keeps one identity per generation and starts a new participant after revocation`, {
+    skip: backend === "postgres" && !process.env.VRATA_TEST_POSTGRES_URL && !process.env.CI, timeout: 120_000
+  }, async t => {
+    const f = await fixture(t, backend), { scope } = await f.makeRoom(false, undefined, false);
+    const subject = "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VW", other = "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VX";
+    const enter = (accountSubject: string, grantId = randomUUID(), role: "member" | "presenter" | "host" = "member") =>
+      f.service.admitAccountGrant({ ...scope, displayName: "Account", grantId, role, subject: accountSubject });
+
+    // Concurrent first entries of one account end with one identity; another account is another participant.
+    const first = await Promise.all(Array.from({ length: 6 }, () => enter(subject)));
+    assert.equal(new Set(first.map(entry => entry.identity.identityId)).size, 1);
+    assert.equal(first.filter(entry => !entry.resumed).length, 1);
+    const generation = first[0]!.identity;
+    assert.match(generation.participantId, /^acct_[0-9A-HJKMNP-TV-Z]{26}$/);
+    assert.notEqual(generation.participantId, subject, "the subject never becomes the participant id");
+    assert.deepEqual([generation.baseRole, generation.provenance.kind, generation.authEpoch], ["member", "grant", 1]);
+    const stranger = await enter(other);
+    assert.notEqual(stranger.identity.identityId, generation.identityId);
+
+    // A second device resumes the generation with a fresh credential for the same participant.
+    const device = await enter(subject);
+    assert.deepEqual([device.resumed, device.identity.identityId, device.identity.participantId], [true, generation.identityId, generation.participantId]);
+    assert.notEqual(device.credential, first[0]!.credential);
+    assert.ok(await f.service.resolveCredential(device.credential, scope));
+
+    // Revocation stays terminal: the next grant starts a new participant and old credentials stay dead.
+    await f.ids.revoke(scope, generation.identityId, generation.authEpoch);
+    assert.equal(await f.service.resolveCredential(device.credential, scope), null);
+    const next = await enter(subject);
+    assert.equal(next.resumed, false);
+    assert.notEqual(next.identity.identityId, generation.identityId);
+    assert.notEqual(next.identity.participantId, generation.participantId);
+    assert.equal((await f.ids.get(scope, generation.identityId))!.revokedAt !== null, true);
+    assert.deepEqual((await enter(subject)).identity.identityId, next.identity.identityId);
+
+    // A host's removal ends the generation too: the account comes back only as a new participant.
+    await f.ids.transition(scope, admin, (await f.ids.authority(scope))!.revision, { type: "remove", targetParticipantId: next.identity.participantId });
+    const afterRemoval = await enter(subject);
+    assert.notEqual(afterRemoval.identity.participantId, next.identity.participantId);
+
+    // A locked room lets a current generation return but admits no new one.
+    await f.ids.transition(scope, admin, (await f.ids.authority(scope))!.revision, { type: "lock" });
+    assert.equal((await enter(subject)).identity.identityId, afterRemoval.identity.identityId);
+    await assert.rejects(enter("acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VY"), code("room_blocked"));
+
+    for (const input of [{ subject: "acct_lowercase0000000000000000" }, { subject: generation.participantId.replace("acct_", "acct-") }, { role: "guest" }, { grantId: "" }]) {
+      await assert.rejects(f.ids.admitAccount({ ...scope, displayName: "Account", grantId: randomUUID(), role: "member", subject, ...input } as Parameters<typeof f.ids.admitAccount>[0]),
+        code("invalid_identity_input"), JSON.stringify(input));
+    }
+  });
+
+  test(`${backend}: account grants make only the first host and a presenter of a new generation`, {
+    skip: backend === "postgres" && !process.env.VRATA_TEST_POSTGRES_URL && !process.env.CI, timeout: 120_000
+  }, async t => {
+    const f = await fixture(t, backend), { scope } = await f.makeRoom(false, undefined, false);
+    const [owner, colleague, speaker] = ["acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VW", "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VX", "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VY"];
+    const enter = (subject: string, role: "member" | "presenter" | "host") =>
+      f.service.admitAccountGrant({ ...scope, displayName: "Account", grantId: randomUUID(), role, subject });
+    const roleOf = async (entry: Awaited<ReturnType<typeof enter>>) => (await f.ids.resolve(entry.identity))!.role;
+
+    // Two first host grants at once: one host, the other a member; the losing grant is not turned into an error.
+    const [a, b] = await Promise.all([enter(owner, "host"), enter(colleague, "host")]);
+    assert.deepEqual([await roleOf(a), await roleOf(b)].sort(), ["host", "member"]);
+    const host = (await roleOf(a)) === "host" ? a : b, other = host === a ? b : a;
+    assert.equal(await roleOf(await enter(host === a ? owner : colleague, "host")), "host", "a second device of the host stays host");
+
+    // After a transfer an old host grant of the former host gives no host back.
+    const hostProof = f.mutationProof(host.identity);
+    await f.ids.transferHost(hostProof, other.identity.identityId, (await f.ids.authority(scope))!.revision);
+    assert.equal(await roleOf(await enter(host === a ? owner : colleague, "host")), "member");
+    await f.ids.revoke(scope, other.identity.identityId, other.identity.authEpoch);
+    assert.equal((await f.ids.authority(scope))!.hostIdentityId, null);
+    assert.equal(await roleOf(await enter(host === a ? colleague : owner, "host")), "member", "a vacancy after revision 0 is filled only explicitly");
+
+    // A presenter grant presents in a new generation; a returning one keeps the host's decision.
+    const presenter = await enter(speaker, "presenter");
+    assert.equal(await roleOf(presenter), "presenter");
+    await f.ids.transition(scope, admin, (await f.ids.authority(scope))!.revision, { type: "revoke-presenter", targetParticipantId: presenter.identity.participantId });
+    assert.equal(await roleOf(await enter(speaker, "presenter")), "member");
+  });
+
   test(`${backend}: identity admission budgets serialize concurrent peers and expire without touching credentials`, {
     skip: backend === "postgres" && !process.env.VRATA_TEST_POSTGRES_URL && !process.env.CI, timeout: 120_000
   }, async t => {

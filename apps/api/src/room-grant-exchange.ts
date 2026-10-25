@@ -1,5 +1,6 @@
 import { IdentityStorageError } from "./identity/contracts.js";
 import { v2RoomSessionLifetimeSeconds } from "./identity/http-admission.js";
+import { completeGrantRevocation } from "./grant-revocation.js";
 import { createRoomIdentityService } from "./identity/service.js";
 import { managedRoomCutoffMs } from "./room-session-control.js";
 import { grantCodeHash, isGrantCode } from "./room-grants.js";
@@ -81,9 +82,20 @@ export async function exchangeRoomGrant(input: {
   const scope = { tenantId: consumed.room.tenantId, roomId };
   const service = createRoomIdentityService(storage.roomIdentities, input.secret, now,
     { identityLifetimeSeconds: IDENTITY_LIFETIME_SECONDS, sessionLifetimeSeconds: 900, sessionDeadlineSeconds: Math.floor(cutoffMs / 1000) });
-  let issued: Awaited<ReturnType<typeof service.admitGrant>>;
+  const account = grant.subject && grant.role !== "guest" ? { subject: grant.subject, role: grant.role } : null;
+  // A revoke of this account that has not reached its identities yet is finished first, so this entry never resumes
+  // a generation the portal already ended (and a late finisher never ends this entry).
+  if (account) {
+    for (const revoked of await storage.listIncompleteManagedAccountRevocations(roomId, account.subject)) await completeGrantRevocation(storage, revoked);
+  }
+  let issued: Awaited<ReturnType<typeof service.admitGrant>> & { resumed?: boolean };
   try {
-    issued = await service.admitGrant({ ...scope, displayName: displayName || grant.displayName || "Guest", grantId: grant.grantId });
+    // An account grant resumes the account's current generation in this room (the same participant on every
+    // device) or starts the next one; a guest grant always creates a new guest.
+    issued = account
+      ? await service.admitAccountGrant({ ...scope, displayName: displayName || grant.displayName || "Participant", grantId: grant.grantId, role: account.role, subject: account.subject,
+        owner: consumed.room.roomType === "personal" && consumed.room.managed?.ownerSubject === account.subject })
+      : await service.admitGrant({ ...scope, displayName: displayName || grant.displayName || "Guest", grantId: grant.grantId });
   } catch (error) {
     await storage.releaseManagedRoomGrantUse(grant.grantId).catch(() => undefined);
     if (error instanceof IdentityStorageError && error.code === "room_blocked") return failure("room_closed", "The room does not admit new participants", requestId);
@@ -93,8 +105,9 @@ export async function exchangeRoomGrant(input: {
   try {
     await storage.recordManagedRoomGrantIdentity(grant.grantId, issued.identity.identityId);
   } catch (error) {
-    // An identity the grant cannot revoke later must not stay usable.
-    await withdraw();
+    // A guest identity the grant cannot revoke later must not stay usable. An account generation needs no link: a
+    // revoke finds it by the account and the grant that created it, and another device may already use it.
+    if (!account) await withdraw();
     await storage.releaseManagedRoomGrantUse(grant.grantId).catch(() => undefined);
     throw error;
   }
@@ -102,7 +115,8 @@ export async function exchangeRoomGrant(input: {
   // identity is recorded closes the gap: either the revoke lists this identity, or this exchange sees the revoke.
   const current = await storage.getManagedRoomGrant(grant.grantId);
   if (!current || current.revokedAt) {
-    await withdraw();
+    // Only what this exchange created: a resumed generation belongs to another entry, which the revoke judges itself.
+    if (!issued.resumed) await withdraw();
     return failure("grant_revoked", "The invitation was withdrawn", requestId);
   }
   let session: Awaited<ReturnType<typeof service.issueSession>>;
@@ -117,7 +131,8 @@ export async function exchangeRoomGrant(input: {
     body: {
       roomId,
       participantId: issued.identity.participantId,
-      role: "guest",
+      // The role the room gives now: a host grant makes only the first host (identity v2 rules).
+      role: session.role,
       sessionToken: session.sessionToken,
       sessionExpiresAt: new Date(session.expiresAtSeconds * 1000).toISOString(),
       cutoff: new Date(cutoffMs).toISOString(),

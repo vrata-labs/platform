@@ -59,7 +59,7 @@ import { validId } from "./identity/authority.js";
 import { createRoomIdentityService } from "./identity/service.js";
 import { createRoomIdentityCodec } from "@vrata/shared-types/identity-credential";
 import { admitV2RoomSession, type V2AdmissionRequest } from "./identity/http-admission.js";
-import { currentSessionControlV2, resolveRoomRequestV2, untrustedSessionRoom, type VerifiedRoomRequestV2 } from "./identity/http-authority.js";
+import { currentSessionControlV2, ManagedRoomAccessBlocked, resolveRoomRequestV2, untrustedSessionRoom, type VerifiedRoomRequestV2 } from "./identity/http-authority.js";
 import { applyRoomLifecycleV2, lifecycleV2Error, roomIdentityActorFromHttp } from "./identity/http-lifecycle.js";
 import { createMediaScreenService } from "./media-screen-service.js";
 import { IdentityStorageError } from "./identity/contracts.js";
@@ -848,6 +848,18 @@ async function isManagedTenant(storage: Awaited<typeof storagePromise>, tenantId
   return typeof tenantId === "string" && (await storage.getIntegrationTenant(tenantId)) !== null;
 }
 
+/** The managed (integration) tenants among these ids; listings hide them from everyone but the admin token. */
+async function managedTenantIds(storage: Awaited<typeof storagePromise>, tenantIds: readonly string[]): Promise<Set<string>> {
+  const unique = [...new Set(tenantIds)];
+  const managed = await Promise.all(unique.map(async (tenantId) => [tenantId, await isManagedTenant(storage, tenantId)] as const));
+  return new Set(managed.filter(([, isManaged]) => isManaged).map(([tenantId]) => tenantId));
+}
+
+function isAdminRequest(request: IncomingMessage): boolean {
+  const actorResult = resolveControlPlaneActor(request);
+  return actorResult.ok && actorResult.actor.actorType === "admin-token";
+}
+
 async function resolveRoomTenantId(roomId: string): Promise<string> {
   const storage = await storagePromise;
   const room = await storage.getRoom(roomId);
@@ -1509,8 +1521,10 @@ function normalizeDocumentSurfaceId(input: unknown): string | null | undefined {
   return /^[A-Za-z0-9._:-]{1,80}$/.test(value) ? value : undefined;
 }
 
-async function canReadRoomDetails(request: IncomingMessage, room: RoomRecord): Promise<boolean> {
-  if (!isPrivateRoom(room)) {
+async function canReadRoomDetails(request: IncomingMessage, room: RoomRecord, options: { managedPrivate?: boolean } = {}): Promise<boolean> {
+  // The record of a portal-managed room (its name and access window) is the customer's even when the room is unlisted;
+  // the manifest stays readable for the runtime's boot.
+  if (!isPrivateRoom(room) && !(options.managedPrivate && room.managed)) {
     return true;
   }
   if (canReadPrivateRoomWithControlPlaneActor(request, room.roomId)) {
@@ -2460,20 +2474,28 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  // Portal-managed tenants are the portal's customers: their names, assets and rooms are no public catalogue.
+  // Only the admin token lists them; a stand-alone platform without managed tenants answers as before.
   if (method === "GET" && url.pathname === "/api/assets") {
-    json(response, 200, { items: await storage.listAssets() });
+    const assets = await storage.listAssets();
+    const hidden = isAdminRequest(request) ? new Set<string>() : await managedTenantIds(storage, assets.map((asset) => asset.tenantId));
+    json(response, 200, { items: assets.filter((asset) => !hidden.has(asset.tenantId)) });
     return;
   }
 
   if (method === "GET" && url.pathname === "/api/tenants") {
-    json(response, 200, { items: await storage.listTenants() });
+    const tenants = await storage.listTenants();
+    const hidden = isAdminRequest(request) ? new Set<string>() : await managedTenantIds(storage, tenants.map((tenant) => tenant.tenantId));
+    json(response, 200, { items: tenants.filter((tenant) => !hidden.has(tenant.tenantId)) });
     return;
   }
 
   if (method === "GET" && url.pathname === "/api/rooms") {
     const actorResult = resolveControlPlaneActor(request);
     const canListPrivate = actorResult.ok && actorResult.actor.actorType === "admin-token";
-    const rooms = (await storage.listRooms()).filter((room) => canListPrivate || (!isRoomDisabled(room) && (!isRoomAccessPolicyEnabled() || sanitizeRoomVisibility(room.visibility) === "public")));
+    const listed = await storage.listRooms();
+    const hidden = canListPrivate ? new Set<string>() : await managedTenantIds(storage, listed.map((room) => room.tenantId));
+    const rooms = listed.filter((room) => canListPrivate || (!hidden.has(room.tenantId) && !isRoomDisabled(room) && (!isRoomAccessPolicyEnabled() || sanitizeRoomVisibility(room.visibility) === "public")));
     json(response, 200, { items: rooms.map((room) => ({ ...roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request) })) });
     return;
   }
@@ -2780,6 +2802,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       if (personalBearer) return json(response, 426, { error: "identity_required", reason: "identity_upgrade_required" });
       const tenantId = typeof payload.tenantId === "string" && payload.tenantId.trim() ? payload.tenantId.trim() : "demo-tenant";
       if (!(await storage.listTenants()).some(item => item.tenantId === tenantId)) return json(response, 400, { error: "invalid_tenant" });
+      // Personal rooms of a portal-managed tenant come only from the integration API (ownerSubject), on every floor.
+      if (await isManagedTenant(storage, tenantId)) return writeManagedResourceDenied(request, response, "tenant", tenantId);
       if (payload.identityCredential !== undefined) {
         if (typeof payload.roomId !== "string") return json(response, 409, { error: "identity_required", reason: "identity_recovery_required" });
         const existing = await storage.getRoom(payload.roomId);
@@ -4023,7 +4047,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const room = await storage.getRoom(decodeURIComponent(roomItemMatch[1]));
     if (!room) return json(response, 404, { error: "room_not_found" });
     if (isRoomDisabled(room) && !canManageDisabledRoom(request)) return json(response, 403, { error: "room_access_denied", reason: "room_disabled" });
-    if (!(await canReadRoomDetails(request, room))) return json(response, 404, { error: "room_not_found" });
+    if (!(await canReadRoomDetails(request, room, { managedPrivate: true }))) return json(response, 404, { error: "room_not_found" });
     const metadata = { ...roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request, room) };
     const readActor = resolveControlPlaneActor(request);
     const owner: { currentOwnerParticipantId?: string | null } = readActor.ok && readActor.actor.actorType === "admin-token"
@@ -4337,6 +4361,11 @@ export function startApiServer(port = apiPort) {
       }
       if (error instanceof InvalidSessionTokenInput) {
         json(response, 400, { error: "invalid_session_token" });
+        return;
+      }
+      if (error instanceof ManagedRoomAccessBlocked) {
+        incrementCounter(metrics.roomAccessDeniedTotal, error.reason);
+        json(response, sessionBlockStatusCode(error.reason), { error: "room_access_denied", reason: error.reason, requestId: getRequestId(request) });
         return;
       }
       if (error instanceof IdentityBoundaryError) {

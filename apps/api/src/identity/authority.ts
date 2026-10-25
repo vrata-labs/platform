@@ -3,6 +3,11 @@ import { IdentityStorageError, type IdentityTransaction, type RoomIdentityActor,
 
 export function fail(code: ConstructorParameters<typeof IdentityStorageError>[0]): never { throw new IdentityStorageError(code); }
 export const validId = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 200 && !/[\u0000-\u001f]/.test(value);
+export const validAccountSubject = (value: unknown): value is string => typeof value === "string" && /^acct_[0-9A-HJKMNP-TV-Z]{26}$/.test(value);
+/** A guest of a portal grant never holds host rights (platform-integration-v1, section 1): only an account can host a managed room. */
+export function portalGuest(identity: RoomIdentityRecord): boolean {
+  return identity.provenance.kind === "grant" && identity.provenance.role === "guest";
+}
 export const validCounter = (value: unknown): value is number => Number.isInteger(value) && Number(value) >= 0 && Number(value) <= 2_147_483_647;
 
 export function identityLifecycle(input?: RoomSessionControlState | null): RoomIdentityLifecycle {
