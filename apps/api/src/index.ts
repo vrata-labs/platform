@@ -848,6 +848,18 @@ async function isManagedTenant(storage: Awaited<typeof storagePromise>, tenantId
   return typeof tenantId === "string" && (await storage.getIntegrationTenant(tenantId)) !== null;
 }
 
+/** The managed (integration) tenants among these ids; listings hide them from everyone but the admin token. */
+async function managedTenantIds(storage: Awaited<typeof storagePromise>, tenantIds: readonly string[]): Promise<Set<string>> {
+  const unique = [...new Set(tenantIds)];
+  const managed = await Promise.all(unique.map(async (tenantId) => [tenantId, await isManagedTenant(storage, tenantId)] as const));
+  return new Set(managed.filter(([, isManaged]) => isManaged).map(([tenantId]) => tenantId));
+}
+
+function isAdminRequest(request: IncomingMessage): boolean {
+  const actorResult = resolveControlPlaneActor(request);
+  return actorResult.ok && actorResult.actor.actorType === "admin-token";
+}
+
 async function resolveRoomTenantId(roomId: string): Promise<string> {
   const storage = await storagePromise;
   const room = await storage.getRoom(roomId);
@@ -2460,20 +2472,28 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  // Portal-managed tenants are the portal's customers: their names, assets and rooms are no public catalogue.
+  // Only the admin token lists them; a stand-alone platform without managed tenants answers as before.
   if (method === "GET" && url.pathname === "/api/assets") {
-    json(response, 200, { items: await storage.listAssets() });
+    const assets = await storage.listAssets();
+    const hidden = isAdminRequest(request) ? new Set<string>() : await managedTenantIds(storage, assets.map((asset) => asset.tenantId));
+    json(response, 200, { items: assets.filter((asset) => !hidden.has(asset.tenantId)) });
     return;
   }
 
   if (method === "GET" && url.pathname === "/api/tenants") {
-    json(response, 200, { items: await storage.listTenants() });
+    const tenants = await storage.listTenants();
+    const hidden = isAdminRequest(request) ? new Set<string>() : await managedTenantIds(storage, tenants.map((tenant) => tenant.tenantId));
+    json(response, 200, { items: tenants.filter((tenant) => !hidden.has(tenant.tenantId)) });
     return;
   }
 
   if (method === "GET" && url.pathname === "/api/rooms") {
     const actorResult = resolveControlPlaneActor(request);
     const canListPrivate = actorResult.ok && actorResult.actor.actorType === "admin-token";
-    const rooms = (await storage.listRooms()).filter((room) => canListPrivate || (!isRoomDisabled(room) && (!isRoomAccessPolicyEnabled() || sanitizeRoomVisibility(room.visibility) === "public")));
+    const listed = await storage.listRooms();
+    const hidden = canListPrivate ? new Set<string>() : await managedTenantIds(storage, listed.map((room) => room.tenantId));
+    const rooms = listed.filter((room) => canListPrivate || (!hidden.has(room.tenantId) && !isRoomDisabled(room) && (!isRoomAccessPolicyEnabled() || sanitizeRoomVisibility(room.visibility) === "public")));
     json(response, 200, { items: rooms.map((room) => ({ ...roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request) })) });
     return;
   }
@@ -2780,6 +2800,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       if (personalBearer) return json(response, 426, { error: "identity_required", reason: "identity_upgrade_required" });
       const tenantId = typeof payload.tenantId === "string" && payload.tenantId.trim() ? payload.tenantId.trim() : "demo-tenant";
       if (!(await storage.listTenants()).some(item => item.tenantId === tenantId)) return json(response, 400, { error: "invalid_tenant" });
+      // Personal rooms of a portal-managed tenant come only from the integration API (ownerSubject), on every floor.
+      if (await isManagedTenant(storage, tenantId)) return writeManagedResourceDenied(request, response, "tenant", tenantId);
       if (payload.identityCredential !== undefined) {
         if (typeof payload.roomId !== "string") return json(response, 409, { error: "identity_required", reason: "identity_recovery_required" });
         const existing = await storage.getRoom(payload.roomId);

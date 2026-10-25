@@ -138,6 +138,16 @@ test("portal-managed rooms on PostgreSQL: grants, exchange, cutoff, close, epoch
     assert.equal((await exchange(demoId, visitCode)).body?.error.code, "grant_invalid", "a visit grant has one use");
     assert.equal((await exchange(referenceId, visitCode)).body?.error.code, "grant_invalid", "a code of room A does not open room B");
 
+    // Listings and personal rooms keep off the managed tenant at floor two, for an rs2 of its own room too.
+    const listedTenants = async (path: string, headers: Record<string, string> = {}) =>
+      ((await call("GET", path, { headers })).body!.items as Array<{ tenantId: string }>).map(item => item.tenantId);
+    for (const headers of [{}, { authorization: `Bearer ${host.body!.sessionToken}` }] as Array<Record<string, string>>) {
+      for (const path of ["/api/tenants", "/api/assets", "/api/rooms"]) assert.equal((await listedTenants(path, headers)).includes(tenant), false, path);
+    }
+    assert.equal((await listedTenants("/api/rooms", adminHeaders)).includes(tenant), true);
+    const personal = await call("POST", "/api/personal-room", { body: { identityProtocolVersion: 2, tenantId: tenant, displayName: "Squatter" } });
+    assert.deepEqual([personal.status, personal.body?.reason], [403, "managed_resource"]);
+
     // visit (1) + invite (3) fill the four places; a further invite finds the room full.
     const invite = await call("POST", grantsPath, { body: { role: "guest", purpose: "invite", maxUses: 3 }, key: idempotencyKey() });
     const inviteCode = codeOf(invite.body!.entryUrl);
