@@ -37,7 +37,7 @@ This document is the source of truth for where Vrata tests live, where they run,
 `.github/workflows/ci.yml` runs:
 
 - `core`: build (the per-package `tsc` that `lint` and `typecheck` also run), compose config validation, production preflight, rollback bases and unit/integration tests;
-- `e2e`: local Playwright e2e excluding `@staging` and `@private-assets`, including the M0.5 acceptance specs, split into four parallel shards by measured duration (`tools/e2e-shard.mjs`, weights in `tools/e2e-shard-weights.json`); each shard starts its own services and runs one worker;
+- `e2e`: local Playwright e2e excluding `@staging` and `@private-assets`, including the M0.5 acceptance specs, split into six parallel shards by measured duration (`tools/e2e-shard.mjs`, weights in `tools/e2e-shard-weights.json`); each shard starts its own services and runs one worker;
 - `changes`: a diff made only of `docs/` and Markdown skips the e2e shards, unit tests still run;
 - `checks`: the required check; it passes only when `core` and every e2e shard succeeded (or e2e was skipped for a documentation-only change);
 - asset pipeline validation.
