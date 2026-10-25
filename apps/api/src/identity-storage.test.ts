@@ -136,8 +136,9 @@ for (const backend of ["memory", "postgres"] as const) {
     await f.ids.transition(scope, admin, 1, { type: "grant-presenter", targetParticipantId: presenter.participantId });
     const initial = await f.ids.screenSourceAuthority(scope);
     assert.match(initial!.observationVersion!, backend === "postgres" ? /^pg:\d+$/ : /^mem:[a-f0-9-]{36}$/);
+    assert.match(initial!.mediaIncarnation!, /^[a-f0-9]{32}$/);
     assert.deepEqual(initial, { revision: 2, roomActive: true, publisherParticipantIds: [host.participantId, presenter.participantId].sort(),
-      removedParticipantIds: [], observationVersion: initial!.observationVersion });
+      removedParticipantIds: [], observationVersion: initial!.observationVersion, mediaIncarnation: initial!.mediaIncarnation });
     assert.equal(Object.isFrozen(initial), true);
     for (let index = 0; index < 4; index++) {
       const revision = 2 + index;
@@ -157,12 +158,13 @@ for (const backend of ["memory", "postgres"] as const) {
     await f.ids.transition(scope, admin, current.revision, { type: "end" });
     const ended = await f.ids.screenSourceAuthority(scope);
     assert.deepEqual(ended, { revision: current.revision + 1, roomActive: false, publisherParticipantIds: [],
-      removedParticipantIds: [], observationVersion: ended!.observationVersion });
+      removedParticipantIds: [], observationVersion: ended!.observationVersion, mediaIncarnation: initial!.mediaIncarnation });
     const { scope: disabledScope } = await f.makeRoom(false, undefined, false);
     await f.storage.updateRoom(disabledScope.roomId, { status: "disabled" });
     const disabled = await f.ids.screenSourceAuthority(disabledScope);
     assert.deepEqual(disabled, { revision: 0, roomActive: false, publisherParticipantIds: [],
-      removedParticipantIds: [], observationVersion: disabled!.observationVersion });
+      removedParticipantIds: [], observationVersion: disabled!.observationVersion, mediaIncarnation: disabled!.mediaIncarnation });
+    assert.notEqual(disabled!.mediaIncarnation, initial!.mediaIncarnation, "each room record has its own generation");
     await f.storage.deleteRoom(scope.roomId);
     assert.equal(await f.ids.screenSourceAuthority(scope), null);
   });
@@ -202,6 +204,44 @@ for (const backend of ["memory", "postgres"] as const) {
     const recreated = (await f.ids.screenSourceAuthority(scope))!;
     assert.equal(recreated.revision, 0); assert.deepEqual(recreated.removedParticipantIds, []);
     assert.notEqual(recreated.observationVersion, first.observationVersion, "an old five-second observation cannot carry across a new room record");
+    assert.notEqual(recreated.mediaIncarnation, first.mediaIncarnation, "a recreated room is a new media generation");
+    assert.equal(replaced.mediaIncarnation, first.mediaIncarnation, "a metadata update keeps the generation");
+  });
+
+  test(`${backend}: selected media lineage comes from the same snapshot and distinguishes revoked, removed, absent and recovered identities`, {
+    skip: backend === "postgres" && !process.env.VRATA_TEST_POSTGRES_URL && !process.env.CI, timeout: 120_000
+  }, async t => {
+    const f = await fixture(t, backend), { scope, legacy } = await f.makeRoom();
+    await f.storage.identityProtocol.raise(2);
+    // Legacy-host recovery is valid only before any other authority transition.
+    const first = await f.service.redeemRecovery((await f.issueRecovery(scope, legacy, "host")).credential, scope);
+    const recovered = await f.service.redeemRecovery((await f.issueRecovery(scope, legacy, "host")).credential, scope);
+    assert.equal(recovered.identity.participantId, first.identity.participantId);
+    assert.equal(recovered.identity.authEpoch, first.identity.authEpoch + 1, "recovery keeps the participant and advances its epoch");
+    const active = (await f.create(scope)).identity, revoked = (await f.create(scope)).identity, removed = (await f.create(scope)).identity;
+    await f.ids.revoke(scope, revoked.identityId, revoked.authEpoch);
+    await f.ids.transition(scope, admin, (await f.ids.authority(scope))!.revision, { type: "remove", targetParticipantId: removed.participantId });
+    const ids = [removed.participantId, "never-admitted", active.participantId, revoked.participantId];
+    const snapshot = (await f.ids.screenSourceAuthority(scope, ids))!;
+    assert.deepEqual(snapshot.participants, { [active.participantId]: { epoch: 1, active: true },
+      [revoked.participantId]: { epoch: 2, active: false }, [removed.participantId]: { epoch: 2, active: false } });
+    assert.equal(Object.isFrozen(snapshot.participants), true);
+    assert.equal((await f.ids.screenSourceAuthority(scope))!.participants, undefined, "no lineage unless selected");
+    assert.deepEqual((await f.ids.screenSourceAuthority(scope, []))!.participants, {});
+    await assert.rejects(f.ids.screenSourceAuthority(scope, ["x".repeat(201)]), code("invalid_identity_input"));
+    await assert.rejects(f.ids.screenSourceAuthority(scope, Array.from({ length: 4097 }, (_, index) => `p${index}`)), code("invalid_identity_input"));
+    const after = (await f.ids.screenSourceAuthority(scope, [recovered.identity.participantId]))!;
+    assert.deepEqual(after.participants, { [recovered.identity.participantId]: { epoch: recovered.identity.authEpoch, active: true } });
+    assert.match(await f.ids.mediaIncarnation(scope) ?? "", /^[a-f0-9]{32}$/);
+    assert.equal(await f.ids.mediaIncarnation(scope), after.mediaIncarnation);
+    // A recovered legacy ID can be any valid string; it is an own key, never a prototype write.
+    const odd = await f.makeRoom(false, "__proto__");
+    const proto = await f.service.redeemRecovery((await f.issueRecovery(odd.scope, "__proto__", "host")).credential, odd.scope);
+    assert.equal(proto.identity.participantId, "__proto__");
+    const lineage = (await f.ids.screenSourceAuthority(odd.scope, ["__proto__"]))!.participants!;
+    assert.equal(Object.hasOwn(lineage, "__proto__"), true);
+    assert.deepEqual(Object.getOwnPropertyDescriptor(lineage, "__proto__")?.value, { epoch: proto.identity.authEpoch, active: true });
+    assert.equal(Object.getPrototypeOf(lineage), Object.prototype);
   });
 
   test(`${backend}: identity admission budgets serialize concurrent peers and expire without touching credentials`, {

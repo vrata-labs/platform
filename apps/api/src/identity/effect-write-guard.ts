@@ -13,6 +13,26 @@ export interface RoomEffectGuard extends RoomIdentityProof {
   /** Exact current role and ownership of the original proof, when set; false is enforced, never treated as unset. */
   expectedRole?: RoomRole;
   expectedIsOwner?: boolean;
+  /** Media issuance: the boundary and room generation the prepared grant names. The fence holds the
+   * policy row FOR SHARE, so a codec raise waits for it and a grant naming a retired codec is refused. */
+  media?: MediaGrantPin;
+}
+
+export interface MediaGrantPin { readonly codec: 2 | 3; readonly namespace: string; readonly incarnation?: string }
+
+/** The prepared media grant names a boundary or room generation that is no longer current; a retry re-prepares it. */
+export class MediaBoundaryChanged extends Error {
+  constructor() { super("media_boundary_changed"); this.name = "MediaBoundaryChanged"; }
+}
+
+/** Codec 3 names exactly one room incarnation; codec 2 names none. */
+export function assertMediaGrantPin(pin: MediaGrantPin | undefined,
+  current: { codec: unknown; namespace: unknown; incarnation: unknown }): void {
+  if (!pin) return;
+  if ((pin.codec !== 2 && pin.codec !== 3) || typeof pin.namespace !== "string"
+    || (pin.codec === 3) !== (typeof pin.incarnation === "string")) throw new IdentityStorageError("invalid_identity_input");
+  if (current.codec !== pin.codec || current.namespace !== pin.namespace
+    || pin.codec === 3 && current.incarnation !== pin.incarnation) throw new MediaBoundaryChanged();
 }
 
 /** Valid only while the callback holds its room fence; never cache this actor. */

@@ -63,6 +63,15 @@ const guards = [
     THEN RAISE EXCEPTION 'identity_protocol_namespace_immutable' USING ERRCODE = '23514'; END IF;
     RETURN NEW;
   END;` },
+  { table: "room_identity_protocol_policy", name: "vrata_identity_media_codec_monotonic", body: `BEGIN
+    IF NEW.media_codec < OLD.media_codec THEN RAISE EXCEPTION 'media_codec_downgrade_forbidden' USING ERRCODE = '23514'; END IF;
+    RETURN NEW;
+  END;` },
+  { table: "rooms", name: "vrata_room_media_incarnation_immutable", body: `BEGIN
+    IF NEW.media_incarnation IS DISTINCT FROM OLD.media_incarnation
+    THEN RAISE EXCEPTION 'immutable_room_media_incarnation' USING ERRCODE = '23514'; END IF;
+    RETURN NEW;
+  END;` },
   { table: "room_invites", name: "vrata_identity_invite_v2_immutable", body: `BEGIN
     IF ROW(NEW.invite_id, NEW.room_id, NEW.token_hash, NEW.role, NEW.waiting_room_enabled, NEW.protocol_version, NEW.created_at, NEW.created_by)
       IS DISTINCT FROM ROW(OLD.invite_id, OLD.room_id, OLD.token_hash, OLD.role, OLD.waiting_room_enabled, OLD.protocol_version, OLD.created_at, OLD.created_by)
@@ -105,6 +114,8 @@ const constraints = [
   ["room_identity_protocol_policy", "identity_protocol_pk", "PRIMARY KEY (singleton)"],
   ["room_identity_protocol_policy", "identity_protocol_singleton", "CHECK (singleton)"],
   ["room_identity_protocol_policy", "identity_protocol_minimum", "CHECK ((minimum_protocol >= 1))"],
+  ["room_identity_protocol_policy", "identity_protocol_media_codec", "CHECK (((media_codec = ANY (ARRAY[2, 3])) AND ((media_codec = 2) OR (minimum_protocol >= 2))))"],
+  ["rooms", "rooms_media_incarnation", "CHECK ((media_incarnation ~ '^[a-f0-9]{32}$'::text))"],
   ["room_identity_protocol_policy", "identity_protocol_namespace", "CHECK ((((minimum_protocol = 1) AND (media_namespace IS NULL)) OR ((minimum_protocol >= 2) AND (media_namespace ~ '^[a-f0-9]{32}$'::text))))"],
   ["room_identity_admission_buckets_v2", "identity_admission_bucket_pk", "PRIMARY KEY (origin_hash, kind, window_ms, window_start_ms)"],
   ["room_identity_admission_buckets_v2", "identity_admission_bucket_hash", "CHECK ((origin_hash ~ '^[a-f0-9]{64}$'::text))"],
@@ -149,6 +160,8 @@ const columns = [
   ["room_identity_protocol_policy", "singleton", "boolean", true],
   ["room_identity_protocol_policy", "minimum_protocol", "integer", true],
   ["room_identity_protocol_policy", "media_namespace", "text", false],
+  ["room_identity_protocol_policy", "media_codec", "integer", true],
+  ["rooms", "media_incarnation", "text", true],
   ["room_identity_admission_buckets_v2", "origin_hash", "text", true],
   ["room_identity_admission_buckets_v2", "kind", "text", true],
   ["room_identity_admission_buckets_v2", "window_ms", "integer", true],
@@ -213,6 +226,20 @@ export async function installRoomIdentitySchema(client: PoolClient): Promise<voi
           check ((minimum_protocol=1 and media_namespace is null) or (minimum_protocol>=2 and media_namespace ~ '^[a-f0-9]{32}$'));
       end if;
     end; $namespace$;
+    -- Media lineage: the policy's monotonic media codec and a durable per-room generation.
+    -- A recreated room row receives a fresh incarnation; ordinary updates never change it.
+    alter table room_identity_protocol_policy add column if not exists media_codec integer not null default 2;
+    alter table rooms add column if not exists media_incarnation text not null default replace(gen_random_uuid()::text, '-', '');
+    do $media$
+    begin
+      if not exists (select 1 from pg_constraint where conrelid='room_identity_protocol_policy'::regclass and conname='identity_protocol_media_codec') then
+        alter table room_identity_protocol_policy add constraint identity_protocol_media_codec
+          check (media_codec in (2,3) and (media_codec = 2 or minimum_protocol >= 2));
+      end if;
+      if not exists (select 1 from pg_constraint where conrelid='rooms'::regclass and conname='rooms_media_incarnation') then
+        alter table rooms add constraint rooms_media_incarnation check (media_incarnation ~ '^[a-f0-9]{32}$');
+      end if;
+    end; $media$;
     create unique index if not exists rooms_identity_scope_idx on rooms (tenant_id, room_id);
     create table if not exists room_identities_v2 (
       tenant_id text not null, room_id text not null, identity_id text not null,

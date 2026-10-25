@@ -1,14 +1,15 @@
 import { RoomServiceClient } from "livekit-server-sdk";
 import type { RoomRecord, RoomSessionControlState, Storage } from "./storage-contracts.js";
 import { getLivekitCredentials, getMediaTokenConfigError } from "./livekit-config.js";
-import { currentMediaRoomName } from "./managed-media-names.js";
 import { createMediaScreenReconciler, MEDIA_RECONCILIATION_VERSION, type MediaScreenAuthority, type MediaScreenReconciliationStatus } from "./media-screen-reconciler.js";
 
 /** Both room lifecycle and its publisher identities come from one read-only storage snapshot. */
-export async function readMediaScreenAuthority(storage: Storage, roomId: string): Promise<MediaScreenAuthority> {
+export async function readMediaScreenAuthority(storage: Storage, roomId: string, participantIds?: readonly string[]): Promise<MediaScreenAuthority> {
   const room = await storage.getRoom(roomId);
-  if (!room) return { tenantId: null, authority: null };
-  return { tenantId: room.tenantId, authority: await storage.roomIdentities.screenSourceAuthority(room) };
+  if (!room) return { tenantId: null, authority: null, accessEpoch: null };
+  // A portal-managed room has one native room per access epoch; any other epoch is a retired generation.
+  return { tenantId: room.tenantId, authority: await storage.roomIdentities.screenSourceAuthority(room, participantIds),
+    accessEpoch: room.managed?.accessEpoch ?? null };
 }
 
 /** Main-path API lifecycle owner. No HTTP role command awaits a native media RPC. */
@@ -28,16 +29,15 @@ export function createMediaScreenService(storagePromise: Promise<Storage>, optio
       if (!apiKey || !apiSecret) return null;
       const storage = await storagePromise;
       if (await storage.identityProtocol.minimum() < 2) return null;
-      const namespace = await storage.identityProtocol.mediaNamespace();
-      if (!namespace) throw new Error("media_screen_namespace_missing");
+      const boundary = await storage.identityProtocol.mediaBoundary();
+      if (!boundary) throw new Error("media_screen_namespace_missing");
       if (!native) {
         // LIVEKIT_API_URL reaches the LiveKit HTTP API directly where the public URL serves only signaling.
         native = new RoomServiceClient(env.LIVEKIT_API_URL?.trim() || env.LIVEKIT_URL, apiKey, apiSecret, { requestTimeout: 2 });
       }
-      return { namespace, prefix: env.LIVEKIT_ROOM_PREFIX ?? "vrata-", native };
+      return { ...boundary, prefix: env.LIVEKIT_ROOM_PREFIX ?? "vrata-", native };
     },
-    authority: async roomId => readMediaScreenAuthority(await storagePromise, roomId),
-    mediaRoomName: async (roomId, prefix, namespace) => currentMediaRoomName(await (await storagePromise).getRoom(roomId), roomId, prefix, namespace),
+    authority: async (roomId, participantIds) => readMediaScreenAuthority(await storagePromise, roomId, participantIds),
     event: options.event
   });
   return {
@@ -46,8 +46,8 @@ export function createMediaScreenService(storagePromise: Promise<Storage>, optio
     async status(roomId: string, expectedRevision: number): Promise<MediaScreenReconciliationStatus> {
       try {
         const storage = await storagePromise;
-        const desired = await readMediaScreenAuthority(storage, roomId), namespace = await storage.identityProtocol.mediaNamespace();
-        const status = reconciler.status(roomId, desired, namespace);
+        const desired = await readMediaScreenAuthority(storage, roomId), boundary = await storage.identityProtocol.mediaBoundary();
+        const status = reconciler.status(roomId, desired, boundary);
         return status.desiredVersion.authorityRevision === expectedRevision ? status
           : { ...status, state: status.state === "unavailable" ? "unavailable" : "pending", observedAtMs: null, nativeRoom: "unknown" };
       } catch {

@@ -51,6 +51,14 @@ export class IdentityAuthorityViewUnavailable extends Error {
 }
 
 /** One consistent read of room lifecycle and the identities that can publish a screen. */
+/** One selected participant's identity lineage from the same snapshot as its room authority. */
+export interface RoomMediaParticipantState {
+  /** Current authEpoch; a codec-3 connection of any other epoch is a retired lineage. */
+  readonly epoch: number;
+  /** False after revocation or public removal. */
+  readonly active: boolean;
+}
+
 export interface RoomScreenSourceAuthority {
   readonly revision: number;
   readonly roomActive: boolean;
@@ -58,6 +66,10 @@ export interface RoomScreenSourceAuthority {
   readonly removedParticipantIds?: readonly string[];
   /** Volatile row/object token for observation-cache freshness only, never admission or identity. */
   readonly observationVersion?: string;
+  /** Durable generation of this room record; absent only from adapters predating media lineage. */
+  readonly mediaIncarnation?: string;
+  /** Present when participant IDs were selected: a missing key is a confirmed absent identity. */
+  readonly participants?: Readonly<Record<string, RoomMediaParticipantState>>;
 }
 
 export type RoomIdentityLifecycle = Required<Omit<RoomSessionControlState, "hostParticipantId" | "presenterParticipantId">>;
@@ -112,7 +124,9 @@ export interface RoomIdentityStorage {
   redeemWaiting(scope: RoomIdentityScope, pendingId: string, secretHash: string): Promise<RoomIdentityRecord>;
   get(scope: RoomIdentityScope, identityId: string): Promise<RoomIdentityRecord | null>;
   authority(scope: RoomIdentityScope): Promise<RoomIdentityAuthority | null>;
-  screenSourceAuthority(scope: RoomIdentityScope): Promise<RoomScreenSourceAuthority | null>;
+  /** Selected participants are read in the same snapshot as the room authority (at most 4096). */
+  screenSourceAuthority(scope: RoomIdentityScope, participantIds?: readonly string[]): Promise<RoomScreenSourceAuthority | null>;
+  mediaIncarnation(scope: RoomIdentityScope): Promise<string | null>;
   resolve(proof: RoomIdentityProof): Promise<{ identity: RoomIdentityRecord; authority: RoomIdentityAuthority; role: RoomRole; permissions: RoomPermission[]; isOwner: boolean } | null>;
   resolveView(proof: RoomIdentityProof): Promise<RoomIdentityView | null>;
   claimHost(proof: RoomIdentityMutationProof, expectedRevision: number): Promise<RoomIdentityAuthority>;
@@ -126,11 +140,13 @@ export interface RoomIdentityStorage {
   redeemRecovery(scope: RoomIdentityScope, recoveryId: string, secretHash: string): Promise<RoomIdentityRecord>;
 }
 
-export interface IdentitySelection { identityIds?: string[]; participantId?: string; recoveryId?: string; inviteTokenHash?: string; pendingId?: string; admissionCount?: boolean; screenPublishers?: boolean; authoritySlots?: boolean }
+export interface IdentitySelection { identityIds?: string[]; participantId?: string; participantIds?: readonly string[]; recoveryId?: string; inviteTokenHash?: string; pendingId?: string; admissionCount?: boolean; screenPublishers?: boolean; authoritySlots?: boolean }
 export interface IdentityTransaction {
   room: IdentityRoomBinding;
   /** Volatile row/object observation token, not a credential or durable room incarnation. */
   roomObservationVersion?: string;
+  /** Durable room generation: new on every insert of the room record, unchanged by updates. */
+  mediaIncarnation?: string;
   minimumProtocol: number;
   authority: RoomIdentityAuthority;
   identities: Map<string, RoomIdentityRecord>;

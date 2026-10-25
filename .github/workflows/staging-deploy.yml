@@ -30,6 +30,11 @@ on:
         required: false
         default: false
         type: boolean
+      activate_media_codec3:
+        description: "IRREVERSIBLE: raise the media codec boundary to 3 after rollout (floor 2 only); codec-2 media rooms are retired"
+        required: false
+        default: false
+        type: boolean
       request:
         description: Identifier of an automated dispatch, shown in the run name
         required: false
@@ -44,7 +49,7 @@ jobs:
   deploy:
     if: github.event_name == 'workflow_dispatch' || (vars.STAGING_AUTO_DEPLOY_ENABLED != 'false' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
-    timeout-minutes: 200
+    timeout-minutes: 205
     concurrency:
       group: staging-deploy
       cancel-in-progress: false
@@ -280,6 +285,25 @@ jobs:
             echo "waiting_for_public_identity_v2:$attempt"
           done
           echo identity_v2_not_advertised >&2
+          exit 1
+      - name: Activate media codec 3
+        id: media_activation
+        # The boundary is never lowered. The helper refuses unless floor 2 is active and both the
+        # running candidate and the accepted rollback target enforce it.
+        if: steps.rollout.outcome == 'success' && github.event_name == 'workflow_dispatch' && inputs.activate_media_codec3
+        timeout-minutes: 5
+        env:
+          SHA: ${{ steps.deploy.outputs.deploy_sha }}
+        run: |
+          set -o pipefail
+          # shellcheck disable=SC2029
+          ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo python3 -B '$REMOTE_HELPERS/staging-remote-release.py' activate-media-codec3 --root '$STAGING_APP_DIR' --image-sha '$SHA'" | tee "$RUNNER_TEMP/media-activation.json"
+          for attempt in $(seq 1 24); do
+            if curl --fail --silent --max-time 10 "$BASE_URL/health" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.exit(JSON.parse(s).features?.mediaIdentityCodec===3?0:1))'; then exit 0; fi
+            sleep 5
+            echo "waiting_for_public_media_codec3:$attempt"
+          done
+          echo media_codec3_not_advertised >&2
           exit 1
       - name: Install Playwright browser
         if: steps.rollout.outcome == 'success'

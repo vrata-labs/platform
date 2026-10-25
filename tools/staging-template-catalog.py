@@ -77,11 +77,20 @@ def supports_frame_token_codec(contract):
             and contract["frameTokenCodec"] == 2)
 
 
+def supports_media_codec_boundary(contract, media_codec):
+    # The image reads the persistent media boundary: it issues the raised codec and retires older rooms.
+    return (isinstance(contract, dict) and contract.get("schemaVersion") == 1
+            and type(contract.get("mediaCodecBoundary")) is int
+            and contract["mediaCodecBoundary"] >= media_codec)
+
+
 def assert_target_allowed(marker, status, target_contract, target_sha, minimum_identity_protocol=1, identity_bound=False,
-                          ownerless_reference_personal=False):
+                          ownerless_reference_personal=False, media_codec=2):
     sha(target_sha)
     if type(minimum_identity_protocol) is not int or minimum_identity_protocol < 1:
         raise ValueError("identity_rollout_invalid_protocol_floor")
+    if type(media_codec) is not int or media_codec not in (2, 3) or (media_codec > 2 and minimum_identity_protocol < 2):
+        raise ValueError("media_rollout_invalid_codec_boundary")
     if type(identity_bound) is not bool:
         raise ValueError("identity_rollout_invalid_binding_state")
     if type(ownerless_reference_personal) is not bool:
@@ -105,6 +114,9 @@ def assert_target_allowed(marker, status, target_contract, target_sha, minimum_i
         if (type(target_contract.get("mediaScreenReconciler")) is not int
                 or target_contract["mediaScreenReconciler"] != 2):
             raise ValueError("media_rollback_requires_screen_reconciler2")
+    # The media boundary is never lowered: an image that would issue codec-2 grants again is refused.
+    if media_codec > 2 and not supports_media_codec_boundary(target_contract, media_codec):
+        raise ValueError("media_rollback_below_codec_boundary_forbidden")
     if marker:
         sha(marker)
         if not supports_references(target_contract):
@@ -303,15 +315,16 @@ class CatalogHost:
             raise ValueError("identity_rollout_internal_service_token_required")
         identity_bound = self.identity_bound()
         ownerless = self.ownerless_reference_personal()
+        media_codec = self.media_codec()
         assert_target_allowed(marker, status, contract, target, minimum_identity_protocol, identity_bound,
-                              ownerless_reference_personal=ownerless)
+                              ownerless_reference_personal=ownerless, media_codec=media_codec)
         if supports_identity_boundary(contract):
             self.validate_identity_configuration()
         # Preparation never silently changes availability. A deliberate return to
         # Wave 2 uses rollback first; compatible routine deploys preserve catalog.
         return {"targetSha": target, "wave2Marker": marker, "state": status["state"],
                 "minimumIdentityProtocol": minimum_identity_protocol, "identityAuthorityBound": identity_bound,
-                "ownerlessReferencePersonal": ownerless}
+                "ownerlessReferencePersonal": ownerless, "mediaCodec": media_codec}
 
     def catalog_state(self):
         """Catalog of the accepted database before a rollout. A host without a database yet starts on Wave 2;
@@ -409,6 +422,22 @@ class CatalogHost:
         value = self.run(command + ["select minimum_protocol from room_identity_protocol_policy where singleton=true"])
         if not re.fullmatch(r"[1-9][0-9]*", value):
             raise ValueError("identity_rollout_invalid_protocol_floor")
+        return int(value)
+
+    def media_codec(self):
+        # A database before the media lineage migration has the implicit codec 2. An unreadable
+        # or unexpected value never licenses a rollback to an image that issues codec-2 grants.
+        command = self.compose + ["exec", "-T", "postgres", "sh", "-c",
+                                  'psql -XAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"', "sh"]
+        exists = self.run(command + ["select exists(select 1 from pg_attribute where attrelid=to_regclass('room_identity_protocol_policy')"
+                                     " and attname='media_codec' and not attisdropped)"])
+        if exists == "f":
+            return 2
+        if exists != "t":
+            raise ValueError("media_rollout_invalid_codec_boundary")
+        value = self.run(command + ["select media_codec from room_identity_protocol_policy where singleton=true"])
+        if value not in ("2", "3"):
+            raise ValueError("media_rollout_invalid_codec_boundary")
         return int(value)
 
     def mutate(self, command, expected):

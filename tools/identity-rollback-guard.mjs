@@ -44,12 +44,20 @@ export function assertIdentityRollbackTarget({ envFile, composeFile, imageTag },
     if (result !== "t" && result !== "f") throw new Error(code);
     return result === "t";
   };
-  let minimum = 1, bound = false;
+  let minimum = 1, bound = false, mediaCodec = 2;
   const policy = exists("room_identity_protocol_policy");
   if (policy) {
     const value = sql("select minimum_protocol from room_identity_protocol_policy where singleton=true");
     if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value))) throw new Error("identity_rollout_invalid_policy");
     minimum = Number(value);
+    // A database before the media lineage migration has the implicit codec 2.
+    const column = sql("select exists(select 1 from pg_attribute where attrelid=to_regclass('room_identity_protocol_policy') and attname='media_codec' and not attisdropped)");
+    if (column !== "t" && column !== "f") throw new Error("media_rollout_invalid_codec_boundary");
+    if (column === "t") {
+      const codec = sql("select media_codec from room_identity_protocol_policy where singleton=true");
+      if (codec !== "2" && codec !== "3") throw new Error("media_rollout_invalid_codec_boundary");
+      mediaCodec = Number(codec);
+    }
   }
   const authority = exists("room_identity_authority_v2");
   if (authority) {
@@ -99,6 +107,11 @@ export function assertIdentityRollbackTarget({ envFile, composeFile, imageTag },
     if (value !== "2") throw new Error("media_rollback_requires_identity_codec2:api");
     const reconciler = run(["image", "inspect", "--format", '{{ index .Config.Labels "io.vrata.media-screen-reconciler" }}', model.services.api.image]);
     if (reconciler !== "2") throw new Error("media_rollback_requires_screen_reconciler2:api");
+    // The media codec boundary is never lowered: the target must issue the raised codec and retire older rooms.
+    if (mediaCodec > 2) {
+      const supported = run(["image", "inspect", "--format", '{{ index .Config.Labels "io.vrata.media-codec-boundary" }}', model.services.api.image]);
+      if (!/^[1-9][0-9]*$/.test(supported) || Number(supported) < mediaCodec) throw new Error("media_rollback_below_codec_boundary_forbidden:api");
+    }
   }
   // compose.demo-local.yml resets the optional browser; an absent consumer verifies no frame tokens.
   const browser = model.services?.["remote-browser"];

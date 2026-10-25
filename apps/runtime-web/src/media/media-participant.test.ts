@@ -64,3 +64,21 @@ test("unsubscribe excludes the outgoing Track before LiveKit clears the publicat
   publication.track = { kind: "audio" } as Track;
   assert.equal(planRemoteMicrophones([peer], resolve, "self", active, track).get("remote")?.value.track, publication.track);
 });
+
+test("codec-3 peers resolve with their epoch, and a recovered lineage is heard over the old one", async () => {
+  let done!: () => void;
+  const ready = new Promise<void>(resolve => { done = resolve; });
+  const resolvePeer = createMediaParticipantResolver(done);
+  const room = "v3:namespace:incarnation:room";
+  const media = await createUserMediaIdentity(room, { participantId: "p", scope: "ms", epoch: 4 });
+  const peer = { ...media, kind: 0 };
+  assert.equal(resolvePeer(peer, room, 2), null);
+  await ready;
+  assert.deepEqual(resolvePeer(peer, room, 2), { kind: "user", participantId: "p", scope: "ms", epoch: 4, mediaIdentity: media.identity });
+  assert.equal(resolvePeer(peer, "v3:namespace:other:room", 2), null);
+  const old = { participantId: "p", mediaIdentity: "a-old", trackKey: "old", scope: "ms" as const, epoch: 3, value: 1 };
+  const recovered = { participantId: "p", mediaIdentity: "z-new", trackKey: "new", scope: "m" as const, epoch: 4, value: 2 };
+  const active = new Set(["p"]);
+  assert.deepEqual([...selectRemoteMicrophones([old, recovered], "self", active).values()], [recovered]);
+  assert.deepEqual([...selectRemoteMicrophones([recovered, old], "self", active).values()], [recovered]);
+});

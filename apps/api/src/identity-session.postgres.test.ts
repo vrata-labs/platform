@@ -381,6 +381,19 @@ test("internal room-state verifier trusts v2 possession and current authority, n
     assert.equal(executorMedia.status, 200, "a verified executor may publish in the v2 media namespace");
     const executorJwt = (await executorMedia.json() as { token: string }).token;
     assert.equal((JSON.parse(Buffer.from(executorJwt.split(".")[1]!, "base64url").toString("utf8")) as { video: { room: string } }).video.room, v2MediaRoom);
+    const executorRequest = (roomId: string) => fetch(`${baseUrl}/api/tokens/remote-browser-media`, { method: "POST", headers: {
+      "content-type": "application/json", "x-vrata-internal-token": internalToken
+    }, body: JSON.stringify({ roomId, objectId: "browser-1", executorSessionId: "remote-browser:browser-1",
+      executorInstanceId: "remote-browser:browser-1:instance:generation-1", mediaParticipantId: "remote-browser:browser-1" }) });
+    // Past the codec-3 boundary the user and the executor share the native room of the current generation.
+    await storage.identityProtocol.raiseMediaCodec(3);
+    const incarnation = await storage.roomIdentities.mediaIncarnation(publicScope);
+    const v3MediaRoom = `${process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-"}v3:${await storage.identityProtocol.mediaNamespace()}:${incarnation}:${publicRoom.roomId}`;
+    assert.equal((await media(created.token, created.participantId)).video.room, v3MediaRoom);
+    const v3Executor = await executorRequest(publicRoom.roomId);
+    assert.equal(v3Executor.status, 200);
+    const v3ExecutorJwt = (await v3Executor.json() as { token: string }).token;
+    assert.equal((JSON.parse(Buffer.from(v3ExecutorJwt.split(".")[1]!, "base64url").toString("utf8")) as { video: { room: string } }).video.room, v3MediaRoom);
     const endedExecutorRoom = await storage.createRoom({ tenantId: scope.tenantId, templateId: "meeting-room-basic", name: "Ended browser media" });
     await storage.roomIdentities.transition({ tenantId: endedExecutorRoom.tenantId, roomId: endedExecutorRoom.roomId },
       { actorType: "admin-token", actorId: "test-admin", role: "admin" }, 0, { type: "end" });

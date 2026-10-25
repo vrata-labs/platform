@@ -2,9 +2,16 @@ import { TrackSource, type ParticipantInfo, type ParticipantPermission } from "l
 import { verifyUserMediaIdentity, type UserMediaBinding, type UserMediaScope } from "@vrata/shared-types";
 import type { RoomScreenSourceAuthority } from "./identity/contracts.js";
 
-/** Null is confirmed missing metadata, not an authority-read error. Disable is reversible. */
-export function mustEvictUserMedia(authority: RoomScreenSourceAuthority | null, participantId: string): boolean {
-  return !authority?.roomActive || authority.removedParticipantIds?.includes(participantId) === true;
+/** Null is confirmed missing metadata, not an authority-read error. Disable is reversible.
+ * A retired generation (codec 2 past the codec-3 boundary, another room incarnation) is always evicted.
+ * With selected lineage, a missing or revoked identity and any other codec-3 epoch are evicted too;
+ * codec 2 carries no epoch, so recovery there remains indistinguishable. */
+export function mustEvictUserMedia(authority: RoomScreenSourceAuthority | null, binding: Pick<UserMediaBinding, "participantId" | "epoch">,
+  retired = false): boolean {
+  if (retired || !authority?.roomActive || authority.removedParticipantIds?.includes(binding.participantId)) return true;
+  if (!authority.participants) return false;
+  const state = Object.hasOwn(authority.participants, binding.participantId) ? authority.participants[binding.participantId] : undefined;
+  return !state || !state.active || binding.epoch !== undefined && binding.epoch !== state.epoch;
 }
 
 /** Codec-2 user grants have a fixed non-source tuple. Never copy a preceding connection's permissions. */

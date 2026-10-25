@@ -1,6 +1,7 @@
 import type { ManagedMediaControl } from "./managed-media.js";
 import { completeGrantRevocation } from "./grant-revocation.js";
 import { managedMediaRoomName, parseMediaRoomName } from "./managed-media-names.js";
+import type { MediaBoundary } from "./identity/protocol.js";
 import { managedRoomBlock } from "./storage-managed-rooms.js";
 import type { ManagedRoomActivity, ManagedRoomEnforcementRecord, RoomRecord, Storage } from "./storage-contracts.js";
 
@@ -76,9 +77,10 @@ export function createManagedRoomEnforcer(input: ManagedRoomEnforcerInput) {
   // A backstop for every way an old epoch room can reappear (a CreateRoom delayed past the rotation and its
   // deletion, a failed compensating delete, a crash): any LiveKit room of a managed room that is not on its
   // current epoch is deleted.
-  async function sweepStaleEpochs(storage: Storage, namespace: string | null): Promise<void> {
+  async function sweepStaleEpochs(storage: Storage, boundary: MediaBoundary | null): Promise<void> {
     const media = input.media();
-    if (!namespace || !media) return;
+    if (!boundary || !media) return;
+    const namespace = boundary.namespace;
     let names: string[];
     try {
       names = await media.listRooms();
@@ -90,7 +92,10 @@ export function createManagedRoomEnforcer(input: ManagedRoomEnforcerInput) {
       const parsed = parseMediaRoomName(name, input.mediaPrefix(), namespace);
       if (!parsed?.epoch) continue;
       const room = await storage.getRoom(parsed.roomId);
-      if (!room?.managed || room.managed.accessEpoch === parsed.epoch) continue;
+      if (!room?.managed) continue;
+      // Past the codec-3 boundary a current-epoch room is also stale under codec 2 or another room generation.
+      if (room.managed.accessEpoch === parsed.epoch && (boundary.codec === 2 || parsed.codec === 3
+        && parsed.incarnation === await storage.roomIdentities.mediaIncarnation({ tenantId: room.tenantId, roomId: room.roomId }))) continue;
       try {
         await media.deleteRoom(name);
         input.logEvent({ service: "api", event: "managed_media_stale_epoch_deleted", roomId: parsed.roomId });
@@ -100,10 +105,10 @@ export function createManagedRoomEnforcer(input: ManagedRoomEnforcerInput) {
     }
   }
 
-  async function deleteRetired(storage: Storage, room: ManagedRoomEnforcementRecord, namespace: string | null): Promise<void> {
+  async function deleteRetired(storage: Storage, room: ManagedRoomEnforcementRecord, boundary: MediaBoundary | null): Promise<void> {
     if (room.retiredEpochs.length === 0) return;
     // Before identity v2 is active no managed media room was ever created.
-    if (!namespace) {
+    if (!boundary) {
       for (const epoch of room.retiredEpochs) await storage.completeRetiredManagedRoomEpoch(room.roomId, epoch);
       return;
     }
@@ -113,10 +118,14 @@ export function createManagedRoomEnforcer(input: ManagedRoomEnforcerInput) {
       mediaUnavailableLogged = true;
       return;
     }
+    // The epoch's codec-2 room, and past the codec-3 boundary also its room in the current generation.
+    const incarnation = boundary.codec === 3
+      ? await storage.roomIdentities.mediaIncarnation({ tenantId: room.tenantId, roomId: room.roomId }) : null;
     for (const epoch of room.retiredEpochs) {
-      const name = managedMediaRoomName(room.roomId, epoch, input.mediaPrefix(), namespace);
+      const names = [managedMediaRoomName(room.roomId, epoch, input.mediaPrefix(), boundary.namespace),
+        ...(incarnation ? [managedMediaRoomName(room.roomId, epoch, input.mediaPrefix(), boundary.namespace, incarnation)] : [])];
       try {
-        await media.deleteRoom(name);
+        for (const name of names) await media.deleteRoom(name);
         await storage.completeRetiredManagedRoomEpoch(room.roomId, epoch);
         input.logEvent({ service: "api", event: "managed_media_epoch_deleted", roomId: room.roomId });
       } catch (error) {
@@ -126,7 +135,7 @@ export function createManagedRoomEnforcer(input: ManagedRoomEnforcerInput) {
   }
 
   async function enforce(storage: Storage): Promise<void> {
-    const namespace = await storage.identityProtocol.mediaNamespace();
+    const boundary = await storage.identityProtocol.mediaBoundary();
     for (const grant of await storage.listIncompleteManagedGrantRevocations()) {
       try {
         await completeGrantRevocation(storage, grant);
@@ -147,7 +156,7 @@ export function createManagedRoomEnforcer(input: ManagedRoomEnforcerInput) {
       } else if (block !== room.enforcedBlock) {
         await storage.setManagedRoomEnforcedBlock(room.roomId, block);
       }
-      await deleteRetired(storage, room, namespace);
+      await deleteRetired(storage, room, boundary);
       if (room.kind === "demo-instance" && block === null && room.idleTimeoutSeconds) {
         const lastActivityMs = Math.max(Date.parse(room.lastActivityAt ?? room.createdAt), Date.parse(room.createdAt));
         if (atMs - lastActivityMs >= room.idleTimeoutSeconds * 1000) {
@@ -159,7 +168,7 @@ export function createManagedRoomEnforcer(input: ManagedRoomEnforcerInput) {
         }
       }
     }
-    await sweepStaleEpochs(storage, namespace);
+    await sweepStaleEpochs(storage, boundary);
   }
 
   async function tick(): Promise<void> {

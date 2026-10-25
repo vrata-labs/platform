@@ -512,6 +512,11 @@ export interface Storage extends IntegrationStore {
     effect: (scoped: RoomIdentityEffectStorage, current: import("./identity/effect-write-guard.js").RoomEffectActor) => Promise<T>): Promise<T>;
   withLegacyRoomEffect<T>(scope: { tenantId: string; roomId: string }, options: LegacyRoomEffectOptions,
     effect: (scoped: RoomIdentityEffectStorage) => Promise<T>): Promise<T>;
+  /** A media grant without a room identity (the remote-browser executor): parent row SHARE, then policy SHARE; the pinned codec,
+   * namespace and room generation must be current, then `release` runs synchronously inside. Throws MediaBoundaryChanged or
+   * room_not_found; nothing is released then. */
+  releaseMediaGrant(scope: { tenantId: string; roomId: string }, media: import("./identity/effect-write-guard.js").MediaGrantPin,
+    release: () => void): Promise<void>;
   /** Absent in every tenant, floor 1, unbound; grants nothing on a persisted room. */
   withLegacyVirtualRoomEffect<T>(roomId: string, options: VirtualRoomEffectOptions,
     effect: (scoped: VirtualRoomEffectStorage) => Promise<T>): Promise<T>;

@@ -55,6 +55,7 @@ with tempfile.TemporaryDirectory() as directory:
     host.run = lambda args: json.dumps(status)
     host.contract = lambda target: contract
     host.minimum_identity_protocol = lambda: 1
+    host.media_codec = lambda: 2
     host.identity_bound = lambda: False
     host.ownerless_reference_personal = lambda: False
     host.validate_identity_database = lambda: None
@@ -246,6 +247,7 @@ with tempfile.TemporaryDirectory() as root:
     host.validate_identity_database = lambda: None
     host.validate_identity_configuration = lambda: None
     host.minimum_identity_protocol = lambda: 1
+    host.media_codec = lambda: 2
     host.identity_bound = lambda: False
     passed, original = [], m.assert_target_allowed
     def spy(*args, **kwargs):
@@ -288,6 +290,18 @@ for invalid in (None, True, False, 0, 1, 3, "2", 2.0):
 for invalid in (None, True, False, 0, 1, 3, "2", 2.0):
     rejects(lambda: m.assert_target_allowed(None, None, dict(codec, mediaScreenReconciler=invalid), current, 2), "media_rollback_requires_screen_reconciler2")
     m.assert_target_allowed(None, None, dict(codec, mediaScreenReconciler=invalid), current, 1, True)
+# The media codec boundary is never lowered: once raised, only images enforcing it are targets.
+boundary = dict(codec, mediaCodecBoundary=3)
+m.assert_target_allowed(None, None, codec, current, 2, True, media_codec=2)
+m.assert_target_allowed(None, None, boundary, current, 2, True, media_codec=3)
+rejects(lambda: m.assert_target_allowed(None, None, codec, current, 2, True, media_codec=3), "media_rollback_below_codec_boundary_forbidden")
+for invalid in (None, True, 2, "3", 3.0, [3]):
+    rejects(lambda: m.assert_target_allowed(None, None, dict(codec, mediaCodecBoundary=invalid), current, 2, True, media_codec=3), "media_rollback_below_codec_boundary_forbidden")
+for invalid in (None, True, 1, 4, "3", 3.0):
+    rejects(lambda: m.assert_target_allowed(None, None, boundary, current, 2, True, media_codec=invalid), "media_rollout_invalid_codec_boundary")
+rejects(lambda: m.assert_target_allowed(None, None, boundary, current, 1, True, media_codec=3), "media_rollout_invalid_codec_boundary")
+# A preparatory image is a valid target before the raise, and still requires every floor-two capability.
+rejects(lambda: m.assert_target_allowed(None, None, dict(boundary, mediaIdentityCodec=3), current, 2, True, media_codec=3), "media_rollback_requires_identity_codec2")
 # Boundary and reader failures keep their own codes.
 rejects(lambda: m.assert_target_allowed(None, None, dict(legacy, identityProtocolFloorGuard=None), current, 1, True), "identity_rollback_below_boundary_forbidden")
 rejects(lambda: m.assert_target_allowed(None, None, dict(legacy, roomRecordReader=1), current, 2), "room_record_rollback_requires_reader2")
@@ -304,6 +318,7 @@ with tempfile.TemporaryDirectory() as root:
     host.validate_identity_database = lambda: None
     host.validate_identity_configuration = lambda: None
     host.minimum_identity_protocol = lambda: 1
+    host.media_codec = lambda: 2
     host.ownerless_reference_personal = lambda: False
     host.identity_bound = lambda: True
     host.contract = lambda target: legacy
@@ -313,6 +328,23 @@ with tempfile.TemporaryDirectory() as root:
     host.identity_bound = lambda: False
     host.contract = lambda target: legacy
     assert host.prepare(current)["identityAuthorityBound"] is False
+    host.minimum_identity_protocol = lambda: 2
+    host.read_only_compose_environment = lambda: {}
+    host.media_codec = lambda: 3
+    host.contract = lambda target: codec
+    rejects(lambda: host.prepare(current), "media_rollback_below_codec_boundary_forbidden")
+    host.contract = lambda target: dict(codec, mediaCodecBoundary=3)
+    assert host.prepare(current)["mediaCodec"] == 3
+    # The probe: a database before the migration is codec 2, unreadable or foreign values fail closed.
+    answers = []
+    host.run = lambda args: answers.pop(0)
+    del host.media_codec
+    for replies, expected in ((["f"], 2), (["t", "2"], 2), (["t", "3"], 3)):
+        answers[:] = replies
+        assert host.media_codec() == expected, replies
+    for replies in (["x"], ["t", ""], ["t", "1"], ["t", "4"], ["t", "3\\n3"]):
+        answers[:] = replies
+        rejects(host.media_codec, "media_rollout_invalid_codec_boundary")
 `], { encoding: "utf8" });
 });
 
@@ -346,6 +378,7 @@ with tempfile.TemporaryDirectory() as root:
     host.validate_identity_database = lambda: None
     host.run = lambda args: '{"state":"wave2","referenceRoomCount":0}'
     host.minimum_identity_protocol = lambda: 2
+    host.media_codec = lambda: 2
     host.identity_bound = lambda: False
     with patch.dict(os.environ, {"VRATA_INTERNAL_SERVICE_TOKEN": ""}):
         try: host.prepare("a"*40)

@@ -71,7 +71,7 @@ import { createPostgresRoomIdentities, assertPostgresEffect, loadPostgresPersona
 import { assertPersonalOwnerResponse } from "./identity/personal-owner-response.js";
 import type { RoomIdentityCredential } from "@vrata/shared-types/identity-credential";
 import { createMemoryAdmissionBudget, createPostgresAdmissionBudget } from "./identity/admission-budget.js";
-import { assertCurrentEffect, type RoomEffectGuard, type RoomEffectActor } from "./identity/effect-write-guard.js";
+import { assertCurrentEffect, assertMediaGrantPin, type MediaGrantPin, type RoomEffectGuard, type RoomEffectActor } from "./identity/effect-write-guard.js";
 import type { RoomIdentityEffectStorage } from "./storage-contracts.js";
 import type { LegacyAdmissionWriteInput, LegacyAdmissionWriteReceipt, LegacyRoomControlReceipt, LegacyRoomCredentialSelector,
   LegacyRoomCredentialSnapshot, LegacyRoomEffectOptions, VirtualRoomEffectOptions, VirtualRoomEffectStorage } from "./storage-contracts.js";
@@ -244,6 +244,8 @@ export class MemoryStorage implements Storage {
   private roomNotes = new Map<string, RoomNoteRecord>();
   private roomNoteVersions = new Map<string, RoomNoteVersionRecord[]>();
   private readonly identityAdapter: ReturnType<typeof createMemoryRoomIdentities>;
+  /** Durable per-record media generation: replaced on create, dropped on delete, kept by updates. */
+  private readonly mediaIncarnations = new Map<string, string>();
   private readonly identityPolicy = createMemoryIdentityProtocol();
   readonly identityProtocol: Storage["identityProtocol"] = this.identityPolicy;
   readonly roomIdentities: Storage["roomIdentities"];
@@ -255,7 +257,8 @@ export class MemoryStorage implements Storage {
     this.reserveIdentityAdmission = createMemoryAdmissionBudget(identityNow);
     this.identityAdapter = createMemoryRoomIdentities(roomId => this.rooms.get(roomId), identityNow,
       hash => [...this.roomInvites.values()].find(invite => invite.tokenHash === hash), () => this.identityPolicy.current(),
-      id => this.roomInvites.get(id), id => this.waitingRoomRequests.get(id), request => { this.waitingRoomRequests.set(request.requestId, request); });
+      id => this.roomInvites.get(id), id => this.waitingRoomRequests.get(id), request => { this.waitingRoomRequests.set(request.requestId, request); },
+      roomId => this.mediaIncarnation(roomId));
     this.roomIdentities = this.identityAdapter.storage;
     this.pluginAdapter = createMemoryRoomPlugins(roomId => this.rooms.get(roomId), {
       minimum: () => this.identityPolicy.current(), now: identityNow,
@@ -362,10 +365,14 @@ export class MemoryStorage implements Storage {
   }
   async withRoomIdentityEffect<T>(guard: RoomEffectGuard, effect: (scoped: RoomIdentityEffectStorage, current: RoomEffectActor) => Promise<T>): Promise<T> {
     let active = true;
+    const media = () => assertMediaGrantPin(guard.media, { codec: this.identityPolicy.currentMediaCodec(),
+      namespace: this.identityPolicy.currentMediaNamespace(), incarnation: this.mediaIncarnation(guard.roomId) });
     const current = this.identityAdapter.assertCurrentEffect(guard);
+    media();
     const check = () => {
       if (!active) throw new Error("room_effect_scope_closed");
       this.identityAdapter.assertCurrentEffect(guard);
+      media();
     };
     const stage = createMemoryTelemetryStage(guard.roomId);
     try {
@@ -373,6 +380,13 @@ export class MemoryStorage implements Storage {
       stage.commit(check, this.telemetrySink);
       return result;
     } finally { active = false; }
+  }
+  async releaseMediaGrant(scope: { tenantId: string; roomId: string }, media: MediaGrantPin, release: () => void): Promise<void> {
+    const room = this.rooms.get(scope.roomId);
+    if (!room || room.tenantId !== scope.tenantId) throw new IdentityStorageError("room_not_found");
+    assertMediaGrantPin(media, { codec: this.identityPolicy.currentMediaCodec(), namespace: this.identityPolicy.currentMediaNamespace(),
+      incarnation: this.mediaIncarnation(scope.roomId) });
+    release();
   }
   async withLegacyRoomEffect<T>(scope: { tenantId: string; roomId: string }, options: LegacyRoomEffectOptions,
     effect: (scoped: RoomIdentityEffectStorage) => Promise<T>): Promise<T> {
@@ -545,7 +559,15 @@ export class MemoryStorage implements Storage {
     const room = bindRoomTemplateMetadata(roomWithoutTemplateMetadata, versionSnapshot);
     if (this.identityAdapter.hasRoomBindings(room.roomId) || (this.identityPolicy.current() >= 2 && this.rooms.has(room.roomId))) throw new Error(IDENTITY_LIFECYCLE_REQUIRES_V2);
     this.rooms.set(room.roomId, structuredClone(room));
+    this.mediaIncarnations.set(room.roomId, crypto.randomUUID().replaceAll("-", ""));
     return structuredClone(room);
+  }
+  private mediaIncarnation(roomId: string): string | undefined {
+    if (!this.rooms.has(roomId)) return undefined;
+    // Seeded records predate any create call; they get their generation on first use.
+    let incarnation = this.mediaIncarnations.get(roomId);
+    if (!incarnation) { incarnation = crypto.randomUUID().replaceAll("-", ""); this.mediaIncarnations.set(roomId, incarnation); }
+    return incarnation;
   }
   async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> { return this.createRoomSync(input); }
   async createAdministrativeRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
@@ -571,7 +593,7 @@ export class MemoryStorage implements Storage {
     const room = this.createRoomSync({ ...input, roomId: crypto.randomUUID(), roomType: "personal",
       ownerParticipantId: participantId, visibility: "private", guestAllowed: false, sessionControl: { hostParticipantId: participantId } });
     try { return { room, identity: this.identityAdapter.bootstrapOwner(room, participantId, input.displayName) }; }
-    catch (error) { this.rooms.delete(room.roomId); throw error; }
+    catch (error) { this.rooms.delete(room.roomId); this.mediaIncarnations.delete(room.roomId); throw error; }
   }
   async updateRoom(roomId: string, input: Partial<RoomRecord>, expectedTemplateBinding?: ExpectedRoomTemplateBinding): Promise<RoomRecord | null> {
     const existing = this.rooms.get(roomId);
@@ -631,6 +653,7 @@ export class MemoryStorage implements Storage {
     if (room && pluginDeletion && room.tenantId !== pluginDeletion.tenantId) return false;
     if (room) this.pluginAdapter.assertRoomDeletable({ tenantId: room.tenantId, roomId }, pluginDeletion?.deletionId);
     this.identityAdapter.deleteRoom(roomId);
+    this.mediaIncarnations.delete(roomId);
     return this.rooms.delete(roomId);
   }
   private createRoomInviteSync(input: Parameters<Storage["createRoomInvite"]>[0]): RoomInviteRecord {
@@ -1260,6 +1283,13 @@ export class PostgresStorage implements Storage {
         : "select 1 from rooms where tenant_id=$1 and room_id=$2 for share",
         [guard.tenantId, guard.roomId]);
       if (!room.rowCount) throw new IdentityStorageError("room_not_found");
+      if (guard.media) {
+        // The locked row's generation; then policy FOR SHARE (rooms before policy, as in every
+        // fence), so a concurrent codec raise waits for this release or refuses it afterwards.
+        const incarnation = (await client.query("select media_incarnation from rooms where tenant_id=$1 and room_id=$2", [guard.tenantId, guard.roomId])).rows[0]?.media_incarnation;
+        const policy = (await client.query("select media_codec, media_namespace from room_identity_protocol_policy where singleton=true for share")).rows[0];
+        assertMediaGrantPin(guard.media, { codec: policy?.media_codec, namespace: policy?.media_namespace, incarnation });
+      }
       const current = await assertPostgresEffect(client, guard, this.identityNow);
       // The parent lock pins role/epoch, but awaited SQL can outlive the original
       // session deadline: recheck it before each operation and before COMMIT.
@@ -1271,6 +1301,17 @@ export class PostgresStorage implements Storage {
       // A released response was the final authorized operation; the facade rejects any later one.
       if (!released) check();
       return result;
+    });
+  }
+  async releaseMediaGrant(scope: { tenantId: string; roomId: string }, media: MediaGrantPin, release: () => void): Promise<void> {
+    await roomFenceTransaction(this.pool, {}, async (client, checkAlive) => {
+      // Rooms before policy, as in every fence; SHARE on both excludes a delete/recreate and a codec raise until COMMIT.
+      const room = (await client.query("select media_incarnation from rooms where tenant_id=$1 and room_id=$2 for share", [scope.tenantId, scope.roomId])).rows[0];
+      if (!room) throw new IdentityStorageError("room_not_found");
+      const policy = (await client.query("select media_codec, media_namespace from room_identity_protocol_policy where singleton=true for share")).rows[0];
+      assertMediaGrantPin(media, { codec: policy?.media_codec, namespace: policy?.media_namespace, incarnation: room.media_incarnation });
+      checkAlive();
+      release();
     });
   }
   async withLegacyRoomEffect<T>(scope: { tenantId: string; roomId: string }, options: LegacyRoomEffectOptions,

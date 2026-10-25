@@ -24,6 +24,16 @@ test("the paired API/runtime image declares the exact scoped-media identity code
   assert.match(dockerfile, /COPY --from=build \/app\/apps\/runtime-web\/dist \.\/apps\/runtime-web\/dist/);
 });
 
+test("the API image declares the media codec boundary it enforces on rollout and rollback", () => {
+  const contract = JSON.parse(read("infra/docker/template-rollout.json"));
+  assert.equal(contract.mediaCodecBoundary, 3);
+  const dockerfile = read("apps/api/Dockerfile");
+  const labels = [...dockerfile.matchAll(/^LABEL io\.vrata\.media-codec-boundary="([^"]*)"$/gm)];
+  assert.equal(labels.length, 1);
+  assert.equal(labels[0][1], String(contract.mediaCodecBoundary));
+  assert(labels[0].index > dockerfile.indexOf(" AS runtime"));
+});
+
 test("API runtime image label publishes the rollout contract's integer room-record reader", () => {
   const contract = JSON.parse(read("infra/docker/template-rollout.json"));
   assert.equal(typeof contract.roomRecordReader, "number");
