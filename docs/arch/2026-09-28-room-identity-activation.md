@@ -692,6 +692,13 @@ rollback target. From then on only codec 3 is issued, codec-2 rooms are retired 
 open tabs reconnect with codec-3 grants; health advertises `mediaIdentityCodec: 3`.
 Executor leases and owned-namespace retirement remain separate S3b slices.
 
+Published image: `3445a5cd92088a784118caeba32c7ad7ad5634f0` on the shared floor-2 stand.
+[CI40219689328](https://github.com/vrata-labs/platform/actions/runs/40219689328) passed 259 plus
+16/16 M0.5; [Staging40227601408](https://github.com/vrata-labs/platform/actions/runs/40227601408)
+accepted 81/81 plus 1/1 mandatory Rutube on attempt 2 (attempt 1 stopped on a meeting-tools
+keyboard-navigation timeout and rolled back to the previous image on the migrated database).
+The media boundary stays at codec 2.
+
 ### Shared staging delivery (floor 1)
 
 The initial paired integration of main and these prerequisites was accepted as

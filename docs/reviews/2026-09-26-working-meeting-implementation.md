@@ -2528,3 +2528,16 @@ Authoritative accepted-release.json до и после публичного read
 - Итоговый кандидат 14b5570: rebase на b1c5929 (on-demand staging, #131), конфликт только во входах staging-deploy.yml (оставлены request и activate_media_codec3). #131 не меняет код API и runtime, поэтому проверки пакетов и e2e на 7b60668 переносятся на 14b5570; tools на 14b5570 — 322 passed, 2 skipped.
 - Полный local на 7b60668: 248 passed, 3 failed, 8 did not run (оставшиеся тесты serial-файла media-source-grants), load 12–16. Повторы на том же дереве зелёные: room-plugin-seating, tool-replacement-dialog, identity-boundary, передача двух Presenter (2/2), весь media-source-grants 10/10. Полный local на объединённом дереве e474423 — 259/259.
 - По решению пользователя исключение D-033 распространено на итоговый кандидат: публикация через точный CI, Docker и gate на staging; local записан красным.
+
+## S3b-1 — принято на staging floor 2, 2026-10-25
+
+| Gate | Точный результат |
+|---|---|
+| Исполняемый SHA | 3445a5cd92088a784118caeba32c7ad7ad5634f0 (код 14b5570: S3b-1 и пин access epoch поверх main b1c5929). В main сливается перенос на 633e9c9 (#132): дерево отличается только изменениями #132 в staging-тестах, workflow и tools |
+| [CI40219689328](https://github.com/vrata-labs/platform/actions/runs/40219689328) | Success: 259 passed + M0.5 16/16 |
+| [Docker40219691929](https://github.com/vrata-labs/platform/actions/runs/40219691929) | Success |
+| [Staging40227601408](https://github.com/vrata-labs/platform/actions/runs/40227601408) | Attempt 1: gate остановлен на meeting-tools-staging (desktop keyboard navigation: панель не открылась за 5 с), штатный откат на db92bee. Attempt 2: success, 81 passed, обязательный Rutube 1/1 |
+
+- Стенд по требованию 111.88.217.54 (аренда ad7c094b). Readback: published 3445a5c, asset 0a3b492e788bad82bf20a92476a628bf30c6dfbe; health ok, identityProtocolVersion 2, mediaIdentityCodec 2; demo-room, control-plane и /diagnostics — 200.
+- Первая попытка заодно проверила откат после миграции: образ db92bee штатно поднялся на базе, уже получившей rooms.media_incarnation и policy media_codec.
+- Медиа-граница не поднималась: выдача остаётся кодеком 2. Активация S3b-2 необратима и ждёт отдельного подтверждения пользователя.
