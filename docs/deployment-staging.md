@@ -2,22 +2,23 @@
 
 ## Стенд и входы
 
-Подготовленный целевой хост — Selectel `vrata-stage-selectel-v1`, `135.106.137.18`,
-Москва `ru-2c`, Ubuntu 24.04 LTS, 4 vCPU / 8 ГБ / 80 ГБ local NVMe.
-Расчёт при создании: 6272,37 ₽/месяц вместе с прямым IPv4. Резервное хранение
-оплачивается отдельно, если подключается платная услуга.
+Стенд создаётся по требованию и удаляется, когда не нужен (раздел «Стенд по требованию»).
+Пока он есть, это Selectel `vrata-platform-stage`, Москва `ru-2c`, Ubuntu 24.04 LTS,
+`SL1.4-8192-64` (4 vCPU / 8 ГБ / 64 ГБ local NVMe), сеть `vrata-platform-stage-net`,
+группа безопасности `vrata-platform-stage` и плавающий IP `111.88.217.54`. Удалённый
+сервер не оплачивается со следующего часа; плавающий IP остаётся за проектом.
 
 Первый принятый application release подтверждается только успешным Staging Deploy
 и `/opt/vrata-stage-state/accepted-release.json`. Подготовка Linux, pull образов и
-UDP echo этого состояния не создают. Старые ресурсы Yandex сохраняются.
+UDP echo этого состояния не создают.
 
 | Назначение | Адрес / путь |
 | --- | --- |
-| App | `https://135.106.137.18.sslip.io` |
-| Room-state | `wss://state.135.106.137.18.sslip.io` |
-| LiveKit | `wss://livekit.135.106.137.18.sslip.io` |
-| Remote browser | `wss://browser.135.106.137.18.sslip.io` |
-| MinIO public objects | `https://storage.135.106.137.18.sslip.io` |
+| App | `https://111.88.217.54.sslip.io` |
+| Room-state | `wss://state.111.88.217.54.sslip.io` |
+| LiveKit | `wss://livekit.111.88.217.54.sslip.io` |
+| Remote browser | `wss://browser.111.88.217.54.sslip.io` |
+| MinIO public objects | `https://storage.111.88.217.54.sslip.io` |
 | Checkout | `/opt/vrata`, root-owned |
 | Private env | `/opt/vrata/infra/docker/.env.staging`, 0600 |
 | Release / assets / recovery | `/opt/vrata-stage-state`, вне checkout |
@@ -25,6 +26,53 @@ UDP echo этого состояния не создают. Старые рес�
 Сцены доставляются из приватного репозитория, не из публичных platform images.
 Перенос сохраняет существующие GLB/manifest bytes и известные визуальные ограничения
 сцен; новые visual acceptance или promotion-вердикты он не создаёт.
+
+## Стенд по требованию
+
+Стенд общий для CI, владельца и всех локальных сессий Claude Code и opencode. Создаёт и
+удаляет его `tools/vrata-stage.py` на машине разработки: учётные данные Selectel есть только
+там. Конфигурация стендов, ключи и кэш сертификатов лежат в приватном хранилище секретов
+машины, вне Git. Правила для агентов — в `AGENTS.md`, раздел «On-demand staging stand».
+
+```bash
+vrata-stage acquire platform --purpose e2e --note "<задача>"   # аренда; создаёт отсутствующий стенд
+vrata-stage wait platform                                       # готовность, возвращается за 9 минут
+vrata-stage status                                              # фаза, аренды, операции
+vrata-stage hold platform --ttl 4h                              # аренда владельца без сессии
+vrata-stage release <lease>                                     # последняя аренда удаляет стенд после паузы
+```
+
+Аренда живёт до срока и, если её взяла сессия, пока жив процесс `claude` или `opencode`;
+срок не больше суток. Сессии opencode живут в одном процессе сервера, поэтому для них
+работает только срок.
+
+Создание (`up`, фоновый процесс с журналом рядом с реестром аренд):
+
+1. Сервер с тегом `vrata-stage=platform` и cloud-init из `infra/staging/on-demand-hook.sh`
+   с `origin/main`: пользователь `vrata` с ключами администратора и CI. Секретов в
+   user-data нет.
+2. Плавающий IP привязывается к порту сервера. Занятый чужим портом IP останавливает
+   создание до любых изменений.
+3. Первый ключ хоста принимается только из журнала консоли провайдера, после чего на хост
+   ставятся закреплённые ключи. `STAGING_SSH_KNOWN_HOSTS` не меняется между пересозданиями.
+4. `bootstrap-host.sh`, затем токен администратора из хранилища вместо случайного:
+   он совпадает с секретом `STAGING_ADMIN_TOKEN`.
+5. Восстанавливается том данных Caddy: сертификаты переживают сервер, и частые
+   пересоздания не упираются в лимит Let's Encrypt (5 сертификатов на имя за 7 дней).
+6. `STAGING_AUTO_DEPLOY_ENABLED=true`, затем Staging Deploy `bootstrap=true`,
+   `activate_identity_v2=true` для последнего SHA `main` с успешным Docker Publish
+   (или заданного `--sha`). Стенд готов, когда этот прогон зелёный.
+
+Удаление: нет живых аренд → нет активных прогонов Docker Publish, Staging Deploy,
+Rutube Canary, Template Catalog и Staging Smoke → `STAGING_AUTO_DEPLOY_ENABLED=false` →
+повторная проверка прогонов (начавшийся прогон возвращает переменную и оставляет стенд) →
+сохранение тома Caddy → удаление сервера по ID и тегу. После `release` уборка ждёт паузу
+и повторяет попытку, пока CI занят. Без стенда push в `main` не выкатывается и не
+проверяется на staging: это происходит при следующем создании стенда.
+
+Ошибка создания оставляет сервер для разбора, пока жива аренда; следующий `acquire`
+повторяет создание с нуля. Данные стенда (комнаты, документы, принятые релизы) не
+переносятся между пересозданиями.
 
 ## Подготовка Linux
 
