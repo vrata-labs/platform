@@ -68,7 +68,7 @@ class FakeGitHub:
     def set_variable(self, repo, name, value):
         self.variables.append((name, value))
 
-    def busy_runs(self, repo, workflows):
+    def busy_runs(self, repo, workflows, others_except=None):
         return self.busy.pop(0) if self.busy else []
 
     def latest_success_sha(self, repo, workflow):
@@ -280,7 +280,7 @@ class RemovalTests(Base):
         self.stands.acquire("demo", "e2e", owner=None)
         self.stands.release(next(iter(self.state()["leases"])))
         late = {}
-        def busy(repo, workflows):
+        def busy(repo, workflows, others_except=None):
             if self.github.calls == 2 and not late:
                 late.update(self.stands.acquire("demo", "user", owner=None))
             self.github.calls += 1
@@ -340,6 +340,37 @@ class RemovalTests(Base):
             self.stands.reap("demo", poll=7)
         self.assertEqual(calls, [7, 7, 7, 7])
         self.assertEqual(self.state()["phase"], "ready")
+
+    def test_watcher_retries_a_ci_variable_that_could_not_be_restored(self):
+        self.ready()
+        self.stands.acquire("demo", "e2e", owner=vs.process_identity(os.getpid()))
+        self.set_state(ci_variable="restore_pending")
+        attempts = []
+        def set_variable(repo, name, value):
+            attempts.append(value)
+            if len(attempts) == 1:
+                raise vs.StageError("gh_unavailable")
+        self.github.set_variable = set_variable
+        sleeps = []
+        def sleep(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) == 2:
+                raise KeyboardInterrupt
+        self.stands.sleep = sleep
+        with self.assertRaises(KeyboardInterrupt):
+            self.stands.reap("demo", poll=1)
+        self.assertEqual(attempts, ["true", "true"])
+        self.assertEqual(self.state()["ci_variable"], "synced")
+
+    def test_failed_ci_restore_is_recorded(self):
+        self.ready()
+        self.github.busy = [[], [{"databaseId": 3, "workflowName": "CI", "status": "queued"}]]
+        def set_variable(repo, name, value):
+            if value == "true":
+                raise vs.StageError("gh_unavailable")
+        self.github.set_variable = set_variable
+        self.stands.down("demo")
+        self.assertEqual((self.state()["phase"], self.state()["ci_variable"]), ("ready", "restore_pending"))
 
     def test_only_one_watcher_runs(self):
         self.ready()
@@ -455,6 +486,22 @@ class CreationTests(Base):
         self.assertEqual((self.state()["phase"], self.state()["op"]), ("failed", None))
         self.assertIn(holder, self.state()["leases"])
 
+    def test_hold_survives_a_creation_whose_answer_was_lost(self):
+        # The provider created the server, the answer never arrived: failed, nothing recorded, a tagged orphan.
+        orphan = self.cloud.create_server({"name": "vrata-demo-stage", "metadata": {"vrata-stage": "demo"}})
+        self.cloud.calls.clear()
+        self.set_state(phase="failed", server=None, reaper=vs.process_identity(os.getpid()))
+        hold = self.stands.acquire("demo", "user", owner=None)
+        self.spawned.clear()
+        self.set_state(phase="failed", op=None)
+        other = self.stands.acquire("demo", "e2e", owner=None)
+        self.assertEqual((other["phase"], other["failed_stand_held_by"]), ("failed", [hold["lease"]]))
+        self.assertEqual(self.spawned, [])
+        with self.assertRaisesRegex(vs.StageError, "failed_stand_in_use"):
+            self.stands.up("demo", requester=other["lease"])
+        self.assertEqual(self.cloud.calls, [])
+        self.assertIn(orphan, self.cloud.servers)
+
     def test_lease_taken_while_a_failed_instance_is_replaced_stops_the_delete(self):
         old = self.cloud.create_server({"name": "vrata-demo-stage", "metadata": {"vrata-stage": "demo"}})
         self.cloud.calls.clear()
@@ -526,39 +573,48 @@ class HelperTests(Base):
         self.assertNotIn("imageRef", body)
         self.assertTrue(body["block_device_mapping_v2"][0]["delete_on_termination"])
 
-    def test_busy_runs_filter_by_workflow_and_branch(self):
-        pages = {
-            "in_progress": [{"id": 1, "name": "CI", "status": "in_progress", "head_branch": "feature"},
-                            {"id": 5, "name": "Docs", "status": "in_progress", "head_branch": "main"}],
-            "queued": [{"id": 2, "name": "CI", "status": "queued", "head_branch": "main"}],
-            "waiting": [{"id": 4, "name": "Deliver", "status": "waiting", "head_branch": "main"}],
-        }
+    def api(self, runs_by_workflow):
+        """Fake gh api: workflow list plus one runs page per workflow id; records the queries."""
+        queries = []
 
         def runner(args, **kwargs):
-            status = args[2].split("status=")[1].split("&")[0]
-            runs = pages.get(status, [])
-            return type("Done", (), {"returncode": 0, "stderr": "",
-                                     "stdout": json.dumps({"total_count": len(runs), "workflow_runs": runs})})()
-        github = vs.GitHub(runner=runner)
+            query = args[2]
+            queries.append(query)
+            if query.endswith("/actions/workflows?per_page=100"):
+                body = {"workflows": [{"name": name, "id": index} for index, name in enumerate(runs_by_workflow)]}
+            elif query.endswith("/actions/runs?per_page=100"):
+                body = {"workflow_runs": [dict(run, name=name) for name, runs in runs_by_workflow.items() for run in runs]}
+            else:
+                workflow = list(runs_by_workflow)[int(query.split("/workflows/")[1].split("/")[0])]
+                branch = query.split("branch=")[1] if "branch=" in query else None
+                body = {"workflow_runs": [run for run in runs_by_workflow[workflow] if not branch or run["head_branch"] == branch]}
+            return type("Done", (), {"returncode": 0, "stderr": "", "stdout": json.dumps(body)})()
+        return vs.GitHub(runner=runner), queries
+
+    def test_busy_runs_take_one_snapshot_per_workflow(self):
+        github, queries = self.api({
+            "CI": [{"id": 1, "status": "in_progress", "head_branch": "feature"}, {"id": 2, "status": "pending", "head_branch": "main"},
+                   {"id": 3, "status": "completed", "head_branch": "main"}],
+            "Deliver": [{"id": 4, "status": "waiting", "head_branch": "main"}],
+            "Docs": [{"id": 5, "status": "in_progress", "head_branch": "main"}]})
         self.assertEqual(sorted(run["databaseId"] for run in github.busy_runs("o/r", ["CI@main", "Deliver"])), [2, 4])
-        pages["queued"] = [{"id": 6, "name": "Other", "status": "queued", "head_branch": "main"}]
-        many = lambda args, **kwargs: type("Done", (), {"returncode": 0, "stderr": "",
-                                                        "stdout": json.dumps({"total_count": 101, "workflow_runs": []})})()
-        self.assertEqual(len(vs.GitHub(runner=many).busy_runs("o/r", ["CI"])), 1)
+        self.assertTrue(all("status=" not in query for query in queries))
+        self.assertIn("repos/o/r/actions/workflows/0/runs?per_page=100&branch=main", queries)
 
-    def test_busy_runs_catch_a_run_moving_from_queued_to_in_progress(self):
-        asked = []
+    def test_other_active_workflows_count_unless_excepted(self):
+        github, _ = self.api({
+            "Staging Deploy": [{"id": 1, "status": "completed", "head_branch": "main"}],
+            "CI": [{"id": 2, "status": "in_progress", "head_branch": "feature"}],
+            "PR70 staging read-only verification": [{"id": 3, "status": "queued", "head_branch": "pr70"}]})
+        busy = github.busy_runs("o/r", ["Staging Deploy"], others_except=["CI"])
+        self.assertEqual([(run["databaseId"], run["workflowName"]) for run in busy], [(3, "PR70 staging read-only verification")])
+        self.assertEqual(github.busy_runs("o/r", ["Staging Deploy"]), [])
 
-        def runner(args, **kwargs):
-            status = args[2].split("status=")[1].split("&")[0]
-            asked.append(status)
-            # The run is queued until the queued page was asked for, then in progress.
-            runs = [{"id": 7, "name": "CI", "status": status, "head_branch": "main"}] if status == "in_progress" else []
-            return type("Done", (), {"returncode": 0, "stderr": "",
-                                     "stdout": json.dumps({"total_count": len(runs), "workflow_runs": runs})})()
-        busy = vs.GitHub(runner=runner).busy_runs("o/r", ["CI"])
-        self.assertEqual(asked, ["requested", "pending", "waiting", "queued", "in_progress"])
-        self.assertEqual([run["databaseId"] for run in busy], [7])
+    def test_busy_runs_stay_conservative_on_a_full_page_and_unknown_names(self):
+        github, _ = self.api({"Deploy": [{"id": n, "status": "queued", "head_branch": "main"} for n in range(100)]})
+        self.assertIn("more active runs", github.busy_runs("o/r", ["Deploy"])[-1]["workflowName"])
+        with self.assertRaisesRegex(vs.StageError, "unknown_workflow:Renamed"):
+            github.busy_runs("o/r", ["Renamed"])
 
     def test_gh_timeout_is_a_stage_error(self):
         def runner(args, **kwargs):

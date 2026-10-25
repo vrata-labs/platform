@@ -67,7 +67,8 @@ vrata-stage release <lease>                                     # последн
    push или ручной Staging Deploy под арендой.
 
 Удаление: нет живых аренд → нет активных прогонов Docker Publish, Staging Deploy,
-Rutube Canary, Template Catalog и Staging Smoke → `STAGING_AUTO_DEPLOY_ENABLED=false` →
+Rutube Canary, Staging Template Catalog, Staging Smoke и любых других workflow, кроме CI,
+Docker Release и Seat marker checks (разовые диагностики тоже ходят на стенд) → `STAGING_AUTO_DEPLOY_ENABLED=false` →
 повторная проверка прогонов (начавшийся прогон возвращает переменную и оставляет стенд) →
 сохранение тома Caddy → удаление сервера по ID и тегу. После `release` уборка ждёт паузу
 и повторяет попытку, пока CI занят. Без стенда push в `main` не выкатывается и не

@@ -29,8 +29,7 @@ import urllib.parse
 PURPOSE_TTL = {"deploy": 3 * 3600, "e2e": 2 * 3600, "debug": 2 * 3600, "manual": 4 * 3600, "user": 8 * 3600}
 MAX_TTL = 24 * 3600
 AGENT_COMMANDS = {"claude", "opencode"}
-# Lifecycle order: a run only moves forward, so querying in this order cannot miss an active run.
-BUSY_STATUSES = ("requested", "pending", "waiting", "queued", "in_progress")
+BUSY_STATUSES = {"requested", "pending", "waiting", "queued", "in_progress"}
 HOST_KEY_TYPES = ("ed25519", "ecdsa", "rsa")
 DEFAULT_CONFIG = Path.home() / "inprojects/vrata/.secrets/stage/stages.json"
 DEFAULT_STATE = Path.home() / ".local/state/vrata-stage"
@@ -294,20 +293,34 @@ class GitHub:
     def set_variable(self, repo, name, value):
         self.gh("variable", "set", name, "--repo", repo, "--body", value)
 
-    def busy_runs(self, repo, workflows):
-        """All active runs of the listed workflows, filtered by status on the API side so a long run is not
-        lost behind newer ones; "CI@main" limits a workflow to one branch."""
-        wanted = [entry.partition("@") for entry in workflows]
+    def busy_runs(self, repo, workflows, others_except=None):
+        """Active runs that may use the stand. Each listed workflow ("CI@main" limits one to a branch) is read as
+        one snapshot of its latest runs regardless of status: a status filter per query could miss a run moving
+        between statuses (queued -> pending under a concurrency group) while the queries run. With others_except,
+        any other active run among the latest runs of the repository counts too, unless its workflow is listed
+        there: ad-hoc diagnostic workflows reach the stand as well."""
+        ids = {workflow["name"]: workflow["id"] for workflow in
+               json.loads(self.gh("api", f"repos/{repo}/actions/workflows?per_page=100"))["workflows"]}
         busy = []
-        for status in BUSY_STATUSES:
-            data = json.loads(self.gh("api", f"repos/{repo}/actions/runs?status={status}&per_page=100"))
-            if data["total_count"] > len(data["workflow_runs"]):
-                # More active runs than one page: keep the stand rather than guess.
-                return [{"databaseId": 0, "workflowName": f"{data['total_count']} {status} runs", "status": status}]
-            busy += [{"databaseId": run["id"], "workflowName": run["name"], "status": run["status"],
-                      "headBranch": run["head_branch"]}
-                     for run in data["workflow_runs"]
-                     if any(run["name"] == name and (not branch or run["head_branch"] == branch) for name, _, branch in wanted)]
+        pages = []
+        for name, _, branch in (entry.partition("@") for entry in workflows):
+            if name not in ids:
+                raise StageError("unknown_workflow:" + name)
+            query = f"repos/{repo}/actions/workflows/{ids[name]}/runs?per_page=100" + (f"&branch={branch}" if branch else "")
+            pages.append((name, json.loads(self.gh("api", query))["workflow_runs"]))
+        if others_except is not None:
+            listed = {entry.partition("@")[0] for entry in workflows} | set(others_except)
+            runs = json.loads(self.gh("api", f"repos/{repo}/actions/runs?per_page=100"))["workflow_runs"]
+            pages.append(("other workflows", [run for run in runs if run["name"] not in listed]))
+            if len(runs) == 100 and runs[-1]["status"] in BUSY_STATUSES:
+                busy.append({"databaseId": 0, "workflowName": "older active runs", "status": "unknown"})
+        for name, runs in pages:
+            busy += [{"databaseId": run["id"], "workflowName": run.get("name") if name == "other workflows" else name,
+                      "status": run["status"], "headBranch": run["head_branch"]}
+                     for run in runs if run["status"] in BUSY_STATUSES]
+            if len(runs) == 100 and runs[-1]["status"] in BUSY_STATUSES:
+                # Even the oldest run of a full page is active: older ones may be too, keep the stand.
+                busy.append({"databaseId": 0, "workflowName": name + " (more active runs)", "status": "unknown"})
         return busy
 
     def latest_success_sha(self, repo, workflow):
@@ -427,10 +440,12 @@ class Stands:
         return result
 
     def ensure_locked(self, name, state, sha=None, requester=None):
-        """Start creation when someone holds a lease and nothing runs. A failed instance that still exists is
-        replaced only for its sole user: another lease holder may be inspecting it."""
+        """Start creation when someone holds a lease and nothing runs. A failed stand is created again only for
+        a requester who is its sole user; others may be inspecting it (retry: release, then acquire)."""
         if not state["op"] and state["leases"] and state["phase"] in ("absent", "failed"):
-            if not (state["phase"] == "failed" and state["server"] and set(state["leases"]) - {requester}):
+            # A lease belongs to the stand, not to a recorded server: a creation whose API answer was lost leaves
+            # an unrecorded instance that an older lease may still be waiting for or inspecting.
+            if not (state["phase"] == "failed" and set(state["leases"]) - {requester}):
                 state["phase"] = "creating"
                 state["op"] = self.spawn(["up", name] + (["--sha", sha] if sha else [])
                                          + (["--requester", requester] if requester else []), name)
@@ -514,7 +529,7 @@ class Stands:
 
     def ci_busy(self, name):
         github = self.config.stage(name)["github"]
-        return self.github.busy_runs(github["repo"], github.get("busy_workflows", []))
+        return self.github.busy_runs(github["repo"], github.get("busy_workflows", []), github.get("busy_others_except"))
 
     def set_ci(self, name, present):
         github = self.config.stage(name)["github"]
@@ -585,14 +600,18 @@ class Stands:
 
     def cancel_destroy(self, name, previous, switched, leases, runs):
         # CI is switched back while this operation still owns the stand, so a later removal cannot be overtaken.
+        synced = "synced"
         if switched and previous == "ready":
             try:
                 self.set_ci(name, True)
             except StageError as error:
-                self.log(f"ci variable not restored, automatic deploy stays off: {error}")
+                self.log(f"ci variable not restored, the watcher retries: {error}")
+                synced = "restore_pending"
         with self.registry.locked(name) as state:
             if owns(state, process_identity(os.getpid())):
                 state["phase"], state["op"] = previous, None
+                if switched:
+                    state["ci_variable"] = synced
                 record(state, "destroy_cancelled", leases=leases, runs=[run["databaseId"] for run in runs])
         if leases:
             return {"stage": name, "removed": False, "reason": "leases", "leases": leases}
@@ -645,6 +664,16 @@ class Stands:
                         state["reaper"] = None
                     return {"stage": name, "phase": "absent"}
                 in_use = bool(live or state["op"])
+                restore_ci = state["phase"] == "ready" and not state["op"] and state.get("ci_variable") == "restore_pending"
+            if restore_ci:
+                try:
+                    self.set_ci(name, True)
+                    with self.registry.locked(name) as state:
+                        if state["phase"] == "ready" and not state["op"]:
+                            state["ci_variable"] = "synced"
+                            record(state, "ci_variable_restored")
+                except StageError as error:
+                    self.log(f"ci variable still not restored: {error}")
             if in_use:
                 idle_since = None
                 self.sleep(poll)
@@ -713,11 +742,9 @@ class Stands:
             if state["op"] and not owns(state, me) and process_alive(state["op"]):
                 refusal = "operation_running:" + state["phase"]
             else:
-                others = sorted(set(prune(state, utcnow())) - {requester})
+                prune(state, utcnow())
                 if state["phase"] == "ready" and not force:
                     refusal = "stage_ready"
-                elif state["server"] and others and not force:
-                    refusal = "failed_stand_in_use:" + ",".join(others)
                 if refusal:
                     if owns(state, me):
                         state["phase"], state["op"] = ("failed" if state["server"] else "absent"), None
@@ -733,15 +760,13 @@ class Stands:
             self.set_ci(name, False)
             stale = self.owned_servers(name, leftover)
             if stale:
-                # Replacing a failed instance is a removal too: CI must not be using it.
+                # Replacing an existing instance is a removal too: no other lease and no CI run may use it.
+                self.refuse_if_shared(name, requester, force)
                 busy = self.ci_busy(name)
                 if busy and not force:
                     raise StageError("ci_busy:" + ",".join(f"{run['workflowName']}#{run['databaseId']}" for run in busy))
                 self.save_caddy(name)
-                with self.registry.locked(name) as state:
-                    late = sorted(set(prune(state, utcnow())) - {requester}) if leftover and not force else []
-                if late:
-                    raise StageError("failed_stand_in_use:" + ",".join(late))
+                self.refuse_if_shared(name, requester, force)
                 for server_id in stale:
                     self.request_delete(name, server_id)
                 for server_id in stale:
@@ -784,7 +809,9 @@ class Stands:
                 self.log(f"newer SHA not checked: {error}")
                 newest = sha
             with self.registry.locked(name) as state:
-                state["phase"], state["op"] = "ready", None
+                if not owns(state, me):
+                    raise StageError("operation_taken_over")
+                state["phase"], state["op"], state["ci_variable"] = "ready", None, "synced"
                 state["server"]["ready"] = iso(utcnow())
                 if newest != sha:
                     state["server"]["behind"] = newest
@@ -798,6 +825,12 @@ class Stands:
                     record(state, "create_failed", error=str(error)[:300])
             self.log(f"creation failed: {error}")
             raise
+
+    def refuse_if_shared(self, name, requester, force):
+        with self.registry.locked(name) as state:
+            others = sorted(set(prune(state, utcnow())) - {requester})
+        if others and not force:
+            raise StageError("failed_stand_in_use:" + ",".join(others))
 
     def server_body(self, name, user_data):
         stage = self.config.stage(name)
