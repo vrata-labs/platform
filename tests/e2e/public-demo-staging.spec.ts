@@ -13,6 +13,7 @@ test.use({
 
 test.describe("@staging public demo production scenario", () => {
   test.describe.configure({ mode: "serial" });
+  test.skip(process.env.VRATA_REFERENCE_CATALOG_ACTIVE !== "1", "A new host first runs on the Wave 2 catalog; reference rooms with scenes exist after its gated activation");
   let origin = "";
   let adminToken = "";
 

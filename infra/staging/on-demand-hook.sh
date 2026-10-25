@@ -3,7 +3,8 @@
 # this hook says what runs on it. Phases:
 #   user-data  print cloud-config: administrator and CI keys of the user vrata
 #   prepare    bootstrap-host.sh, then the repository admin token in the private env
-#   deploy     first verified Staging Deploy of STAGE_DEPLOY_SHA on the new host
+#   deploy     first verified Staging Deploy of STAGE_DEPLOY_SHA on the new host (Wave 2 catalog), then the
+#              gated activation of the reference catalog on the same SHA
 # Inputs (files): STAGE_ADMIN_PUBKEY, STAGE_CI_PUBKEY, STAGE_ADMIN_TOKEN; secrets never enter user-data.
 set -euo pipefail
 phase=${1:?usage: on-demand-hook.sh user-data|prepare|deploy}
@@ -52,6 +53,10 @@ PY
     # A new host has no accepted release: bootstrap, and raise the identity floor before the first gate.
     python3 -B "$VRATA_STAGE_BIN" dispatch --repo "$STAGE_REPO" --workflow staging-deploy.yml \
       -f "deploy_sha=$STAGE_DEPLOY_SHA" -f bootstrap=true -f "activate_identity_v2=${STAGE_IDENTITY_V2:-true}"
+    # Its first gate runs on the Wave 2 catalog and records the Wave 2 marker; the reference catalog that the full
+    # staging suite expects is activated only by its own gated transition on the accepted image.
+    python3 -B "$VRATA_STAGE_BIN" dispatch --repo "$STAGE_REPO" --workflow template-catalog.yml \
+      -f operation=activate -f "expected_image_sha=$STAGE_DEPLOY_SHA"
     ;;
   *)
     echo "unknown phase: $phase" >&2

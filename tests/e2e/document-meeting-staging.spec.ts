@@ -2,6 +2,7 @@ import { test } from "@playwright/test";
 import { createDocumentMeeting, documentPolicyScenario, documentMobilePresentationScenario, documentDelayedResponseScenario } from "./document-meeting-scenarios";
 
 test.use({ trace: "off", screenshot: "off", video: "off" });
+test.skip(process.env.VRATA_REFERENCE_CATALOG_ACTIVE !== "1", "A new host first runs on the Wave 2 catalog; reference rooms with scenes exist after its gated activation");
 for (const mobile of [false, true]) test(`@staging documents ${mobile ? "Android viewport" : "desktop"}: actual policy, upload failures, own download and busy state`, async ({ browser, request }) => {
   test.setTimeout(180_000);
   const meeting = await createDocumentMeeting({ browser, request, mobile, origin: process.env.BASE_URL!, adminToken: process.env.STAGING_ADMIN_TOKEN! });

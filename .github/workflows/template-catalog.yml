@@ -1,4 +1,6 @@
 name: Staging Template Catalog
+# A dispatch from tools/vrata-stage.py finds its own run by the request id in the run name.
+run-name: ${{ inputs.request && format('Staging Template Catalog {0}', inputs.request) || '' }}
 
 on:
   workflow_dispatch:
@@ -12,6 +14,11 @@ on:
         description: "Exact currently deployed and verified image SHA"
         type: string
         required: true
+      request:
+        description: Identifier of an automated dispatch, shown in the run name
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read

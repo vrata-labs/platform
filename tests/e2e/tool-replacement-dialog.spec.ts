@@ -7,6 +7,7 @@ for (const staging of [false, true]) for (const mobile of [false, true]) test(`$
   // This is cumulative functional/visual work on a software-rendered full-DPR
   // scene, not an interaction-latency benchmark. Individual waits stay bounded.
   test.setTimeout(mobile ? 180_000 : 300_000); if (!staging) expect(!!process.env.VRATA_TEST_POSTGRES_URL).toBe(true);
+  test.skip(staging && process.env.VRATA_REFERENCE_CATALOG_ACTIVE !== "1", "A new host first runs on the Wave 2 catalog; reference rooms with scenes exist after its gated activation");
   const startedAt = Date.now(); const phases: Array<{ phase: string; atMs: number }> = [];
   let phase = "fixture-setup"; const mark = (value: string) => { phase = value; phases.push({ phase, atMs: Date.now()-startedAt }); };
   if (staging) expect(!!process.env.BASE_URL && !!process.env.STAGING_ADMIN_TOKEN).toBe(true);

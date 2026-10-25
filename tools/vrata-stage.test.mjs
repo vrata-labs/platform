@@ -46,11 +46,15 @@ test("platform stand hook gives both keys to cloud-init and keeps the admin toke
   }
   const hook = readFileSync(new URL("../infra/staging/on-demand-hook.sh", import.meta.url), "utf8");
   assert.match(hook, /bootstrap=true/);
+  assert(hook.indexOf("staging-deploy.yml") < hook.indexOf("--workflow template-catalog.yml"), "the catalog is activated after the bootstrap deploy");
+  assert.match(hook, /-f operation=activate -f "expected_image_sha=\$STAGE_DEPLOY_SHA"/);
   assert.match(hook, /<"\$STAGE_ADMIN_TOKEN"/);
 });
 
-test("dispatched deploy runs carry the request id in their name", () => {
-  const workflow = readFileSync(new URL("../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
-  assert.match(workflow, /^run-name: \$\{\{ inputs\.request && format\('Staging Deploy \{0\}', inputs\.request\) \|\| '' \}\}$/m);
-  assert.match(workflow, /      request:\n        description: [^\n]+\n        required: false\n        default: ""\n        type: string/);
+test("dispatched deploy and catalog runs carry the request id in their name", () => {
+  for (const [file, name] of [["staging-deploy.yml", "Staging Deploy"], ["template-catalog.yml", "Staging Template Catalog"]]) {
+    const workflow = readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), "utf8");
+    assert(workflow.includes(`run-name: \${{ inputs.request && format('${name} {0}', inputs.request) || '' }}`), file);
+    assert.match(workflow, /      request:\n        description: [^\n]+\n        required: false\n        default: ""\n        type: string/, file);
+  }
 });

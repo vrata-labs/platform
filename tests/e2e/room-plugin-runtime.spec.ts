@@ -14,6 +14,7 @@ const stagingOrigin = () => ({ origin: process.env.BASE_URL!, adminToken: proces
 
 for (const staging of [false, true]) test(`${staging ? "@staging " : ""}room without plugin bindings never downloads Worker or VM; floor one skips discovery`, async ({ browser }) => {
   test.setTimeout(180_000);
+  test.skip(staging && process.env.VRATA_REFERENCE_CATALOG_ACTIVE !== "1", "A new host first runs on the Wave 2 catalog; reference rooms with scenes exist after its gated activation");
   const value = staging ? stagingOrigin() : await fixture(1);
   expect(Boolean(value.origin && value.adminToken)).toBe(true);
   try {
@@ -35,6 +36,7 @@ for (const staging of [false, true]) test(`${staging ? "@staging " : ""}room wit
 for (const staging of [false, true]) test(`${staging ? "@staging shared" : "isolated"} v2 discovers first external SDK artifact, changes config and disables without reload`, async ({ browser, request }) => {
   test.setTimeout(300_000);
   test.skip(staging && await identityProtocolAt(process.env.BASE_URL!) !== 2, "Shared staging has not activated identity v2");
+  test.skip(staging && process.env.VRATA_REFERENCE_CATALOG_ACTIVE !== "1", "A new host first runs on the Wave 2 catalog; reference rooms with scenes exist after its gated activation");
   const value = staging ? stagingOrigin() : await fixture(2);
   let author: Awaited<ReturnType<typeof createExternalAuthorProject>> | undefined;
   try {
