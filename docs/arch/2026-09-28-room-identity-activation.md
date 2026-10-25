@@ -652,6 +652,12 @@ This preparatory slice adds, without changing what is issued:
   rooms, so a sibling generation created during the pass is seen, and requires
   every sibling to be free of user connections. A retired room with users anywhere
   in its full listing invalidates the current observation.
+- Portal-managed rooms (PR #129) keep their access epoch as the last name segment:
+  `...:${roomId}:${accessEpoch}`, on top of the codec-2 or codec-3 base. One parser
+  (`managed-media-names.ts`) owns both codecs, the generation and the epoch. The
+  reconciler treats a managed room of any other epoch as a retired generation too,
+  and the managed-room enforcer deletes retired-epoch rooms under both codecs and,
+  past the boundary, current-epoch rooms of codec 2 or another generation.
 - Runtime resolves `vmi2` and `vmi3` peers and, while two lineages of one
   participant overlap, plays the newer epoch. This is a UI aid, not enforcement.
 
