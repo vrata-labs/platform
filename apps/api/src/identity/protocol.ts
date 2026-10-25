@@ -2,23 +2,45 @@ import type { Pool } from "pg";
 import { randomBytes } from "node:crypto";
 import { activatedIdentityRoomGuard, legacyIdentityRoomGuard } from "./protocol-guard.js";
 
+export type MediaCodec = 2 | 3;
+/** The floor-two media address space: one namespace plus the monotonic codec that new grants use. */
+export interface MediaBoundary { namespace: string; codec: MediaCodec }
+
 export interface IdentityProtocolPolicy {
   minimum(): Promise<number>;
   mediaNamespace(): Promise<string | null>;
+  /** Null below floor two. Codec 3 retires every codec-2 grant; it is never lowered. */
+  mediaBoundary(): Promise<MediaBoundary | null>;
   raise(minimum: 1 | 2): Promise<number>;
+  raiseMediaCodec(codec: MediaCodec): Promise<MediaCodec>;
+}
+
+function assertMediaCodec(value: number): asserts value is MediaCodec {
+  if (value !== 2 && value !== 3) throw new Error("invalid_media_codec");
 }
 
 function assertMinimum(value: number): void {
   if (value !== 1 && value !== 2) throw new Error("invalid_identity_protocol");
 }
 
-export function createMemoryIdentityProtocol(): IdentityProtocolPolicy & { current(): number } {
+export function createMemoryIdentityProtocol(): IdentityProtocolPolicy & { current(): number; currentMediaCodec(): MediaCodec; currentMediaNamespace(): string | null } {
   let minimum = 1;
   let namespace: string | null = null;
+  let mediaCodec: MediaCodec = 2;
   return {
     current() { return minimum; },
+    currentMediaCodec() { return mediaCodec; },
+    currentMediaNamespace() { return namespace; },
     async minimum() { return minimum; },
     async mediaNamespace() { return namespace; },
+    async mediaBoundary() { return namespace === null ? null : { namespace, codec: mediaCodec }; },
+    async raiseMediaCodec(value) {
+      assertMediaCodec(value);
+      if (minimum < 2) throw new Error("media_codec_requires_identity_v2");
+      if (value < mediaCodec) throw new Error("media_codec_downgrade_forbidden");
+      mediaCodec = value;
+      return mediaCodec;
+    },
     async raise(value) {
       assertMinimum(value);
       if (value < minimum) throw new Error("identity_protocol_downgrade_forbidden");
@@ -42,6 +64,34 @@ export function createPostgresIdentityProtocol(pool: Pool): IdentityProtocolPoli
       if (row.minimum_protocol === 1 && row.media_namespace === null) return null;
       if (row.minimum_protocol >= 2 && typeof row.media_namespace === "string" && /^[a-f0-9]{32}$/.test(row.media_namespace)) return row.media_namespace;
       throw new Error("identity_protocol_namespace_invalid");
+    },
+    async mediaBoundary() {
+      const row = (await pool.query("select minimum_protocol, media_namespace, media_codec from room_identity_protocol_policy where singleton=true")).rows[0];
+      if (!row) throw new Error("identity_protocol_policy_missing");
+      if (row.minimum_protocol === 1 && row.media_namespace === null && row.media_codec === 2) return null;
+      if (row.minimum_protocol >= 2 && typeof row.media_namespace === "string" && /^[a-f0-9]{32}$/.test(row.media_namespace)
+        && (row.media_codec === 2 || row.media_codec === 3)) return { namespace: row.media_namespace, codec: row.media_codec };
+      throw new Error("identity_protocol_namespace_invalid");
+    },
+    async raiseMediaCodec(value) {
+      assertMediaCodec(value);
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        await client.query("select pg_advisory_xact_lock(hashtextextended('vrata:postgres-storage-init:v1', 0))");
+        await client.query("set local lock_timeout='2s'");
+        // EXCLUSIVE waits for every issuance fence holding the policy FOR SHARE:
+        // a codec-2 grant is either released before this commit or refused after it.
+        await client.query("lock table room_identity_protocol_policy in exclusive mode");
+        const row = (await client.query("select minimum_protocol,media_codec from room_identity_protocol_policy where singleton=true for update")).rows[0];
+        if (!row) throw new Error("identity_protocol_policy_missing");
+        if (row.minimum_protocol < 2) throw new Error("media_codec_requires_identity_v2");
+        if (value < row.media_codec) throw new Error("media_codec_downgrade_forbidden");
+        await client.query("update room_identity_protocol_policy set media_codec=$1 where singleton=true", [value]);
+        await client.query("commit");
+        return value;
+      } catch (error) { await client.query("rollback"); throw error; }
+      finally { client.release(); }
     },
     async raise(value) {
       assertMinimum(value);

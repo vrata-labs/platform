@@ -118,6 +118,65 @@ with tempfile.TemporaryDirectory() as root:
 `], { encoding: "utf8" });
 });
 
+test("media codec activation requires floor two and a candidate and rollback target that enforce the raised boundary", () => {
+  const file = fileURLToPath(new URL("./staging-remote-release.py", import.meta.url));
+  const output = execFileSync("python3", ["-B", "-c", `
+import importlib.util,tempfile,json
+from pathlib import Path
+spec=importlib.util.spec_from_file_location("remote",${JSON.stringify(file)})
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+def rejects(fn,code):
+    try:fn()
+    except (ValueError,RuntimeError,OSError) as e:assert code in str(e),str(e)
+    else:raise AssertionError("expected "+code)
+a,b,x="a"*40,"b"*40,"c"*40
+full={"schemaVersion":1,"identityProtocolFloorGuard":1,"roomRecordReader":2,"frameTokenCodec":2,"mediaIdentityCodec":2,"mediaScreenReconciler":2,"mediaCodecBoundary":3}
+record={"schemaVersion":1,"imageSha":a,"assetSha":x,"snapshotId":a+"-"+x,
+        "foundationDigests":{n:"example/"+n+"@sha256:"+"d"*64 for n in m.accepted.FOUNDATIONS},"runId":"1","runAttempt":1}
+with tempfile.TemporaryDirectory() as directory:
+    root=Path(directory)/"checkout";(root/"infra/docker").mkdir(parents=True)
+    (root/"infra/docker/.env.staging").write_text("API_IMAGE_REPO=reg/api\\nROOM_STATE_IMAGE_REPO=reg/rs\\nREMOTE_BROWSER_IMAGE_REPO=reg/rb\\n")
+    host=m.ReleaseHost(root); calls=[]; contracts={a:dict(full),b:dict(full)}
+    state={"image":b,"cli":{"ok":True,"before":2,"after":3,"raised":True},"floor":2,"codec":3}
+    def run(args,quiet=False):
+        calls.append(args)
+        if args[-2:]==["-q","api"] or args[-2:]==["-q","room-state"] or args[-2:]==["-q","remote-browser"]: return args[-1]+"-container"
+        if args[:2]==["docker","inspect"]:
+            repo={"api-container":"reg/api","room-state-container":"reg/rs","remote-browser-container":"reg/rb"}[args[-1]]
+            return repo+":"+state["image"]
+        if "activate-media-codec.js" in " ".join(args): return json.dumps(state["cli"])
+        raise AssertionError(args)
+    host.run=run
+    host.catalog.contract=lambda sha:contracts[sha]
+    host.catalog.validate_identity_database=lambda:calls.append(["db"])
+    host.catalog.validate_identity_configuration=lambda:calls.append(["secrets"])
+    host.catalog.minimum_identity_protocol=lambda:state["floor"]
+    host.catalog.media_codec=lambda:state["codec"]
+    host.state.directory.mkdir(parents=True,exist_ok=True); (host.state.directory/".state.lock").write_text("")
+    (host.state.directory/"accepted-release.json").write_text(json.dumps(record))
+    result=host.activate_media_codec3(b)
+    assert result=={"mediaCodec":{"before":2,"after":3,"raised":True},"rollbackTarget":a},result
+    cli=[args for args in calls if "activate-media-codec.js" in " ".join(args)]
+    assert len(cli)==1 and cli[0][-1]=="--confirm-irreversible" and ["db"] in calls and ["secrets"] in calls
+    def never_raised(code):
+        calls.clear(); rejects(lambda:host.activate_media_codec3(b),code)
+        assert not any("activate-media-codec.js" in " ".join(args) for args in calls),code
+    state["image"]=a; never_raised("runtime_image_mismatch"); state["image"]=b
+    state["floor"]=1; never_raised("staging_media_activation_requires_identity_v2"); state["floor"]=2
+    contracts[b]={k:v for k,v in full.items() if k!="mediaCodecBoundary"}
+    never_raised("candidate_incompatible:media_rollback_below_codec_boundary_forbidden")
+    contracts[b]=dict(full); contracts[a]=dict(full,mediaCodecBoundary=2)
+    never_raised("rollback_target_incompatible:media_rollback_below_codec_boundary_forbidden")
+    contracts[a]=dict(full)
+    state["cli"]={"ok":False,"error":"media_codec_requires_identity_v2"}
+    rejects(lambda:host.activate_media_codec3(b),"staging_media_activation_unconfirmed")
+    state["cli"]={"ok":True,"before":2,"after":3,"raised":True}; state["codec"]=2
+    rejects(lambda:host.activate_media_codec3(b),"staging_media_activation_unconfirmed")
+print("media activation assertions passed")
+`], { encoding: "utf8" });
+  assert.match(output, /media activation assertions passed/);
+});
+
 test("identity activation requires the running candidate and its rollback target to carry every floor-2 capability", () => {
   const file = fileURLToPath(new URL("./staging-remote-release.py", import.meta.url));
   const output = execFileSync("python3", ["-B", "-c", `

@@ -64,7 +64,7 @@ import { applyRoomLifecycleV2, lifecycleV2Error, roomIdentityActorFromHttp } fro
 import { createMediaScreenService } from "./media-screen-service.js";
 import { IdentityStorageError } from "./identity/contracts.js";
 import { PersonalOwnerRoomBlocked } from "./identity/personal-owner-response.js";
-import type { RoomEffectGuard, RoomEffectActor } from "./identity/effect-write-guard.js";
+import { MediaBoundaryChanged, type MediaGrantPin, type RoomEffectGuard, type RoomEffectActor } from "./identity/effect-write-guard.js";
 import type { Storage, RoomIdentityEffectStorage, VirtualRoomEffectStorage, LegacyRoomCredentialSelector, LegacyRoomCredentialSnapshot,
   LegacyAdmissionWriteInput, LegacyAdmissionWriteReceipt, LegacyRoomControlReceipt } from "./storage-contracts.js";
 import { createRoomEffectFacade } from "./identity/effect-facade.js";
@@ -1151,7 +1151,9 @@ interface MediaCredentialCapture {
   readonly role: RoomRole;
   /** The original proof had lapsed at signing: nothing was signed. */
   readonly lapsed: () => void;
-  readonly release: (plan: MediaCredentialPlan, prepared: PreparedMediaCredential, permissions: readonly RoomPermission[]) => Promise<void>;
+  /** `media` pins the v2 grant's boundary and room generation inside the final fence. */
+  readonly release: (plan: MediaCredentialPlan, prepared: PreparedMediaCredential, permissions: readonly RoomPermission[],
+    media?: MediaGrantPin) => Promise<void>;
 }
 
 function countMediaCredentialCompletionFailure(): void {
@@ -1205,8 +1207,10 @@ function captureV2MediaRelease(response: ServerResponse, storage: Storage, initi
     participantId: proof.participantId, authEpoch: proof.authEpoch, expiresAtSeconds: proof.exp,
     expectedRole: proof.role, expectedIsOwner: proof.isOwner });
   const lapsed = () => { throw new IdentityBoundaryError(401, "identity_session_expired"); };
-  return { role: proof.role, lapsed, release: async (plan, prepared, permissions) => {
-    const guard: RoomEffectGuard = Object.freeze({ ...pinned, permission: permissions[0], alsoRequired: Object.freeze(permissions.slice(1)) });
+  return { role: proof.role, lapsed, release: async (plan, prepared, permissions, media) => {
+    if (!media) throw new Error("media_grant_pin_required");
+    const guard: RoomEffectGuard = Object.freeze({ ...pinned, permission: permissions[0], alsoRequired: Object.freeze(permissions.slice(1)),
+      media: Object.freeze({ ...media }) });
     try {
       await releaseFrameCredential(async send => {
         try {
@@ -1216,6 +1220,8 @@ function captureV2MediaRelease(response: ServerResponse, storage: Storage, initi
         } catch (error) { throw guardedEffectError(error); }
       }, countMediaCredentialCompletionFailure);
     } catch (error) {
+      // An activation or room recreation between preparation and the fence: nothing was sent, a retry re-prepares.
+      if (error instanceof MediaBoundaryChanged) return writeRoomStateChanged(response);
       if (!(error instanceof RoomEffectPermissionDenied)) throw error;
       writeMediaPublishNotAllowed(response);
     }
@@ -2294,6 +2300,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   if (method === "GET" && url.pathname === "/health") {
     const identityProtocolVersion = await legacyIdentityBoundary.minimum() >= 2 ? 2 : null;
+    // The codec new media grants use: 3 once the irreversible media lineage boundary is raised.
+    const mediaIdentityCodec = identityProtocolVersion ? (await storage.identityProtocol.mediaBoundary())?.codec ?? null : null;
     json(response, 200, {
       status: "ok",
       service: "api",
@@ -2302,6 +2310,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       timestamp: new Date().toISOString(),
       features: {
         ...(identityProtocolVersion ? { identityProtocolVersion } : {}),
+        ...(mediaIdentityCodec ? { mediaIdentityCodec } : {}),
         xrEnabled: isXrFeatureEnabled(),
         voiceEnabled: process.env.FEATURE_VOICE !== "false",
         screenShareEnabled: process.env.FEATURE_SCREEN_SHARE !== "false",
@@ -4139,12 +4148,21 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     // A managed room's credential never outlives its access cutoff.
     const ttlSeconds = capTokenTtlSeconds(initialRoom, configuredTtlSeconds, Math.floor(Date.now() / 1000));
     const livekitUrl = getDefaultLivekitUrl(request), roomPrefix = process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-";
-    const mediaNamespace = proof.identityProtocolVersion === 2
-      ? await storage.identityProtocol.mediaNamespace() : null;
-    if (proof.identityProtocolVersion === 2 && !mediaNamespace) {
+    const boundary = proof.identityProtocolVersion === 2 ? await storage.identityProtocol.mediaBoundary() : null;
+    if (proof.identityProtocolVersion === 2 && !boundary) {
       return json(response, 503, { error: "identity_authority_unavailable" });
     }
-    const mediaRoom = currentMediaRoomName(initialRoom, proof.roomId, roomPrefix, mediaNamespace);
+    // Codec 3 binds the original proof's epoch and the room generation; the fence re-checks both.
+    // A managed room's grant also names its access epoch; the fence re-checks it against a rotation.
+    let media: MediaGrantPin | undefined;
+    const accessEpoch = initialRoom?.managed ? { accessEpoch: initialRoom.managed.accessEpoch } : {};
+    if (boundary?.codec === 3) {
+      const incarnation = await storage.roomIdentities.mediaIncarnation({ tenantId: proof.tenantId, roomId: proof.roomId });
+      if (!incarnation) return writeRoomStateChanged(response);
+      media = Object.freeze({ codec: 3, namespace: boundary.namespace, incarnation, ...accessEpoch });
+    } else if (boundary) media = Object.freeze({ codec: 2, namespace: boundary.namespace, ...accessEpoch });
+    const mediaNamespace = boundary?.namespace ?? null;
+    const mediaRoom = currentMediaRoomName(initialRoom, proof.roomId, roomPrefix, mediaNamespace, media?.incarnation);
     if (initialRoom?.managed) {
       // Portal targets run LiveKit with auto_create:false: only the platform creates the room of the current epoch.
       if (!mediaNamespace) return json(response, 503, { error: "identity_authority_unavailable" });
@@ -4166,8 +4184,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         return json(response, 503, { error: "media_unavailable", reason: "media_epoch_changed", requestId });
       }
     }
-    const mediaIdentity = proof.identityProtocolVersion === 2
-      ? await createUserMediaIdentity(mediaRoom, { participantId: proof.participantId, scope: userMediaScope(publishSources)! })
+    const mediaIdentity = boundary
+      ? await createUserMediaIdentity(mediaRoom, { participantId: proof.participantId, scope: userMediaScope(publishSources)!,
+        ...(boundary.codec === 3 ? { epoch: proof.authEpoch } : {}) })
       : { identity: proof.participantId };
     const plan = captureMediaCredentialPlan({ apiKey, apiSecret, ...mediaIdentity, name: proof.displayName,
       grant: { room: mediaRoom, roomJoin: true,
@@ -4175,7 +4194,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       ttlSeconds, proofExpiresAtSeconds: proof.exp, livekitUrl });
     const prepared = await signMediaCredential(plan, Date.now());
     if (!prepared) return capture.lapsed();
-    await capture.release(plan, prepared, Object.freeze(publishPermissions));
+    await capture.release(plan, prepared, Object.freeze(publishPermissions), media);
     return;
   }
 
@@ -4212,37 +4231,53 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
     const ttlSeconds = capTokenTtlSeconds(remoteBrowserRoom, Number.parseInt(process.env.MEDIA_TOKEN_TTL_SECONDS ?? "900", 10), Math.floor(Date.now() / 1000));
     const { apiKey, apiSecret } = getLivekitCredentials();
-    const mediaNamespace = v2Media ? await storage.identityProtocol.mediaNamespace() : null;
-    if (v2Media && !mediaNamespace) return json(response, 503, { error: "identity_authority_unavailable" });
+    const boundary = v2Media ? await storage.identityProtocol.mediaBoundary() : null;
+    if (v2Media && !boundary) return json(response, 503, { error: "identity_authority_unavailable" });
+    // The executor publishes into the same native room as the users of the current boundary and generation.
+    const incarnation = boundary?.codec === 3 && remoteBrowserRoom
+      ? await storage.roomIdentities.mediaIncarnation({ tenantId: remoteBrowserRoom.tenantId, roomId: payload.roomId }) : undefined;
+    if (boundary?.codec === 3 && !incarnation) return json(response, 409, { error: "room_state_changed", reason: "room_state_changed" });
     const accessToken = new AccessToken(apiKey, apiSecret, {
       identity: payload.mediaParticipantId,
       name: `Remote Browser ${payload.objectId}`,
       ttl: `${ttlSeconds}s`
     });
     accessToken.addGrant({
-      room: currentMediaRoomName(remoteBrowserRoom, payload.roomId, process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-", mediaNamespace),
+      room: currentMediaRoomName(remoteBrowserRoom, payload.roomId, process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-", boundary?.namespace ?? null, incarnation ?? undefined),
       roomJoin: true,
       canPublish: true,
       canSubscribe: false
     });
     const executorToken = await accessToken.toJwt();
-    if (v2Media) {
-      const currentRoom = await storage.getRoom(payload.roomId);
-      if (!currentRoom || isRoomDisabled(currentRoom)) return json(response, 403, { error: "room_access_denied", reason: "room_disabled" });
-      const authority = await storage.roomIdentities.authority({ tenantId: currentRoom.tenantId, roomId: payload.roomId });
-      if (!authority || authority.lifecycle.endedAt) return json(response, 409, { error: "remote_browser_session_not_authoritative" });
-      if (!await verifyRemoteBrowserAuthority({ roomId: payload.roomId, objectId: payload.objectId,
-        executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId,
-        mediaParticipantId: payload.mediaParticipantId })) {
-        return json(response, 409, { error: "remote_browser_session_not_authoritative" });
-      }
-    }
-    json(response, 200, {
+    const reply = () => json(response, 200, {
       token: executorToken,
       expiresInSeconds: ttlSeconds,
       livekitUrl: getRemoteBrowserLivekitUrl(request, payload),
       participantId: payload.mediaParticipantId
     });
+    if (!v2Media || !boundary) return reply();
+    const currentRoom = await storage.getRoom(payload.roomId);
+    if (!currentRoom || isRoomDisabled(currentRoom)) return json(response, 403, { error: "room_access_denied", reason: "room_disabled" });
+    const authority = await storage.roomIdentities.authority({ tenantId: currentRoom.tenantId, roomId: payload.roomId });
+    if (!authority || authority.lifecycle.endedAt) return json(response, 409, { error: "remote_browser_session_not_authoritative" });
+    if (!await verifyRemoteBrowserAuthority({ roomId: payload.roomId, objectId: payload.objectId,
+      executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId,
+      mediaParticipantId: payload.mediaParticipantId })) {
+      return json(response, 409, { error: "remote_browser_session_not_authoritative" });
+    }
+    // The signed room name is released only while its codec and room generation are still current.
+    const pin: MediaGrantPin = Object.freeze({ codec: boundary.codec, namespace: boundary.namespace, ...(incarnation ? { incarnation } : {}),
+      ...(remoteBrowserRoom?.managed ? { accessEpoch: remoteBrowserRoom.managed.accessEpoch } : {}) });
+    const scope = Object.freeze({ tenantId: currentRoom.tenantId, roomId: payload.roomId });
+    try {
+      await releaseFrameCredential(send => storage.releaseMediaGrant(scope, pin,
+        () => send(reply)), countMediaCredentialCompletionFailure);
+    } catch (error) {
+      if (error instanceof MediaBoundaryChanged) return writeRoomStateChanged(response);
+      if (error instanceof IdentityStorageError && error.code === "room_not_found") return json(response, 404, { error: "room_not_found" });
+      if (identityFenceUnavailable(error)) return json(response, 503, { error: "identity_authority_unavailable" });
+      throw error;
+    }
     return;
   }
 

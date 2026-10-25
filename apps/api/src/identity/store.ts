@@ -205,10 +205,20 @@ export function createRoomIdentityStorage(persistence: IdentityPersistence, now 
       assertIdentityScope(scope);
       return (await persistence.read(scope, {}))?.authority ?? null;
     },
-    async screenSourceAuthority(scope) {
+    async screenSourceAuthority(scope, participantIds) {
       assertIdentityScope(scope);
-      const state = await persistence.read(scope, { screenPublishers: true });
-      return state ? projectScreenSourceAuthority(state) : null;
+      if (participantIds !== undefined && (!Array.isArray(participantIds) || participantIds.length > 4096
+        || !participantIds.every(validId))) fail("invalid_identity_input");
+      const selected = participantIds ? Object.freeze([...participantIds]) : undefined;
+      const state = await persistence.read(scope, { screenPublishers: true, ...(selected ? { participantIds: selected } : {}) });
+      return state ? projectScreenSourceAuthority(state, selected) : null;
+    },
+    async mediaIncarnation(scope) {
+      assertIdentityScope(scope);
+      const incarnation = (await persistence.read(scope, {}))?.mediaIncarnation;
+      if (incarnation === undefined) return null;
+      if (!/^[a-f0-9]{32}$/.test(incarnation)) throw new Error("media_room_incarnation_invalid");
+      return incarnation;
     },
     async resolve(proof) {
       assertIdentityScope(proof);

@@ -588,7 +588,8 @@ not cryptographic token revocation or a signaling admission gateway.
 
 Recovery that changes authEpoch while retaining participant ID, non-slot internal
 identity revoke, media admission after delete/recreate, executor leases and any
-future owned-namespace retirement remain separate S3b boundaries. The binding has
+future owned-namespace retirement remain separate S3b boundaries (the first three
+are addressed by S3b-1 below). The binding has
 no epoch or identity-record proof, and the observation token does not add one.
 Full v2 activation and real-device meeting acceptance are not closed here.
 Shared floor1 remains unchanged.
@@ -602,6 +603,101 @@ asset binding remains `0a3b492e788bad82bf20a92476a628bf30c6dfbe`.
 Shared staging remained floor1. Floor-2 terminal eviction and original/refreshed
 JWT rejoin behavior are evidence from owned disposable PostgreSQL schemas with
 real LiveKit1.13.7/1.13.9 in local/CI tests, not public v2 activation.
+
+### Media lineage and room generations: T13a-S3b-1 (preparatory)
+
+Three floor-2 gaps of S3a share one root cause: a media grant was not tied to the
+authorization epoch of its proof or to a durable generation of its room. Recovery
+keeps the participant ID and advances `authEpoch`, so an older codec-2 JWT of that
+participant returned under the same address and was neither distinguishable nor
+evicted. A non-slot internal revoke left no public removal marker. A room deleted
+and recreated with the same ID had the same native room name, so an old JWT joined
+the new meeting.
+
+The issuance fence already pins the original proof: `withRoomIdentityEffect` runs
+in READ COMMITTED, takes the parent-room lock first and then reads the identity in
+a separate statement, so a recovery that won the lock is observed and the prepared
+JWT is never released. The response is queued inside that transaction. Participant
+IDs are unique per room, identity rows are immutable except for a non-decreasing
+epoch and revocation, and identities are deleted only with their room. Within one
+room generation `{participantId, scope, epoch}` therefore identifies one lineage;
+`identityId` is not needed in the address.
+
+This preparatory slice adds, without changing what is issued:
+
+- Codec 3: binding `{v:3, participantId, scope, epoch}`, address `vmi3.<scope>.<sha256>`
+  under its own hash domain. The epoch is the original proof's; a changed epoch is
+  refused at the fence, never substituted.
+- `rooms.media_incarnation`: a random UUID per inserted record, filled for existing
+  rows by the migration, immutable by trigger. Codec-3 room names are
+  `${prefix}v3:${namespace}:${incarnation}:${roomId}`; the fence re-reads the locked
+  row's incarnation. It is not exposed in room responses.
+- A durable media boundary `room_identity_protocol_policy.media_codec` (2 by default,
+  3 only at floor 2, never lowered). Issuance reads it; the fence holds the policy
+  row FOR SHARE, so a raise waits for an in-flight release and a grant naming the
+  retired codec afterwards is answered `room_state_changed` without a credential.
+  The remote-browser executor joins the same native room as users; its grant has no
+  room identity, so it is released inside a separate short fence (`releaseMediaGrant`:
+  parent row and policy FOR SHARE, pinned codec, namespace and generation).
+- Reconciliation version 3. Each pass lists a native room's participants, then reads
+  the room authority and the lineage of exactly those participants in one snapshot.
+  A verified user connection is evicted when the room is missing or inactive, the
+  participant was publicly removed, its identity is revoked or absent, a codec-3
+  epoch differs from the current one, or the native room is a retired generation:
+  every codec-2 room once the boundary is 3, and every codec-3 room of another
+  incarnation. A lineage read error is pending, not permission. The pre-write
+  recheck and the post-read acknowledgement compare the selected lineage too.
+  Discovery covers both forms; cursors are per native room name, and only the
+  current generation records an observation. Its post-read re-lists the owned
+  rooms, so a sibling generation created during the pass is seen, and requires
+  every sibling to be free of user connections. A retired room with users anywhere
+  in its full listing invalidates the current observation.
+- Portal-managed rooms (PR #129) keep their access epoch as the last name segment:
+  `...:${roomId}:${accessEpoch}`, on top of the codec-2 or codec-3 base. One parser
+  (`managed-media-names.ts`) owns both codecs, the generation and the epoch. The
+  reconciler treats a managed room of any other epoch as a retired generation too.
+  Both media fences also pin the managed room's access epoch, reading its
+  `integration_rooms` row FOR SHARE: a rotation waits for an in-flight release, and
+  a grant prepared for the previous epoch is refused afterwards. The managed-room
+  enforcer deletes retired-epoch rooms under both codecs and,
+  past the boundary, current-epoch rooms of codec 2 or another generation.
+- Runtime resolves `vmi2` and `vmi3` peers and, while two lineages of one
+  participant overlap, plays the newer epoch. This is a UI aid, not enforcement.
+
+Codec 2 still has no epoch, so a recovery there stays indistinguishable until the
+boundary is raised; revocation, absence and removal are evicted in both codecs.
+A non-slot internal revoke still does not change the authority revision (the first
+Host claim from an invite requires revision 0), so a cached status may stay
+`observed` for its freshness window after such a revoke; the next pass evicts the
+connection regardless. Reconciliation is not admission: an old JWT can rejoin
+between passes, but only under its own retired address or into a retired room.
+
+Rollout contract: `"mediaCodecBoundary": 3` in `infra/docker/template-rollout.json`
+and the API label `io.vrata.media-codec-boundary=3`. With the boundary at 3, the
+staging guard and `tools/identity-rollback-guard.mjs` refuse a rollback target
+without that capability; at 2 every earlier floor-2 image stays a valid target.
+
+The database itself does not stop an older API from issuing codec-2 grants after
+the raise: the rollout guards are the protection, so every older API instance must
+be stopped before activation and the new guards stay mandatory afterwards. Open
+tabs with an older runtime ignore `vmi3` peers and need a reload.
+A room whose only native rooms are retired and still hold an executor stays
+`pending` until those rooms close; executor retirement is part of S3b-3.
+
+Activation (S3b-2) is a separate, irreversible operator step:
+`apps/api/dist/identity/activate-media-codec.js --confirm-irreversible`, on staging
+through `staging-remote-release.py activate-media-codec3` (Staging Deploy input
+`activate_media_codec3`), after preflight of the running candidate and the accepted
+rollback target. From then on only codec 3 is issued, codec-2 rooms are retired and
+open tabs reconnect with codec-3 grants; health advertises `mediaIdentityCodec: 3`.
+Executor leases and owned-namespace retirement remain separate S3b slices.
+
+Published image: `3445a5cd92088a784118caeba32c7ad7ad5634f0` on the shared floor-2 stand.
+[CI40219689328](https://github.com/vrata-labs/platform/actions/runs/40219689328) passed 259 plus
+16/16 M0.5; [Staging40227601408](https://github.com/vrata-labs/platform/actions/runs/40227601408)
+accepted 81/81 plus 1/1 mandatory Rutube on attempt 2 (attempt 1 stopped on a meeting-tools
+keyboard-navigation timeout and rolled back to the previous image on the migrated database).
+The media boundary stays at codec 2.
 
 ### Shared staging delivery (floor 1)
 
@@ -1400,7 +1496,9 @@ Both API and room-state images must carry `io.vrata.identity-protocol-floor-guar
 The API image, and the remote-browser image whenever the candidate compose model
 renders that service, must also carry `io.vrata.frame-token-codec=2` at the same
 tag; staging requires `"frameTokenCodec": 2` in the target commit's
-`infra/docker/template-rollout.json`. Unbound floor-one rollbacks keep ordinary
+`infra/docker/template-rollout.json`. Once the media codec boundary is raised to 3,
+the API image must also carry `io.vrata.media-codec-boundary` of at least 3
+(`"mediaCodecBoundary"` on staging). Unbound floor-one rollbacks keep ordinary
 paired-tag compatibility; that is not frame-token acceptance.
 Raw Docker commands that bypass the supplied preflight are not a supported v2
 rollback procedure. A database restore is a separate destructive operation: the

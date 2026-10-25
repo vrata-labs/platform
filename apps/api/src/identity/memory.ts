@@ -12,7 +12,8 @@ export function createMemoryRoomIdentities(getRoom: (roomId: string) => Identity
   getInviteByHash: (hash: string) => RoomInviteRecord | undefined = () => undefined, getMinimumProtocol = () => 1,
   getInviteById: (id: string) => RoomInviteRecord | undefined = () => undefined,
   getWaitingRequest: (id: string) => WaitingRoomRequestRecord | undefined = () => undefined,
-  saveWaitingRequest: (request: WaitingRoomRequestRecord) => void = () => undefined) {
+  saveWaitingRequest: (request: WaitingRoomRequestRecord) => void = () => undefined,
+  getMediaIncarnation: (roomId: string) => string | undefined = () => undefined) {
   const identities = new Map<string, Map<string, RoomIdentityRecord>>();
   const authorities = new Map<string, RoomIdentityAuthority>();
   const recoveries = new Map<string, Map<string, RoomIdentityRecovery>>();
@@ -27,6 +28,7 @@ export function createMemoryRoomIdentities(getRoom: (roomId: string) => Identity
     const recovery = selection.recoveryId ? recoveries.get(scope.roomId)?.get(selection.recoveryId) ?? null : null;
     const pending = selection.pendingId ? pendingByRoom.get(scope.roomId)?.get(selection.pendingId) ?? null : null;
     const participantId = selection.participantId ?? recovery?.targetParticipantId;
+    const participantIds = new Set(selection.participantIds ?? []);
     const selected = new Set([...(selection.identityIds ?? []), ...(recovery?.targetIdentityId ? [recovery.targetIdentityId] : [])]);
     if (selection.screenPublishers || selection.authoritySlots) {
       const authority = authorities.get(scope.roomId);
@@ -41,10 +43,12 @@ export function createMemoryRoomIdentities(getRoom: (roomId: string) => Identity
       ? [...(pendingByRoom.get(scope.roomId)?.values() ?? [])].filter(value => !value.activatedAt && Date.parse(value.expiresAt) > now()) : null;
     const pendingCapacity = open ? { room: open.length, invite: open.filter(value => value.inviteId === invite!.inviteId).length,
       lifetimeRoom: pendingByRoom.get(scope.roomId)?.size ?? 0 } : null;
-    return structuredClone({ room, roomObservationVersion, minimumProtocol: getMinimumProtocol(), authority: authorities.get(scope.roomId) ?? emptyIdentityAuthority(scope, room.sessionControl), recovery, invite, pending, waitingRequest, waitingRequestNew: false, pendingCapacity,
+    const mediaIncarnation = getMediaIncarnation(scope.roomId);
+    return structuredClone({ room, roomObservationVersion, ...(mediaIncarnation ? { mediaIncarnation } : {}), minimumProtocol: getMinimumProtocol(), authority: authorities.get(scope.roomId) ?? emptyIdentityAuthority(scope, room.sessionControl), recovery, invite, pending, waitingRequest, waitingRequestNew: false, pendingCapacity,
       identityCount: selection.admissionCount ? identities.get(scope.roomId)?.size ?? 0 : null,
       identities: new Map([...(identities.get(scope.roomId) ?? new Map<string, RoomIdentityRecord>())].filter(([id, identity]) =>
-        selected.has(id) || (participantId !== undefined && identity.participantId === participantId))) });
+        selected.has(id) || (participantId !== undefined && identity.participantId === participantId)
+        || participantIds.has(identity.participantId))) });
   };
   const persistence: IdentityPersistence = {
     async read(scope, selection) { return snapshot(scope, selection); },

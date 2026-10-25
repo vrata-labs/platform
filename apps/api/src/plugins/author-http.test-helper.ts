@@ -301,7 +301,7 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
         const scope=()=>{
           const room=armed?.roomId, grant=this.grants?.video?.room, prefix=process.env.LIVEKIT_ROOM_PREFIX??'vrata-';
           if(typeof room!=='string' || typeof grant!=='string')return undefined;
-          return grant===prefix+room || (grant.startsWith(prefix+'v2:') && grant.endsWith(':'+room)) ? room : undefined;
+          return grant===prefix+room || ((grant.startsWith(prefix+'v2:') || grant.startsWith(prefix+'v3:')) && grant.endsWith(':'+room)) ? room : undefined;
         };
         const room=scope();
         if(room!==undefined && armed?.kind==='media-sign-fault'){
@@ -320,9 +320,9 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
       PostgresStorage.prototype.init=async function(...args){
         if(!wrapped.has(this)){
           wrapped.add(this);
-          const namespace=this.identityProtocol.mediaNamespace;
-          this.identityProtocol.mediaNamespace=async()=>{
-            const value=await namespace.call(this.identityProtocol);
+          const boundary=this.identityProtocol.mediaBoundary;
+          this.identityProtocol.mediaBoundary=async()=>{
+            const value=await boundary.call(this.identityProtocol);
             if(armed?.kind==='media-namespace')await pause('media-namespace',armed.roomId);
             return value;
           };

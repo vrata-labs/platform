@@ -7,7 +7,7 @@ export interface MediaPeer {
   readonly kind: number;
 }
 export type MediaPeerBinding =
-  | { kind: "user"; participantId: string; scope: UserMediaScope | null; mediaIdentity: string }
+  | { kind: "user"; participantId: string; scope: UserMediaScope | null; mediaIdentity: string; epoch?: number }
   | { kind: "executor"; mediaIdentity: string };
 
 /** A verified mapping is scoped to this SDK peer object, room and immutable attribute snapshot. */
@@ -17,7 +17,7 @@ export function createMediaParticipantResolver(onReady: () => void) {
     if (!peer) return null;
     if (protocol !== 2) return { kind: "user", participantId: peer.identity, scope: null, mediaIdentity: peer.identity };
     if (peer.identity.startsWith("remote-browser:")) return { kind: "executor", mediaIdentity: peer.identity };
-    if (peer.kind !== 0 || !peer.identity.startsWith("vmi2.")) return null;
+    if (peer.kind !== 0 || !/^vmi[23]\./.test(peer.identity)) return null;
     const identity = peer.identity, attributes = { ...peer.attributes };
     const fingerprint = JSON.stringify([room, identity, Object.entries(attributes).sort(([a], [b]) => a.localeCompare(b))]);
     const previous = cache.get(peer);
@@ -38,10 +38,13 @@ export interface MicrophoneCandidate<T> {
   mediaIdentity: string;
   trackKey: string;
   scope: UserMediaScope | null;
+  /** Codec-3 lineage; a newer epoch is the recovered connection the server keeps. */
+  epoch?: number;
   value: T;
 }
 
-/** One audible source per domain participant, regardless of how many scope classes are connected. */
+/** One audible source per domain participant, regardless of how many scope classes are connected.
+ * Until the server evicts a pre-recovery lineage, the newer epoch is heard; this is a UI aid, not enforcement. */
 export function selectRemoteMicrophones<T>(candidates: Iterable<MicrophoneCandidate<T>>, localParticipantId: string,
   activeParticipantIds: ReadonlySet<string>): Map<string, MicrophoneCandidate<T>> {
   const selected = new Map<string, MicrophoneCandidate<T>>();
@@ -49,8 +52,9 @@ export function selectRemoteMicrophones<T>(candidates: Iterable<MicrophoneCandid
     if (candidate.participantId === localParticipantId || !activeParticipantIds.has(candidate.participantId) || candidate.scope === "s") continue;
     const previous = selected.get(candidate.participantId);
     const rank = (scope: UserMediaScope | null) => scope === "ms" ? 2 : 1;
-    if (!previous || rank(candidate.scope) > rank(previous.scope)
-      || rank(candidate.scope) === rank(previous.scope) && candidate.mediaIdentity < previous.mediaIdentity) {
+    const epoch = (value: MicrophoneCandidate<T>) => value.epoch ?? 0;
+    if (!previous || epoch(candidate) > epoch(previous) || epoch(candidate) === epoch(previous) && (rank(candidate.scope) > rank(previous.scope)
+      || rank(candidate.scope) === rank(previous.scope) && candidate.mediaIdentity < previous.mediaIdentity)) {
       selected.set(candidate.participantId, candidate);
     }
   }
@@ -72,7 +76,7 @@ export function planRemoteMicrophones(peers: Iterable<RemoteParticipant>, resolv
       if (!track || track === excludedTrack || track.kind !== "audio" || publication.isMuted || publication.source === "screen_share_audio") continue;
       if (binding.scope !== null && publication.source !== "microphone") continue;
       candidates.push({ participantId: binding.participantId, mediaIdentity: binding.mediaIdentity, scope: binding.scope,
-        trackKey: publication.trackSid, value: { participant, track } });
+        ...(binding.epoch === undefined ? {} : { epoch: binding.epoch }), trackKey: publication.trackSid, value: { participant, track } });
       break;
     }
   }

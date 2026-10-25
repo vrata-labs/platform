@@ -6,11 +6,26 @@ import { mustEvictUserMedia, screenSourceLowering, screenSourcesRetired, verifie
 
 test("terminal removal is independent of source class or current screen role", () => {
   const active = { revision: 2, roomActive: true, publisherParticipantIds: ["host"], removedParticipantIds: ["removed"] };
-  assert.equal(mustEvictUserMedia(active, "removed"), true);
-  assert.equal(mustEvictUserMedia(active, "member"), false);
-  assert.equal(mustEvictUserMedia(active, "host"), false);
-  assert.equal(mustEvictUserMedia({ ...active, roomActive: false }, "host"), true);
-  assert.equal(mustEvictUserMedia(null, "member"), true);
+  assert.equal(mustEvictUserMedia(active, { participantId: "removed" }), true);
+  assert.equal(mustEvictUserMedia(active, { participantId: "member" }), false);
+  assert.equal(mustEvictUserMedia(active, { participantId: "host" }), false);
+  assert.equal(mustEvictUserMedia({ ...active, roomActive: false }, { participantId: "host" }), true);
+  assert.equal(mustEvictUserMedia(null, { participantId: "member" }), true);
+});
+
+test("selected lineage evicts revoked, absent and other-epoch identities and every retired generation", () => {
+  const authority = { revision: 4, roomActive: true, publisherParticipantIds: [], removedParticipantIds: [],
+    participants: { current: { epoch: 2, active: true }, revoked: { epoch: 3, active: false } } };
+  assert.equal(mustEvictUserMedia(authority, { participantId: "current", epoch: 2 }), false);
+  assert.equal(mustEvictUserMedia(authority, { participantId: "current", epoch: 1 }), true, "recovered lineage");
+  assert.equal(mustEvictUserMedia(authority, { participantId: "current", epoch: 3 }), true);
+  // Codec 2 has no epoch: recovery stays indistinguishable, revocation and absence do not.
+  assert.equal(mustEvictUserMedia(authority, { participantId: "current" }), false);
+  assert.equal(mustEvictUserMedia(authority, { participantId: "revoked" }), true);
+  assert.equal(mustEvictUserMedia(authority, { participantId: "revoked", epoch: 3 }), true);
+  assert.equal(mustEvictUserMedia(authority, { participantId: "absent" }), true);
+  assert.equal(mustEvictUserMedia(authority, { participantId: "toString" }), true, "no prototype lookup");
+  assert.equal(mustEvictUserMedia(authority, { participantId: "current", epoch: 2 }, true), true, "retired generation");
 });
 
 test("screen lowering has one fixed permission tuple per immutable source class", () => {

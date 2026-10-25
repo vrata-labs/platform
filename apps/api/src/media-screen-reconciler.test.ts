@@ -7,8 +7,9 @@ import { createMediaScreenReconciler, type MediaScreenAuthority } from "./media-
 import { screenSourceLowering } from "./media-source-permissions.js";
 
 const namespace = "a".repeat(32), prefix = "vrata-", roomId = "room", mediaRoom = roomMediaGrantName(roomId, prefix, namespace);
-async function peer(participantId: string, scope: "m" | "s" | "ms", room = mediaRoom) {
-  const media = await createUserMediaIdentity(room, { participantId, scope });
+const incarnation = "1".repeat(32), recreated = "2".repeat(32), v3Room = roomMediaGrantName(roomId, prefix, namespace, incarnation);
+async function peer(participantId: string, scope: "m" | "s" | "ms", room = mediaRoom, epoch?: number) {
+  const media = await createUserMediaIdentity(room, { participantId, scope, ...(epoch === undefined ? {} : { epoch }) });
   const sources = scope === "m" ? [TrackSource.MICROPHONE] : scope === "s" ? [TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO]
     : [TrackSource.MICROPHONE, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO];
   return new ParticipantInfo({ ...media, sid: `sid-${participantId}-${scope}`, permission: new ParticipantPermission({
@@ -16,18 +17,27 @@ async function peer(participantId: string, scope: "m" | "s" | "ms", room = media
   }), tracks: sources.map(source => new TrackInfo({ sid: `track-${participantId}-${source}`, source })) });
 }
 
-function harness(options: Partial<Parameters<typeof createMediaScreenReconciler>[0]> = {}) {
+/** Selected IDs default to active epoch-1 identities unless the desired state lists their lineage. */
+function withLineage(value: MediaScreenAuthority, participantIds?: readonly string[]): MediaScreenAuthority {
+  if (!value.authority || !participantIds) return value;
+  const explicit = value.authority.participants;
+  return { ...value, authority: { ...value.authority, participants: Object.fromEntries(participantIds.flatMap(id =>
+    explicit ? (Object.hasOwn(explicit, id) ? [[id, explicit[id]]] : []) : [[id, { epoch: 1, active: true }]])) } };
+}
+
+function harness(options: Partial<Parameters<typeof createMediaScreenReconciler>[0]> = {}, codec: 2 | 3 = 2) {
   let time = 1000, contextEnabled = true;
   let desired: MediaScreenAuthority = { tenantId: "tenant", authority: { revision: 3, roomActive: true, publisherParticipantIds: ["current"] } };
   const rooms = new Map<string, ParticipantInfo[]>(), updates: Array<{ room: string; identity: string; permission: object }> = [], events: string[] = [];
   const removals: Array<{ room: string; identity: string }> = [];
-  let beforeUpdate: (() => void | Promise<void>) | undefined, beforeRemove: (() => void | Promise<void>) | undefined, afterList: (() => void) | undefined;
+  let beforeUpdate: (() => void | Promise<void>) | undefined, beforeRemove: (() => void | Promise<void>) | undefined;
+  let afterRead: (() => void) | undefined, onList: ((room: string) => void | Promise<void>) | undefined;
   let listingFailed = false, writeFailed = false, preserveTracks = false, lists = 0;
   let removalFailed = false, keepRemovedPeer = false, loseRemovalAck = false;
   const native = {
     async listRooms(names?: string[]) { lists++; if (listingFailed) throw new Error("secret-url-must-not-escape");
       return [...rooms.keys()].filter(name => !names?.length || names.includes(name)).map(name => new Room({ name })); },
-    async listParticipants(room: string) { const value = (rooms.get(room) ?? []).map(value => value.clone()); afterList?.(); return value; },
+    async listParticipants(room: string) { await onList?.(room); return (rooms.get(room) ?? []).map(value => value.clone()); },
     async updateParticipant(room: string, identity: string, input: { permission?: Partial<ParticipantPermission> }) {
       await beforeUpdate?.();
       if (writeFailed) throw new Error("secret-token-must-not-escape");
@@ -46,15 +56,19 @@ function harness(options: Partial<Parameters<typeof createMediaScreenReconciler>
     }
   };
   const reconciler = createMediaScreenReconciler({
-    now: () => time, context: async () => contextEnabled ? { namespace, prefix, native } : null,
-    authority: async () => desired, event: event => events.push(event), ...options
+    now: () => time, context: async () => contextEnabled ? { namespace, codec, prefix, native } : null,
+    authority: async (_roomId, participantIds) => { const value = withLineage(desired, participantIds); afterRead?.(); return value; },
+    event: event => events.push(event), ...options
   });
-  return { reconciler, rooms, updates, removals, events, native, status: (currentNamespace: string | null = namespace) => reconciler.status(roomId, desired, currentNamespace),
+  return { reconciler, rooms, updates, removals, events, native,
+    status: (current: { namespace: string; codec: 2 | 3 } | null = { namespace, codec }) => reconciler.status(roomId, desired, current),
     setDesired: (value: MediaScreenAuthority) => { desired = value; },
     disable: () => { contextEnabled = false; }, advance: (ms: number) => { time += ms; },
     beforeUpdate: (callback: typeof beforeUpdate) => { beforeUpdate = callback; },
     beforeRemove: (callback: typeof beforeRemove) => { beforeRemove = callback; },
-    afterList: (callback: typeof afterList) => { afterList = callback; },
+    onList: (callback: typeof onList) => { onList = callback; },
+    /** Runs once, after the decision read of the next pass returns. */
+    afterDecisionRead: (callback: () => void) => { afterRead = () => { afterRead = undefined; callback(); }; },
     failListing: (value: boolean) => { listingFailed = value; }, failWrite: (value: boolean) => { writeFailed = value; },
     failRemoval: (value: boolean) => { removalFailed = value; }, keepRemovedPeer: (value: boolean) => { keepRemovedPeer = value; },
     loseRemovalAck: () => { loseRemovalAck = true; },
@@ -79,7 +93,7 @@ test("public removal evicts only its participant and never sends a competing sou
   await h.reconciler.runOnce();
   assert.equal(h.removals.length, 3); assert.equal(h.updates.length, 0);
   assert.deepEqual(h.rooms.get(mediaRoom)!.map(peer => peer.identity), [others.identity]);
-  assert.equal(h.status().enforcementVersion, 2); assert.equal(h.status().state, "observed");
+  assert.equal(h.status().enforcementVersion, 3); assert.equal(h.status().state, "observed");
 });
 
 test("failed removal, new-SID presence and lost successful removal ACK cannot falsely acknowledge eviction", async () => {
@@ -117,20 +131,20 @@ for (const removing of [true, false]) test(`unrelated room autosave cannot preve
   const authority = { revision: 4, roomActive: true, publisherParticipantIds: ["current"],
     removedParticipantIds: removing ? ["target"] : [], observationVersion: "before-pose-autosave" };
   h.setDesired({ tenantId: "tenant", authority });
-  h.afterList(() => h.setDesired({ tenantId: "tenant", authority: { ...authority, observationVersion: "after-pose-autosave" } }));
+  h.afterDecisionRead(() => h.setDesired({ tenantId: "tenant", authority: { ...authority, observationVersion: "after-pose-autosave" } }));
   await h.reconciler.runOnce();
   assert.equal(h.removals.length, removing ? 1 : 0); assert.equal(h.updates.length, removing ? 0 : 1);
   assert.equal(h.status().state, "pending", "a cache-only token change cannot be acknowledged across a native observation");
-  h.afterList(undefined); await h.reconciler.runOnce(); assert.equal(h.status().state, "observed");
+  await h.reconciler.runOnce(); assert.equal(h.status().state, "observed");
 });
 
 for (const removing of [true, false]) test(`fresh semantic authority skips an obsolete ${removing ? "removal" : "lowering"} before its native RPC`, async () => {
   const h = harness(); h.rooms.set(mediaRoom, [await peer("target", removing ? "m" : "ms")]);
   h.setDesired({ tenantId: "tenant", authority: { revision: 4, roomActive: !removing, publisherParticipantIds: ["current"], observationVersion: "old-row" } });
-  h.afterList(() => h.setDesired({ tenantId: "tenant", authority: { revision: 5, roomActive: true, publisherParticipantIds: ["target"], observationVersion: "current-row" } }));
+  h.afterDecisionRead(() => h.setDesired({ tenantId: "tenant", authority: { revision: 5, roomActive: true, publisherParticipantIds: ["target"], observationVersion: "current-row" } }));
   await h.reconciler.runOnce();
   assert.equal(h.removals.length, 0); assert.equal(h.updates.length, 0); assert.equal(h.status().state, "pending");
-  h.afterList(undefined); await h.reconciler.runOnce();
+  await h.reconciler.runOnce();
   assert.equal(h.removals.length, 0); assert.equal(h.updates.length, 0); assert.equal(h.status().state, "observed");
 });
 
@@ -153,14 +167,15 @@ test("screen reconciliation lowers only unauthorized verified source classes and
   assert.deepEqual(ms.tracks.map(track => track.sid), [microphoneSid]);
   assert.equal(s.tracks.length, 0); assert.equal(mic.tracks.length, 1); assert.equal(current.tracks.length, 3);
   assert.equal(h.status().state, "observed");
-  assert.equal(h.status("b".repeat(32)).state, "pending", "a namespace mismatch cannot reuse a past observation");
+  assert.equal(h.status({ namespace: "b".repeat(32), codec: 2 }).state, "pending", "a namespace mismatch cannot reuse a past observation");
+  assert.equal(h.status({ namespace, codec: 3 }).state, "pending", "a raised codec cannot reuse a past observation");
   await h.reconciler.runOnce(); assert.equal(h.updates.length, 2, "an already retired source needs no duplicate write");
   h.advance(5001); assert.equal(h.status().state, "pending", "old observations expire");
 });
 
 test("missing native room is observed only after an independent scan and a stable authority read", async () => {
   const h = harness(); assert.equal(h.status().state, "pending");
-  await h.reconciler.runOnce(); assert.deepEqual(h.status(), { enforcementVersion: 2, state: "observed", desiredVersion: { authorityRevision: 3, roomActive: true }, observedAtMs: 1000, nativeRoom: "absent" });
+  await h.reconciler.runOnce(); assert.deepEqual(h.status(), { enforcementVersion: 3, state: "observed", desiredVersion: { authorityRevision: 3, roomActive: true }, observedAtMs: 1000, nativeRoom: "absent" });
   h.setDesired({ tenantId: "tenant", authority: { revision: 4, roomActive: true, publisherParticipantIds: [] } });
   assert.equal(h.status().state, "pending");
 });
@@ -168,7 +183,7 @@ test("missing native room is observed only after an independent scan and a stabl
 test("frequent readers cannot starve an absent-room observation, and idle interests do not poll forever", async () => {
   const h = harness({ maxRooms: 1 });
   const desired: MediaScreenAuthority = { tenantId: "tenant", authority: { revision: 3, roomActive: true, publisherParticipantIds: ["current"] } };
-  h.status(); h.reconciler.status("cold", desired, namespace); h.status();
+  h.status(); h.reconciler.status("cold", desired, { namespace, codec: 2 }); h.status();
   await h.reconciler.runOnce(); assert.equal(h.status().state, "observed", "the repeated request did not move the hot room behind the cold room");
   await h.reconciler.runOnce();
   const lists = h.listCount();
@@ -301,15 +316,141 @@ test("stop/start during an in-flight pass leaves exactly one scheduler chain", a
   h.reconciler.stop(); assert.equal(timers.size, 0);
 });
 
+test("codec 3 evicts the pre-recovery lineage of a participant and keeps the recovered connection", async () => {
+  const h = harness({}, 3), old = await peer("host", "ms", v3Room, 1), recovered = await peer("host", "ms", v3Room, 2), other = await peer("member", "m", v3Room, 1);
+  h.rooms.set(v3Room, [old, recovered, other]);
+  h.setDesired({ tenantId: "tenant", authority: { revision: 6, roomActive: true, publisherParticipantIds: ["host"], mediaIncarnation: incarnation,
+    participants: { host: { epoch: 2, active: true }, member: { epoch: 1, active: true } } } });
+  await h.reconciler.runOnce();
+  assert.deepEqual(h.removals, [{ room: v3Room, identity: old.identity }]);
+  assert.deepEqual(h.rooms.get(v3Room)!.map(value => value.identity).sort(), [recovered.identity, other.identity].sort());
+  assert.equal(h.updates.length, 0); assert.equal(h.status().state, "observed");
+  // A cached JWT of the old lineage rejoins: the next pass removes it again, never the recovered address.
+  h.rooms.get(v3Room)!.push(await peer("host", "ms", v3Room, 1));
+  await h.reconciler.runOnce();
+  assert.deepEqual(h.removals.map(value => value.identity), [old.identity, old.identity]);
+});
+
+test("revoked and absent identities are evicted even without a public removal or codec-3 epoch", async () => {
+  const h = harness(), revoked = await peer("revoked", "m"), absent = await peer("absent", "s"), current = await peer("current", "m");
+  h.rooms.set(mediaRoom, [revoked, absent, current]);
+  h.setDesired({ tenantId: "tenant", authority: { revision: 5, roomActive: true, publisherParticipantIds: [], removedParticipantIds: [],
+    participants: { revoked: { epoch: 2, active: false }, current: { epoch: 1, active: true } } } });
+  await h.reconciler.runOnce();
+  assert.deepEqual(h.removals.map(value => value.identity).sort(), [revoked.identity, absent.identity].sort());
+  assert.equal(h.updates.length, 0); assert.equal(h.status().state, "observed");
+});
+
+test("a lineage read without the selected participants fails closed as pending", async () => {
+  const desired: MediaScreenAuthority = { tenantId: "tenant", authority: { revision: 3, roomActive: true, publisherParticipantIds: [] } };
+  const h = harness({ authority: async () => desired });
+  h.rooms.set(mediaRoom, [await peer("removed", "m")]);
+  await h.reconciler.runOnce();
+  assert.equal(h.removals.length, 0); assert.equal(h.status().state, "pending");
+});
+
+test("a recovery between the decision read and the RPC skips the obsolete eviction", async () => {
+  const h = harness({}, 3), target = await peer("host", "m", v3Room, 1);
+  h.rooms.set(v3Room, [target]);
+  const authority = { revision: 6, roomActive: true, publisherParticipantIds: [], mediaIncarnation: incarnation };
+  h.setDesired({ tenantId: "tenant", authority: { ...authority, participants: { host: { epoch: 2, active: true } } } });
+  h.afterDecisionRead(() => h.setDesired({ tenantId: "tenant", authority: { ...authority, revision: 7, participants: { host: { epoch: 3, active: true } } } }));
+  await h.reconciler.runOnce();
+  assert.equal(h.removals.length, 0); assert.equal(h.status().state, "pending");
+  await h.reconciler.runOnce(); assert.equal(h.removals.length, 1); assert.equal(h.status().state, "observed");
+});
+
+test("after the codec-3 boundary every codec-2 room is retired and blocks the room's observation until it is empty", async () => {
+  const h = harness({ maxRooms: 1 }, 3);
+  h.rooms.set(mediaRoom, [await peer("current", "m"), await peer("current", "ms"), new ParticipantInfo({ identity: "remote-browser:executor" })]);
+  h.rooms.set(v3Room, [await peer("current", "ms", v3Room, 1)]);
+  h.setDesired({ tenantId: "tenant", authority: { revision: 3, roomActive: true, publisherParticipantIds: ["current"], mediaIncarnation: incarnation } });
+  // Rooms are visited in name order; the codec-3 room first, while the codec-2 sibling still has users.
+  assert.ok(v3Room.localeCompare(mediaRoom) > 0);
+  await h.reconciler.runOnce(); assert.equal(h.removals.length, 2, "both codec-2 grants, never the executor");
+  assert.equal(h.status().state, "pending", "a retired generation is swept, not observed");
+  await h.reconciler.runOnce(); assert.equal(h.status().state, "observed");
+  assert.deepEqual(h.removals.map(value => value.room), [mediaRoom, mediaRoom]);
+  assert.equal(h.rooms.get(v3Room)!.length, 1);
+});
+
+test("a recreated room retires connections of the previous incarnation without touching the current one", async () => {
+  const h = harness({}, 3), previous = roomMediaGrantName(roomId, prefix, namespace, recreated);
+  const stale = await peer("current", "ms", previous, 1), current = await peer("current", "ms", v3Room, 1);
+  h.rooms.set(previous, [stale]); h.rooms.set(v3Room, [current]);
+  h.setDesired({ tenantId: "tenant", authority: { revision: 0, roomActive: true, publisherParticipantIds: ["current"], mediaIncarnation: incarnation } });
+  await h.reconciler.runOnce();
+  assert.deepEqual(h.removals, [{ room: previous, identity: stale.identity }]);
+  await h.reconciler.runOnce(); assert.equal(h.status().state, "observed");
+  // Deleted entirely: both generations are retired.
+  h.setDesired({ tenantId: null, authority: null }); await h.reconciler.runOnce();
+  assert.deepEqual(h.removals.map(value => value.identity), [stale.identity, current.identity]);
+});
+
+test("a binding of the other codec in a room name is unverified and never written", async () => {
+  const h = harness({}, 3), forged = await peer("current", "ms", v3Room);
+  h.rooms.set(v3Room, [forged]);
+  h.setDesired({ tenantId: "tenant", authority: { revision: 3, roomActive: false, publisherParticipantIds: [], mediaIncarnation: incarnation } });
+  await h.reconciler.runOnce();
+  assert.equal(h.removals.length, 0); assert.equal(h.updates.length, 0); assert.equal(h.status().state, "pending");
+});
+
+test("a retired generation created during the pass is found by the post-read and blocks the observation", async () => {
+  const h = harness({}, 3);
+  h.rooms.set(v3Room, [await peer("current", "m", v3Room, 1)]);
+  h.setDesired({ tenantId: "tenant", authority: { revision: 3, roomActive: true, publisherParticipantIds: [], mediaIncarnation: incarnation } });
+  let lists = 0;
+  h.onList(async room => { if (room === v3Room && ++lists === 2) h.rooms.set(mediaRoom, [await peer("current", "m")]); });
+  await h.reconciler.runOnce();
+  assert.equal(h.status().state, "pending", "the codec-2 connection existed before the claimed observation time");
+  h.onList(undefined);
+  await h.reconciler.runOnce(); assert.deepEqual(h.removals.map(value => value.room), [mediaRoom]);
+  await h.reconciler.runOnce(); assert.equal(h.status().state, "observed");
+});
+
+test("a retired generation with a user beyond the selected portion invalidates the current observation", async () => {
+  const h = harness({ maxRooms: 1, maxPeers: 1 }, 3);
+  h.rooms.set(v3Room, [await peer("current", "m", v3Room, 1)]);
+  h.setDesired({ tenantId: "tenant", authority: { revision: 3, roomActive: true, publisherParticipantIds: [], mediaIncarnation: incarnation } });
+  await h.reconciler.runOnce(); assert.equal(h.status().state, "observed");
+  // The executor sorts first and fills the one-peer portion; the user is outside it.
+  h.rooms.set(mediaRoom, [new ParticipantInfo({ identity: "remote-browser:executor" }), await peer("current", "ms")]);
+  await h.reconciler.runOnce();
+  assert.equal(h.removals.length, 0); assert.equal(h.status().state, "pending");
+});
+
+test("a participant ID spelled __proto__ is an ordinary lineage key", async () => {
+  const h = harness({}, 3), target = await peer("__proto__", "m", v3Room, 2);
+  h.rooms.set(v3Room, [target]);
+  h.setDesired({ tenantId: "tenant", authority: { revision: 3, roomActive: true, publisherParticipantIds: [], mediaIncarnation: incarnation,
+    participants: Object.fromEntries([["__proto__", { epoch: 2, active: true }]]) } });
+  await h.reconciler.runOnce();
+  assert.equal(h.removals.length, 0); assert.equal(h.status().state, "observed");
+});
+
 test("a portal-managed epoch room is reconciled against its platform room, not an unknown room id", async () => {
-  const epochRoom = `${mediaRoom}:6f1c2d3e-4b5a-4c6d-8e7f-9a0b1c2d3e4f`;
+  const accessEpoch = "6f1c2d3e-4b5a-4c6d-8e7f-9a0b1c2d3e4f", epochRoom = `${mediaRoom}:${accessEpoch}`;
   const asked: string[] = [];
-  const desired: MediaScreenAuthority = { tenantId: "tenant", authority: { revision: 4, roomActive: true, publisherParticipantIds: ["current"], removedParticipantIds: ["removed"] } };
-  const h = harness({ authority: async (id: string) => { asked.push(id); return desired; } });
+  const desired: MediaScreenAuthority = { tenantId: "tenant", accessEpoch,
+    authority: { revision: 4, roomActive: true, publisherParticipantIds: ["current"], removedParticipantIds: ["removed"] } };
+  const h = harness({ authority: async (id: string, participantIds?: readonly string[]) => { asked.push(id); return withLineage(desired, participantIds); } });
   const kept = await peer("current", "m", epochRoom);
   h.rooms.set(epochRoom, [await peer("removed", "m", epochRoom), kept]);
   await h.reconciler.runOnce();
   assert(asked.length > 0 && asked.every(id => id === roomId), JSON.stringify(asked));
   assert.deepEqual(h.removals.map(removal => removal.room), [epochRoom]);
   assert.deepEqual(h.rooms.get(epochRoom)!.map(value => value.identity), [kept.identity]);
+});
+
+test("a portal-managed room's previous access epoch is a retired generation; the current epoch is kept", async () => {
+  const previous = "6f1c2d3e-4b5a-4c6d-8e7f-9a0b1c2d3e4f", current = "7a1c2d3e-4b5a-4c6d-8e7f-9a0b1c2d3e4f";
+  const h = harness({}, 3), oldRoom = `${v3Room}:${previous}`, currentRoom = `${v3Room}:${current}`;
+  const stale = await peer("current", "m", oldRoom, 1), kept = await peer("current", "m", currentRoom, 1);
+  h.rooms.set(oldRoom, [stale]); h.rooms.set(currentRoom, [kept]);
+  h.setDesired({ tenantId: "tenant", accessEpoch: current,
+    authority: { revision: 3, roomActive: true, publisherParticipantIds: [], mediaIncarnation: incarnation } });
+  await h.reconciler.runOnce();
+  assert.deepEqual(h.removals, [{ room: oldRoom, identity: stale.identity }]);
+  await h.reconciler.runOnce(); assert.equal(h.status().state, "observed");
+  assert.deepEqual(h.rooms.get(currentRoom)!.map(value => value.identity), [kept.identity]);
 });

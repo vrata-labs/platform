@@ -5,6 +5,7 @@ import type { PoolClient } from "pg";
 import { TokenVerifier } from "livekit-server-sdk";
 import { createRoomSessionV2Codec } from "@vrata/shared-types/room-session-v2";
 import { createUserMediaIdentity, userMediaScope } from "@vrata/shared-types";
+import { roomMediaGrantName } from "./identity/media-room.js";
 import { AUTHOR_HTTP_MEDIA_KEY, AUTHOR_HTTP_MEDIA_SECRET, AUTHOR_HTTP_SECRET, authorHttpBearer, startAuthorHttpFixture, until,
   type AuthorHttpResponse, type AuthorHttpRoom, type AuthorHttpSession } from "./plugins/author-http.test-helper.js";
 
@@ -73,9 +74,14 @@ function media(h: Fixture) {
     const verified = await new TokenVerifier(AUTHOR_HTTP_MEDIA_KEY, AUTHOR_HTTP_MEDIA_SECRET).verify(String(body.token), 0).catch(() => null);
     assert.ok(verified, "the actual SDK verifies the JWT signature under only the fixture media key");
     const jwt = part(String(body.token), 1), grant = jwt.video as Claims;
-    const namespace = v2 ? await h.storage.identityProtocol.mediaNamespace() : null;
-    const expectedMediaRoom = v2 ? `vrata-v2:${namespace}:${roomId}` : `vrata-${roomId}`;
-    const expectedIdentity = v2 ? await createUserMediaIdentity(expectedMediaRoom, { participantId, scope: userMediaScope(sources)! }) : null;
+    // Codec 3 names the room generation and binds the original proof's epoch.
+    const boundary = v2 ? await h.storage.identityProtocol.mediaBoundary() : null;
+    const claims = proof.startsWith("rs2.") ? part(proof, 1) : {};
+    const incarnation = boundary?.codec === 3
+      ? await h.storage.roomIdentities.mediaIncarnation({ tenantId: String(claims.tenantId), roomId }) ?? undefined : undefined;
+    const expectedMediaRoom = boundary ? roomMediaGrantName(roomId, "vrata-", boundary.namespace, incarnation) : `vrata-${roomId}`;
+    const expectedIdentity = boundary ? await createUserMediaIdentity(expectedMediaRoom, { participantId, scope: userMediaScope(sources)!,
+      ...(boundary.codec === 3 ? { epoch: Number(claims.authEpoch) } : {}) }) : null;
     assert.equal(jwt.sub === (expectedIdentity?.identity ?? participantId) && jwt.iss === AUTHOR_HTTP_MEDIA_KEY && jwt.nbf === 0 && typeof jwt.name === "string", true,
       "the signed subject, issuer, not-before and display name are the intended values");
     assert.equal(Object.keys(jwt).sort().join(), v2 ? "attributes,exp,iss,name,nbf,sub,video" : "exp,iss,name,nbf,sub,video", "only the exact scoped identity claims");
@@ -88,7 +94,7 @@ function media(h: Fixture) {
     }
     assert.equal(JSON.stringify(grant.canPublishSources) === JSON.stringify(sources), true, "signed sources match the requested authorised scope");
     assert.equal(grant.roomJoin === true && grant.canPublish === true && grant.canSubscribe === true, true, "the existing voice grant remains enabled");
-    assert.equal(grant.room === (v2 ? `vrata-v2:${namespace}:${roomId}` : `vrata-${roomId}`), true, "the actual activation namespace is preserved");
+    assert.equal(grant.room === expectedMediaRoom, true, "the actual activation namespace and room generation are preserved");
     const exp = Number(jwt.exp), lifetime = Number(body.expiresInSeconds), releaseClock = exp - lifetime;
     assert.equal(Number.isSafeInteger(exp) && exp <= deadline(proof) && Number.isSafeInteger(lifetime) && lifetime >= 1 && lifetime <= TTL, true,
       "neither the signed deadline nor the reported remainder widens the original proof");
@@ -404,6 +410,60 @@ test("user media credentials retain the original proof and fresh authority over 
     await c.test("RS2 pre-send signer failure counts no media completion", async () => {
       const bound = await h.room(), member = await h.session(bound.room.roomId);
       await f.signFault(bound.room.roomId, member); await f.both(bound.room.roomId, member, true);
+    });
+  });
+
+  await t.test("owned floor-2 fixture past the codec-3 media boundary", async c => {
+    const h = await startAuthorHttpFixture(c, 2, true, false, undefined, { ttlSeconds: TTL }), f = media(h);
+    const subjectOf = (response: AuthorHttpResponse) => String(part(String(response.json<Claims>().token), 1).sub);
+    async function recover(bound: AuthorHttpRoom) {
+      const proof = codec.verify(bound.host.token, bound.room); assert.ok(proof);
+      const recoveryId = randomUUID(), secretHash = randomUUID().replaceAll("-", "").repeat(2);
+      await h.storage.roomIdentities.issueRecovery({ tenantId: bound.room.tenantId, roomId: bound.room.roomId, recoveryId, secretHash,
+        targetParticipantId: proof.participantId, targetRole: "host", expiresAt: new Date(Date.now() + 600_000).toISOString(),
+        issuer: { actorType: "admin-token", actorId: "media-lineage-test", role: "admin" } });
+      const recovered = await h.storage.roomIdentities.redeemRecovery(bound.room, recoveryId, secretHash);
+      assert.equal(recovered.participantId, proof.participantId); assert.equal(recovered.authEpoch, proof.authEpoch + 1);
+      return { participantId: recovered.participantId, token: codec.sign({ tenantId: recovered.tenantId, roomId: recovered.roomId,
+        identityId: recovered.identityId, participantId: recovered.participantId, authEpoch: recovered.authEpoch }) };
+    }
+    await c.test("a codec-2 grant prepared before the raise is refused at the fence and a retry issues codec 3", async () => {
+      const bound = await h.room(), member = await h.session(bound.room.roomId), roomId = bound.room.roomId;
+      await f.both(roomId, member, true);
+      f.refused(await f.held("media-prepared", roomId, () => f.send(roomId, member.participantId, member.token),
+        () => h.storage.identityProtocol.raiseMediaCodec(3)), 409, "room_state_changed", "room_state_changed");
+      assert.equal((await h.storage.identityProtocol.mediaBoundary())?.codec, 3);
+      await f.both(roomId, member, true);
+      assert.match(subjectOf(await f.send(roomId, member.participantId, member.token)), /^vmi3\.m\./);
+    });
+    await c.test("Host, Member and personal Owner receive codec-3 grants in their room generation over both transports", async () => {
+      const bound = await h.room(), member = await h.session(bound.room.roomId);
+      for (const session of [bound.host, member]) { await f.both(bound.room.roomId, session, true); await f.clipped(bound.room.roomId, session, true); }
+      await f.issued(() => f.send(bound.room.roomId, bound.host.participantId, bound.host.token, "body", { canPublishAudio: false, canPublishVideo: true }),
+        bound.room.roomId, bound.host.participantId, bound.host.token, true, ["screen_share", "screen_share_audio"]);
+    });
+    await c.test("recovery gives the same participant a distinct codec-3 address; the old proof is refused, also at the fence", async () => {
+      const bound = await h.room(), roomId = bound.room.roomId;
+      const before = subjectOf(await f.send(roomId, bound.host.participantId, bound.host.token));
+      const raced = await h.room();
+      f.refused(await f.held("media-prepared", raced.room.roomId, () => f.send(raced.room.roomId, raced.host.participantId, raced.host.token),
+        () => recover(raced)), ...RECOVERY);
+      const recovered = await recover(bound);
+      f.refused(await f.send(roomId, bound.host.participantId, bound.host.token), ...RECOVERY);
+      await f.both(roomId, recovered, true);
+      const after = subjectOf(await f.send(roomId, recovered.participantId, recovered.token));
+      assert.notEqual(after, before, "the recovered lineage never reuses the old media address");
+      await f.settled(roomId, true);
+    });
+    await c.test("a room recreated with the same ID gets a new generation; a grant prepared for the old one is never released", async () => {
+      const first = await h.room(), member = await h.session(first.room.roomId);
+      const previous = await h.storage.roomIdentities.mediaIncarnation(first.room);
+      f.refused(await f.held("media-prepared", first.room.roomId, () => f.send(first.room.roomId, member.participantId, member.token), async () => {
+        await f.admin(f.stem(first.room.roomId), {}, "DELETE");
+        await f.createRoom("public", first.room.roomId);
+      }), 409);
+      const recreated = await h.storage.roomIdentities.mediaIncarnation(first.room);
+      assert.match(recreated ?? "", /^[a-f0-9]{32}$/); assert.notEqual(recreated, previous);
     });
   });
 

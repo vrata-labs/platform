@@ -6,5 +6,6 @@
   "roomRecordReader": 2,
   "frameTokenCodec": 2,
   "mediaIdentityCodec": 2,
-  "mediaScreenReconciler": 2
+  "mediaScreenReconciler": 2,
+  "mediaCodecBoundary": 3
 }
