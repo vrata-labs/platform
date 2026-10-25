@@ -126,8 +126,10 @@ export class MemoryManagedRooms {
     const grant = this.grants.get(grantId);
     if (!grant) return null;
     const timestamp = this.timestamp();
+    // Only the first revoke of the grant takes the account's other open grants: a repeat never reaches grants issued since.
+    const first = !grant.revokedAt;
     for (const candidate of this.grants.values()) {
-      const same = candidate === grant || (grant.subject !== null && candidate.roomId === grant.roomId && candidate.subject === grant.subject);
+      const same = candidate === grant || (first && grant.subject !== null && candidate.roomId === grant.roomId && candidate.subject === grant.subject);
       if (same && !candidate.revokedAt) {
         Object.assign(candidate, { revokedAt: timestamp, revokeReason: reason, revision: candidate.revision + 1, lastOperationId: operationId, updatedAt: timestamp });
       }
@@ -173,6 +175,11 @@ export class MemoryManagedRooms {
 
   async listIncompleteManagedGrantRevocations(): Promise<ManagedRoomGrantRecord[]> {
     return [...this.grants.values()].filter(grant => grant.revokedAt && !grant.revocationCompletedAt).map(grant => this.publicGrant(grant));
+  }
+
+  async listIncompleteManagedAccountRevocations(roomId: string, subject: string): Promise<ManagedRoomGrantRecord[]> {
+    return [...this.grants.values()].filter(grant => grant.roomId === roomId && grant.subject === subject && grant.revokedAt && !grant.revocationCompletedAt)
+      .map(grant => this.publicGrant(grant));
   }
 
   async completeManagedGrantRevocation(grantId: string): Promise<void> {
@@ -356,16 +363,21 @@ export class PostgresManagedRooms {
   }
 
   // Touches only grant rows: an exchange locks the room before the grant, so this never waits in the other order.
-  // An account grant ends the account's access to the room: its other open grants there go with it, each finished
-  // later on its own identities, so a new grant issued after this revoke is untouched.
+  // An account grant ends the account's access to the room: its other open grants there go with it on the first revoke
+  // only, so a repeat never reaches a grant issued after it.
   async revokeManagedRoomGrant(grantId: string, reason: string | null, operationId: string): Promise<ManagedRoomGrantRecord | null> {
     const updated = await this.pool.query<GrantRow>(
-      `with target as (select grant_id, room_id, subject from integration_grants where grant_id = $1)
+      // Rows are locked in grant id order, so two revokes of one account's grants cannot deadlock each other.
+      `with target as (select grant_id, room_id, subject, revoked_at from integration_grants where grant_id = $1),
+       locked as (
+         select g.grant_id from integration_grants g, target
+          where g.revoked_at is null
+            and (g.grant_id = target.grant_id
+              or (target.subject is not null and target.revoked_at is null and g.room_id = target.room_id and g.subject = target.subject))
+          order by g.grant_id for update of g)
        update integration_grants g
           set revoked_at = now(), revoke_reason = $2, revision = g.revision + 1, last_operation_id = $3, updated_at = now()
-         from target
-        where g.revoked_at is null
-          and (g.grant_id = target.grant_id or (target.subject is not null and g.room_id = target.room_id and g.subject = target.subject))
+        where g.grant_id in (select grant_id from locked) and g.revoked_at is null
         returning ${GRANT_COLUMNS.split(",").map(column => `g.${column.trim()}`).join(", ")}`, [grantId, reason, operationId]);
     const own = updated.rows.find(row => row.grant_id === grantId);
     if (own) return mapGrant(own);
@@ -419,6 +431,13 @@ export class PostgresManagedRooms {
   async listIncompleteManagedGrantRevocations(): Promise<ManagedRoomGrantRecord[]> {
     const result = await this.pool.query<GrantRow>(
       `select ${GRANT_COLUMNS} from integration_grants where revoked_at is not null and revocation_completed_at is null order by revoked_at limit 100`);
+    return result.rows.map(mapGrant);
+  }
+
+  async listIncompleteManagedAccountRevocations(roomId: string, subject: string): Promise<ManagedRoomGrantRecord[]> {
+    const result = await this.pool.query<GrantRow>(
+      `select ${GRANT_COLUMNS} from integration_grants
+        where room_id = $1 and subject = $2 and revoked_at is not null and revocation_completed_at is null order by revoked_at`, [roomId, subject]);
     return result.rows.map(mapGrant);
   }
 

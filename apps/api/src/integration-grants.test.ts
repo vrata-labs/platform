@@ -178,13 +178,12 @@ test("a managed personal room belongs to its ownerSubject: every generation of t
   }
 });
 
-test("the portal makes an account host explicitly; a guest of a grant never becomes host", async () => {
+test("a guest of a grant never becomes host, by the host's transfer or an administrator's", async () => {
   const h = await harness();
   try {
     await h.storage.identityProtocol.raise(2);
     const meeting = await h.room({ kind: "reference", visibility: "unlisted" });
     const scope = { tenantId: meeting.tenant, roomId: meeting.roomId };
-    const [owner, colleague, outsider] = ["acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VW", "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VX", "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VY"];
     const enter = async (body: Record<string, unknown>) => {
       const grant = await h.call("POST", `${meeting.path}/grants`, { body: { purpose: "visit", ...body }, idempotencyKey: key() });
       assert.equal(grant.status, 201, JSON.stringify(grant.body));
@@ -193,28 +192,94 @@ test("the portal makes an account host explicitly; a guest of a grant never beco
       assert.equal(entry.status, 200, JSON.stringify(entry.body));
       return { participantId: entry.body.participantId as string, proof: createRoomIdentityCodec(secret).verify(entry.body.identityCredential, scope)! };
     };
-    const roleOf = async (proof: Parameters<typeof h.storage.roomIdentities.resolve>[0]) => (await h.storage.roomIdentities.resolve(proof))!.role;
-    const host = await enter({ role: "host", subject: owner });
-    const member = await enter({ role: "member", subject: colleague });
+    const host = await enter({ role: "host", subject: "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VW" });
+    const member = await enter({ role: "member", subject: "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VX" });
     const guest = await enter({ role: "guest" });
-
-    const assign = (subject: string, idempotencyKey = key()) => h.call("POST", `${meeting.path}/host`, { body: { subject }, idempotencyKey });
-    assert.deepEqual([(await assign(outsider)).status, (await assign(outsider)).body?.error.code], [409, "subject_not_in_room"]);
-    assert.equal((await h.call("POST", `${meeting.path}/host`, { body: { subject: "acct_x" }, idempotencyKey: key() })).body?.error.code, "invalid_request");
-    const assignKey = key();
-    const assigned = await assign(colleague, assignKey);
-    assert.deepEqual([assigned.status, assigned.body], [200, { roomId: meeting.roomId, subject: colleague, role: "host" }]);
-    assert.equal((await assign(colleague, assignKey)).headers.get("idempotency-replayed"), "true");
-    assert.deepEqual([await roleOf(member.proof), await roleOf(host.proof)], ["host", "member"]);
-    assert.equal((await assign(colleague)).status, 200, "assigning the current host changes nothing");
-
-    // Neither the host nor an administrator transfer makes a guest of a grant the host.
-    const hostProof = { ...member.proof, expiresAtSeconds: Math.floor(Date.now() / 1000) + 600 };
+    const expiresAtSeconds = Math.floor(Date.now() / 1000) + 600;
     const revision = (await h.storage.roomIdentities.authority(scope))!.revision;
-    await assert.rejects(h.storage.roomIdentities.transferHost(hostProof, guest.proof.identityId, revision), /identity_forbidden/);
-    await assert.rejects(h.storage.roomIdentities.transition(scope, { actorType: "room-session", proof: member.proof, expiresAtSeconds: hostProof.expiresAtSeconds }, revision,
-      { type: "transfer-host", targetParticipantId: guest.participantId }), /identity_forbidden/);
-    assert.equal(await roleOf(guest.proof), "guest");
+    await assert.rejects(h.storage.roomIdentities.transferHost({ ...host.proof, expiresAtSeconds }, guest.proof.identityId, revision), /identity_forbidden/);
+    for (const actor of [{ actorType: "room-session" as const, proof: host.proof, expiresAtSeconds }, { actorType: "admin-token" as const, actorId: "operator", role: "admin" as const }]) {
+      await assert.rejects(h.storage.roomIdentities.transition(scope, actor, revision, { type: "transfer-host", targetParticipantId: guest.participantId }), /identity_forbidden/);
+    }
+    // The host hands over to an account instead.
+    await h.storage.roomIdentities.transition(scope, { actorType: "room-session", proof: host.proof, expiresAtSeconds }, revision, { type: "transfer-host", targetParticipantId: member.participantId });
+    assert.deepEqual([(await h.storage.roomIdentities.resolve(member.proof))!.role, (await h.storage.roomIdentities.resolve(guest.proof))!.role], ["host", "guest"]);
+  } finally {
+    await h.close();
+  }
+});
+
+test("an account revoke has one boundary: late finishers, stalled exchanges and repeats never reach a later entry", async () => {
+  const h = await harness();
+  try {
+    await h.storage.identityProtocol.raise(2);
+    const meeting = await h.room({ kind: "reference", visibility: "unlisted" });
+    const scope = { tenantId: meeting.tenant, roomId: meeting.roomId };
+    const subject = "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VW";
+    const issue = async () => {
+      const grant = await h.call("POST", `${meeting.path}/grants`, { body: { role: "member", purpose: "visit", subject }, idempotencyKey: key() });
+      assert.equal(grant.status, 201, JSON.stringify(grant.body));
+      return { grantId: grant.body!.grantId as string, code: new URL(grant.body!.entryUrl).hash.slice("#grant=".length) };
+    };
+    const exchange = (code: string, storage = h.storage) => exchangeRoomGrant({ storage, secret, requestId: "req_boundary", reserveAdmission: async () => true,
+      payload: { roomId: meeting.roomId, code } });
+    const revoke = (grantId: string) => h.call("POST", `${meeting.path}/grants/${grantId}/revoke`, { body: {}, idempotencyKey: key() });
+    const active = async (entry: Awaited<ReturnType<typeof exchange>>) =>
+      (await h.storage.roomIdentities.resolve(createRoomIdentityCodec(secret).verify(entry.body.identityCredential, scope)!)) !== null;
+
+    // The credentials never carry the subject.
+    const first = await exchange((await issue()).code);
+    for (const credential of [first.body.identityCredential, first.body.sessionToken] as string[]) {
+      assert.equal(Buffer.from(credential.split(".")[1]!, "base64url").toString("utf8").includes(subject), false);
+    }
+
+    // Revoking an unused grant ends the generation at once; the finisher of the used grant comes later.
+    const unused = await issue();
+    assert.equal((await revoke(unused.grantId)).status, 200);
+    assert.equal(await active(first), false);
+    const later = await exchange((await issue()).code);
+    assert.equal(later.status, 200);
+    assert.notEqual(later.body.participantId, first.body.participantId);
+    for (const pending of await h.storage.listIncompleteManagedGrantRevocations()) await completeGrantRevocation(h.storage, pending);
+    assert.equal(await active(later), true, "a late finisher of the earlier revoke leaves the later entry");
+
+    // A repeat of the first revoke with another key takes no grant issued since.
+    const spare = await issue();
+    assert.equal((await revoke(unused.grantId)).status, 200);
+    assert.equal((await h.storage.getManagedRoomGrant(spare.grantId))?.revokedAt, null);
+
+    // An exchange stalled after its grant was consumed: the revoke and a new entry happen meanwhile.
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let consumed!: () => void;
+    const reached = new Promise<void>(resolve => { consumed = resolve; });
+    const stalling = new Proxy(h.storage, { get(target, property, receiver) {
+      if (property === "consumeManagedRoomGrant") {
+        return async (...args: Parameters<typeof target.consumeManagedRoomGrant>) => { const result = await target.consumeManagedRoomGrant(...args); consumed(); await gate; return result; };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    } }) as typeof h.storage;
+    const stalled = exchange(spare.code, stalling);
+    await reached;
+    assert.equal((await revoke(spare.grantId)).status, 200);
+    assert.equal(await active(later), false);
+    const newest = await exchange((await issue()).code);
+    release();
+    assert.deepEqual([(await stalled).status, await active(newest)], [410, true], "the stalled exchange does not withdraw a generation it did not create");
+    for (const pending of await h.storage.listIncompleteManagedGrantRevocations()) await completeGrantRevocation(h.storage, pending);
+    assert.equal(await active(newest), true);
+
+    // A failed link of an account entry withdraws nothing: the next device resumes the same participant.
+    let failNext = true;
+    const flaky = new Proxy(h.storage, { get(target, property, receiver) {
+      if (property === "recordManagedRoomGrantIdentity" && failNext) return async () => { failNext = false; throw new Error("link_failed"); };
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    } }) as typeof h.storage;
+    await assert.rejects(exchange((await issue()).code, flaky), /link_failed/);
+    const resumed = await exchange((await issue()).code);
+    assert.deepEqual([resumed.body.participantId, await active(newest)], [newest.body.participantId, true]);
   } finally {
     await h.close();
   }

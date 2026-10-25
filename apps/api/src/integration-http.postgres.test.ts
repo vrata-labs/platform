@@ -174,6 +174,25 @@ test("portal-managed rooms on PostgreSQL: grants, exchange, cutoff, close, epoch
     assert.deepEqual([rejoined.status, rejoined.body?.role], [200, "member"]);
     assert.notEqual(rejoined.body!.participantId, ownerEntries[0]!.body!.participantId);
 
+    // A managed personal room: its ownerSubject enters, owns the personal state, and the subject shows nowhere.
+    const personalRoom = await call("POST", roomsPath, { body: { ...createBody, template: { templateId: "personal-room-basic", version: "2.0.0" }, name: "Mine", visibility: "private", ownerSubject }, key: idempotencyKey() });
+    assert.equal(personalRoom.status, 201, JSON.stringify(personalRoom.body));
+    const personalId = personalRoom.body!.roomId as string;
+    const ownerGrant = await call("POST", `/integration/v1/tenants/${tenant}/rooms/${personalId}/grants`, { body: { role: "host", purpose: "visit", subject: ownerSubject }, key: idempotencyKey() });
+    assert.equal(ownerGrant.status, 201, JSON.stringify(ownerGrant.body));
+    const ownerEntry = await exchange(personalId, codeOf(ownerGrant.body!.entryUrl));
+    assert.equal(ownerEntry.status, 200, JSON.stringify(ownerEntry.body));
+    const ownerBearer = { authorization: `Bearer ${ownerEntry.body!.sessionToken}` };
+    const saved = await call("PUT", `/api/rooms/${personalId}/personal-state`, { body: { lastPose: { position: { x: 1, y: 0, z: 2 }, yaw: 0.5, pitch: 0 } }, headers: ownerBearer });
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+    assert.deepEqual((await call("GET", `/api/rooms/${personalId}/personal-state`, { headers: ownerBearer })).body?.state?.lastPose?.position, { x: 1, y: 0, z: 2 });
+    const intruder = await call("GET", `/api/rooms/${personalId}/personal-state`, { headers: { authorization: `Bearer ${rejoined.body!.sessionToken}` } });
+    assert.equal(intruder.status, 403);
+    const manifest = await call("GET", `/api/rooms/${personalId}/manifest`, { headers: ownerBearer });
+    assert.equal(manifest.status, 200);
+    assert.equal(JSON.stringify(manifest.body).includes(ownerSubject), false, "the manifest does not show the subject");
+    assert.equal((await call("POST", `/integration/v1/tenants/${tenant}/rooms/${personalId}/grants`, { body: { role: "member", purpose: "visit", subject: "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VX" }, key: idempotencyKey() })).status, 400);
+
     // visit (1) + invite (3) fill the four places; a further invite finds the room full.
     const invite = await call("POST", grantsPath, { body: { role: "guest", purpose: "invite", maxUses: 3 }, key: idempotencyKey() });
     const inviteCode = codeOf(invite.body!.entryUrl);
@@ -196,7 +215,7 @@ test("portal-managed rooms on PostgreSQL: grants, exchange, cutoff, close, epoch
     // REST reads and writes with a still unexpired rs2 stop at once too, not when the session expires.
     const bearer = { authorization: `Bearer ${renewed.body!.token}` };
     const roomRequests = [
-      ["GET", `/api/rooms/${demoId}/notes/shared`, undefined], ["PUT", `/api/rooms/${demoId}/notes/shared`, { content: "agenda", expectedVersion: 0 }],
+      ["GET", `/api/rooms/${demoId}/notes/shared`, undefined], ["PUT", `/api/rooms/${demoId}/notes/private`, { content: "agenda" }],
       ["GET", `/api/rooms/${demoId}/spaces`, undefined], ["PUT", `/api/rooms/${demoId}/presence/${host.body!.participantId}`, { displayName: "Guest", mode: "desktop" }],
       ["GET", `/api/rooms/${demoId}/plugins/runtime`, undefined], ["GET", `/api/rooms/${demoId}/session-control`, undefined]
     ] as const;
@@ -204,8 +223,9 @@ test("portal-managed rooms on PostgreSQL: grants, exchange, cutoff, close, epoch
       const result = await call(method, path, { body, headers: bearer });
       return `${method} ${path.slice(path.lastIndexOf(demoId) + demoId.length)} ${result.status} ${result.body?.reason ?? ""}`.trim();
     }));
-    const active = await statuses();
-    assert(active.every(line => !line.includes("room_paused")), active.join("\n"));
+    const allowed = (noteStatus: number) => ["GET /notes/shared 200", `PUT /notes/private ${noteStatus}`, "GET /spaces 200", `PUT /presence/${host.body!.participantId} 200`,
+      "GET /plugins/runtime 200", "GET /session-control 200"];
+    assert.deepEqual(await statuses(), allowed(201), "the private note is created");
     const epochBefore = (await pool.query("select access_epoch::text as epoch from integration_rooms where room_id = $1", [demoId])).rows[0].epoch;
     const accessPath = `/integration/v1/tenants/${tenant}/rooms/${demoId}/access`;
     assert.equal((await call("PATCH", accessPath, { body: { expectedRevision: 0, status: "paused" }, key: idempotencyKey() })).body?.status, "paused");
@@ -221,8 +241,7 @@ test("portal-managed rooms on PostgreSQL: grants, exchange, cutoff, close, epoch
     assert.deepEqual([rotated!.retired, rotated!.block], [[epochBefore], "room_paused"], "the old epoch waits for LiveKit");
     assert.match(api.logs(), /managed_media_control_unavailable/);
     assert.equal((await call("PATCH", accessPath, { body: { expectedRevision: 1, status: "active" }, key: idempotencyKey() })).body?.status, "active");
-    const resumed = await statuses();
-    assert(resumed.every(line => !line.includes("room_paused")), resumed.join("\n"));
+    assert.deepEqual(await statuses(), allowed(200), "the same session works again once the room is active");
 
     // Revoking the invite revokes everyone who came in with it; the creator stays.
     const guestCredential = guests[0]!.body!.identityCredential as string;

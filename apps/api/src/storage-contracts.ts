@@ -382,6 +382,8 @@ export interface IntegrationStore {
   requestManagedRoomRotation(roomId: string): Promise<void>;
   /** Revoked grants whose identities and media were not finished yet (a revoke interrupted on its way). */
   listIncompleteManagedGrantRevocations(): Promise<ManagedRoomGrantRecord[]>;
+  /** Revoked grants of one account in one room whose identities are not yet revoked; an entry finishes them first. */
+  listIncompleteManagedAccountRevocations(roomId: string, subject: string): Promise<ManagedRoomGrantRecord[]>;
   /** Marks the revoke complete and, for a used grant, asks for a new epoch, once: a second caller does nothing. */
   completeManagedGrantRevocation(grantId: string): Promise<void>;
   listManagedRoomsForEnforcement(): Promise<ManagedRoomEnforcementRecord[]>;

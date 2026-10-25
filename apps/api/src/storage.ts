@@ -1095,6 +1095,7 @@ export class MemoryStorage implements Storage {
   recordManagedRoomGrantIdentity(grantId: string, identityId: string): Promise<void> { return this.managedRooms.recordManagedRoomGrantIdentity(grantId, identityId); }
   requestManagedRoomRotation(roomId: string): Promise<void> { return this.managedRooms.requestManagedRoomRotation(roomId); }
   listIncompleteManagedGrantRevocations(): Promise<ManagedRoomGrantRecord[]> { return this.managedRooms.listIncompleteManagedGrantRevocations(); }
+  listIncompleteManagedAccountRevocations(roomId: string, subject: string): Promise<ManagedRoomGrantRecord[]> { return this.managedRooms.listIncompleteManagedAccountRevocations(roomId, subject); }
   completeManagedGrantRevocation(grantId: string): Promise<void> { return this.managedRooms.completeManagedGrantRevocation(grantId); }
   listManagedRoomGrantIdentities(grantId: string): Promise<string[]> { return this.managedRooms.listManagedRoomGrantIdentities(grantId); }
   listManagedRoomsForEnforcement(): Promise<ManagedRoomEnforcementRecord[]> { return this.managedRooms.listManagedRoomsForEnforcement(); }
@@ -2440,6 +2441,7 @@ export class PostgresStorage implements Storage {
   recordManagedRoomGrantIdentity(grantId: string, identityId: string): Promise<void> { return this.managedRooms.recordManagedRoomGrantIdentity(grantId, identityId); }
   requestManagedRoomRotation(roomId: string): Promise<void> { return this.managedRooms.requestManagedRoomRotation(roomId); }
   listIncompleteManagedGrantRevocations(): Promise<ManagedRoomGrantRecord[]> { return this.managedRooms.listIncompleteManagedGrantRevocations(); }
+  listIncompleteManagedAccountRevocations(roomId: string, subject: string): Promise<ManagedRoomGrantRecord[]> { return this.managedRooms.listIncompleteManagedAccountRevocations(roomId, subject); }
   completeManagedGrantRevocation(grantId: string): Promise<void> { return this.managedRooms.completeManagedGrantRevocation(grantId); }
   listManagedRoomGrantIdentities(grantId: string): Promise<string[]> { return this.managedRooms.listManagedRoomGrantIdentities(grantId); }
   listManagedRoomsForEnforcement(): Promise<ManagedRoomEnforcementRecord[]> { return this.managedRooms.listManagedRoomsForEnforcement(); }

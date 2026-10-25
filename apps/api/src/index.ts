@@ -326,8 +326,7 @@ const managedRoomEnforcer = createManagedRoomEnforcer({ storage: storagePromise,
   mediaPrefix: () => process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-", logEvent,
   intervalMs: Number.parseInt(process.env.VRATA_MANAGED_ENFORCER_INTERVAL_MS ?? "", 10) || undefined });
 const routeIntegrationRequest = createIntegrationRoutes({ getRequestId, logEvent, stateSecret: () => getStateTokenSecret(),
-  accessChanged: () => managedRoomEnforcer.kick(),
-  authorityCommitted: (room, revision, state) => { mediaScreenService.committed(room, revision, state); } });
+  accessChanged: () => managedRoomEnforcer.kick() });
 
 function resolveAccessRole(requestedRole: unknown, env: NodeJS.ProcessEnv = process.env): { role: RoomRole; roleSource: RoomSessionRoleSource } {
   if (!isDevRoleQueryAllowed(env)) {

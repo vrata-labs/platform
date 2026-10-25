@@ -58,8 +58,9 @@ export async function resolveRoomRequestV2(input: {
   // Also cover expiry during the awaited authority read, without returning an
   // expired context to callers or treating the underlying identity as revoked.
   if (now() >= current.expiresAtSeconds * 1000) throw new IdentityBoundaryError(401, "identity_session_expired");
-  // The room record is read again for every request, so a pause or cutoff applies at once, not when the rs2 expires.
-  const managedBlock = getManagedAccessBlockReason(room, now());
+  // A managed room's window applies to every request at once, not when the rs2 expires. It is read after the session
+  // was resolved, so a pause or cutoff during that wait is seen; what remains is the time the handler itself takes.
+  const managedBlock = room.managed ? getManagedAccessBlockReason(await input.storage.getRoom(roomId), now()) : null;
   if (managedBlock) throw new ManagedRoomAccessBlocked(managedBlock);
   return { room, identity: current.identity, authority: current.authority, role: current.role,
     permissions: current.permissions, isOwner: current.isOwner, sessionId: current.sessionId, expiresAtSeconds: current.expiresAtSeconds };
