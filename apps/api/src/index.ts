@@ -1521,8 +1521,10 @@ function normalizeDocumentSurfaceId(input: unknown): string | null | undefined {
   return /^[A-Za-z0-9._:-]{1,80}$/.test(value) ? value : undefined;
 }
 
-async function canReadRoomDetails(request: IncomingMessage, room: RoomRecord): Promise<boolean> {
-  if (!isPrivateRoom(room)) {
+async function canReadRoomDetails(request: IncomingMessage, room: RoomRecord, options: { managedPrivate?: boolean } = {}): Promise<boolean> {
+  // The record of a portal-managed room (its name and access window) is the customer's even when the room is unlisted;
+  // the manifest stays readable for the runtime's boot.
+  if (!isPrivateRoom(room) && !(options.managedPrivate && room.managed)) {
     return true;
   }
   if (canReadPrivateRoomWithControlPlaneActor(request, room.roomId)) {
@@ -4045,7 +4047,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const room = await storage.getRoom(decodeURIComponent(roomItemMatch[1]));
     if (!room) return json(response, 404, { error: "room_not_found" });
     if (isRoomDisabled(room) && !canManageDisabledRoom(request)) return json(response, 403, { error: "room_access_denied", reason: "room_disabled" });
-    if (!(await canReadRoomDetails(request, room))) return json(response, 404, { error: "room_not_found" });
+    if (!(await canReadRoomDetails(request, room, { managedPrivate: true }))) return json(response, 404, { error: "room_not_found" });
     const metadata = { ...roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request, room) };
     const readActor = resolveControlPlaneActor(request);
     const owner: { currentOwnerParticipantId?: string | null } = readActor.ok && readActor.actor.actorType === "admin-token"
