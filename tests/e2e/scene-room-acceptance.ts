@@ -53,7 +53,9 @@ export async function expectSceneRoomReady(
   await page.goto(`/rooms/${roomId}`);
   await expect(page.locator("#room-name")).not.toContainText("Loading room", { timeout: timeoutMs });
 
-  const manifest = await getJsonWithRetry<{ sceneBundle?: { url?: string } }>(request, `/api/rooms/${roomId}/manifest`, timeoutMs);
+  // Anonymous room reads are refused on floor 2; the administrator reads the same manifest on both floors.
+  const manifest = await getJsonWithRetry<{ sceneBundle?: { url?: string } }>(request, `/api/rooms/${roomId}/manifest`, timeoutMs,
+    { "x-vrata-admin-token": adminToken });
   expect(bundleUrlMatches(manifest.sceneBundle?.url, expectedBundleUrl)).toBeTruthy();
   const loadedBundleUrl = manifest.sceneBundle?.url;
   expect(loadedBundleUrl).toBeTruthy();

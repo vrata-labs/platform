@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expect } from "playwright/test";
 import { bearer, inviteTokenFromLink, privateHttp } from "./plugin-author-scenarios";
-import { admitInvitation } from "./staging-identity";
+import { admitInvitation, identityProtocolAt } from "./staging-identity";
 
 // Native fetch and scalar assertions avoid private credentials in API call logs.
 export async function runPersistedTelemetryRoundTrip(origin: string, admin: Record<string, string>): Promise<void> {
@@ -54,7 +54,12 @@ export async function runPersistedTelemetryRoundTrip(origin: string, admin: Reco
     expect(items[0].statusLine === "telemetry-idle-latest").toBe(true);
     expect(items[0].history.length).toBe(1);
     expect(items[0].history[0].kind === "seat").toBe(true);
-    expect((await privateHttp(origin, `${stem}/xr-telemetry`)).status).toBe(401);
+    // Without a session floor 1 answers 401; floor 2 first refuses every unauthenticated room request at its identity boundary.
+    const anonymous = await privateHttp(origin, `${stem}/xr-telemetry`);
+    if (await identityProtocolAt(origin) === 2) {
+      expect(anonymous.status).toBe(409);
+      expect(anonymous.json<{ reason?: string }>().reason === "identity_upgrade_required").toBe(true);
+    } else expect(anonymous.status).toBe(401);
   } finally {
     let failed = false;
     if (roomId && inviteId) try { expect((await privateHttp(origin, `/api/rooms/${roomId}/invites/${inviteId}/revoke`, "POST", admin)).status).toBe(200); } catch { failed = true; }
