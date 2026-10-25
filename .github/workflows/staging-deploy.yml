@@ -142,6 +142,17 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `previous_sha=${data.release?.imageSha ?? ''}\nasset_sha=${data.binding?.assetSha ?? ''}\n`);
           NODE
 
+      - name: Read catalog state before rollout
+        id: catalog
+        # From the accepted database, not from the candidate API: a host with an active reference catalog
+        # must fail the gate on a catalog mismatch instead of skipping the checks that need it.
+        run: |
+          # shellcheck disable=SC2029
+          STATE="$(ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo python3 -B '$REMOTE_HELPERS/staging-template-catalog.py' catalog-state --root '$STAGING_APP_DIR'" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).state))')"
+          [[ "$STATE" == active || "$STATE" == wave2 ]]
+          echo "catalog_state=$STATE" >> "$GITHUB_OUTPUT"
+          echo "reference_active=$([ "$STATE" = active ] && echo 1)" >> "$GITHUB_OUTPUT"
+
       - name: Sync workspace to deploy SHA
         env:
           SHA: ${{ steps.deploy.outputs.deploy_sha }}
@@ -287,6 +298,7 @@ jobs:
           RUTUBE_BLOCKING: ${{ steps.remote_browser_impact.outputs.rutube_blocking }}
           FORCE_FAIL: ${{ inputs.force_fail_gate || false }}
           PLAYWRIGHT_REPORT_NAME: staging-gate
+          VRATA_REFERENCE_CATALOG_ACTIVE: ${{ steps.catalog.outputs.reference_active }}
         run: |
           curl --fail --silent "$BASE_URL/rooms/demo-room" >/dev/null
           curl --fail --silent "$BASE_URL/control-plane" >/dev/null
