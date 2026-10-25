@@ -211,11 +211,25 @@ Frame locomotion maintenance rules:
 
 ## Provider-neutral staging rollout
 
-- The prepared Selectel target is `vrata-stage-selectel-v1`, `135.106.137.18`, `/opt/vrata`. Host preparation alone is not an accepted application deployment; verify the exact CI/CD run and authoritative record before reporting staging success.
+- The staging stand is created on demand (section below): Selectel `vrata-platform-stage`, floating IP `111.88.217.54`, `/opt/vrata`. Host preparation alone is not an accepted application deployment; verify the exact CI/CD run and authoritative record before reporting staging success.
 - The current portable operating contract is `docs/deployment-staging.md`. Yandex host addresses and provisioning notes above are historical context for this migration.
 - Authoritative release metadata lives outside checkout in `/opt/vrata-stage-state/accepted-release.json`; the legacy successful-SHA file is derived metadata. Candidate `IMAGE_TAG` is never proof of acceptance.
 - New hosts require designation and explicit manual `bootstrap`. Ordinary rollout requires accepted state and finalized template baseline. Perform read-only preflight with bootstrap-installed helpers before uploading a new protocol or scene source.
 - Before accepted publication, failure restores previous images, scene bytes and room pointers. After atomic JSON publication, metadata errors require explicit repair; do not roll back containers while leaving the new accepted record.
 - Preserve host operation locking, exact image/asset SHA bindings, immutable scene snapshots, the active pointer, previous/Wave 2 retention and private recovery artifacts. Keep private scenes outside public platform images and git.
-- `STAGING_AUTO_DEPLOY_ENABLED=false` pauses automatic deploy/scheduled canary only; manual verification remains available. Deploy and Rutube canary have separate concurrency groups.
+- `STAGING_AUTO_DEPLOY_ENABLED` belongs to `vrata-stage`: `true` while the stand exists, `false` otherwise. `false` pauses automatic deploy and the daily scheduled canary only; manual verification remains available. Deploy and Rutube canary have separate concurrency groups.
 - Staging backup uses `tools/backup-staging.py` and the common pinned MinIO override, checks the working accepted image and includes accepted metadata in the checksum manifest. An export spanning a release change is incomplete, not a verified recovery point.
+
+## On-demand staging stand
+
+The staging stand exists only while a session, CI or the owner needs it, and is shared by every Claude Code and opencode session on the operator machine. `tools/vrata-stage.py` (installed as `vrata-stage`) creates and removes it and keeps leases; plan and design: `docs/plans/2026-10-25-on-demand-stages.md`, operations: `docs/deployment-staging.md`.
+
+- Create, remove or recreate the stand only through `vrata-stage`. Never stop, shelve, delete or rebuild staging servers through the Selectel API or panel, and never touch production.
+- Take a lease before any use of the stand: a push or merge to `main` that deploys to staging, dispatching Staging Deploy, Template Catalog or Staging Smoke, `pnpm test:e2e:staging` or Rutube suites, SSH to the host, or asking the user to check something on staging: `vrata-stage acquire platform --purpose deploy|e2e|manual|debug --note "<task>"`. The command prints the lease id.
+- An absent stand is created by the first lease: a new server with the same address and host key, then Staging Deploy with `bootstrap=true` and identity v2 for the latest `main` SHA with a successful Docker Publish (about an hour with the gate). While `phase` is `creating`, repeat `vrata-stage wait platform`; each call returns within 9 minutes. To verify an exact commit, push it first or pass `--sha` to the lease that creates the stand.
+- Hold a lease only while you actually use the stand. A running CI deploy protects the stand by itself; waiting for review, local builds or thinking are not reasons to keep it.
+- Before asking the user to check something on staging, take a `manual` lease and say until when the stand is kept; release it after the answer. The user keeps the stand with `vrata-stage hold platform --ttl 4h`.
+- After staging verification, when abandoning the task or switching to work without the stand: `vrata-stage release <lease>`. The last release removes the stand after a pause unless a CI run still uses it.
+- Never release or shorten leases of others; show a suspicious lease to the user. `vrata-stage down --force` only on the user's explicit request.
+- A failed creation (no capacity in `ru-2c`, provider error, failed bootstrap deploy) is a blocker: report it with `vrata-stage status platform` and the log it names; do not create servers by hand.
+- Final reports after staging work name the lease id, whether it was released, and the stand phase.

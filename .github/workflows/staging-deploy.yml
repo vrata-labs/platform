@@ -1,4 +1,6 @@
 name: Staging Deploy
+# A dispatch from tools/vrata-stage.py finds its own run by the request id in the run name.
+run-name: ${{ inputs.request && format('Staging Deploy {0}', inputs.request) || '' }}
 
 on:
   workflow_run:
@@ -28,6 +30,11 @@ on:
         required: false
         default: false
         type: boolean
+      request:
+        description: Identifier of an automated dispatch, shown in the run name
+        required: false
+        default: ""
+        type: string
 
 permissions:
   actions: read
