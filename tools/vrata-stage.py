@@ -651,10 +651,11 @@ class Stands:
     def reap(self, name, poll=60, busy_retry=300):
         """Watch the stand while it exists; remove it after the grace period without leases and operations."""
         grace = int(self.config.stage(name).get("grace_minutes", 20)) * 60
+        me = process_identity(os.getpid())
         with self.registry.locked(name) as state:
             if state["reaper"] and state["reaper"]["pid"] != os.getpid() and process_alive(state["reaper"]):
                 return {"stage": name, "watcher": "already_running", "pid": state["reaper"]["pid"]}
-            state["reaper"] = process_identity(os.getpid())
+            state["reaper"] = me
         idle_since = None
         while True:
             with self.registry.locked(name) as state:
@@ -665,15 +666,22 @@ class Stands:
                     return {"stage": name, "phase": "absent"}
                 in_use = bool(live or state["op"])
                 restore_ci = state["phase"] == "ready" and not state["op"] and state.get("ci_variable") == "restore_pending"
+                if restore_ci:
+                    # Own the stand while switching CI back, so a removal cannot start underneath and be overtaken.
+                    state["op"] = me
             if restore_ci:
                 try:
                     self.set_ci(name, True)
-                    with self.registry.locked(name) as state:
-                        if state["phase"] == "ready" and not state["op"]:
-                            state["ci_variable"] = "synced"
-                            record(state, "ci_variable_restored")
+                    restored = True
                 except StageError as error:
                     self.log(f"ci variable still not restored: {error}")
+                    restored = False
+                with self.registry.locked(name) as state:
+                    if owns(state, me):
+                        state["op"] = None
+                        if restored:
+                            state["ci_variable"] = "synced"
+                            record(state, "ci_variable_restored")
             if in_use:
                 idle_since = None
                 self.sleep(poll)

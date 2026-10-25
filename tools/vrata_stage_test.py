@@ -348,6 +348,8 @@ class RemovalTests(Base):
         attempts = []
         def set_variable(repo, name, value):
             attempts.append(value)
+            # While CI is switched back the watcher owns the stand, so a removal by another process waits.
+            self.assertEqual(self.stands.registry.read("demo")["op"], vs.process_identity(os.getpid()))
             if len(attempts) == 1:
                 raise vs.StageError("gh_unavailable")
         self.github.set_variable = set_variable
@@ -360,7 +362,7 @@ class RemovalTests(Base):
         with self.assertRaises(KeyboardInterrupt):
             self.stands.reap("demo", poll=1)
         self.assertEqual(attempts, ["true", "true"])
-        self.assertEqual(self.state()["ci_variable"], "synced")
+        self.assertEqual((self.state()["ci_variable"], self.state()["op"]), ("synced", None))
 
     def test_failed_ci_restore_is_recorded(self):
         self.ready()
