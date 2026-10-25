@@ -6,7 +6,7 @@ import { IdentityStorageError, type RoomIdentityStorage } from "./contracts.js";
 // Deliberately not installed in the legacy HTTP/WS routes. Activation must pair
 // this service with server-authority checks and runtime server-ID adoption.
 export function createRoomIdentityService(storage: RoomIdentityStorage, secret: string, now = Date.now,
-  options: { identityLifetimeSeconds?: number; sessionLifetimeSeconds?: number } = {}) {
+  options: { identityLifetimeSeconds?: number; sessionLifetimeSeconds?: number; sessionDeadlineSeconds?: number } = {}) {
   const codec = createRoomIdentityCodec(secret);
   const sessionCodec = createRoomSessionV2Codec(secret);
   const seconds = () => Math.floor(now() / 1000);
@@ -22,6 +22,13 @@ export function createRoomIdentityService(storage: RoomIdentityStorage, secret: 
     const live = Number.isSafeInteger(nowMs) && nowMs >= 0 && deadlinesSeconds.every(deadline =>
       Number.isSafeInteger(deadline) && deadline > 0 && Number.isSafeInteger(deadline * 1000) && nowMs < deadline * 1000);
     return live ? nowMs : null;
+  };
+  // The lifetime is fixed at signing, after every await, so a deadline (a managed room's cutoff) bounds the real exp.
+  const sessionLifetime = (signAtSeconds: number) => {
+    const lifetime = Math.min(options.sessionLifetimeSeconds ?? 900,
+      options.sessionDeadlineSeconds === undefined ? Number.POSITIVE_INFINITY : options.sessionDeadlineSeconds - signAtSeconds);
+    if (lifetime <= 0) throw new IdentityStorageError("identity_session_expired");
+    return lifetime;
   };
   const issue = (identity: Awaited<ReturnType<RoomIdentityStorage["create"]>>, signAtSeconds = seconds()) => ({
     identity, credential: codec.sign(identity, { nowSeconds: signAtSeconds, lifetimeSeconds: options.identityLifetimeSeconds ?? 900 })
@@ -43,6 +50,10 @@ export function createRoomIdentityService(storage: RoomIdentityStorage, secret: 
   return {
     async admit(input: Parameters<RoomIdentityStorage["admit"]>[0]) {
       return issue(await storage.admit(input));
+    },
+    async admitGrant(input: RoomIdentityScope & { displayName: string; grantId: string }) {
+      return issue(await storage.create({ tenantId: input.tenantId, roomId: input.roomId, displayName: input.displayName,
+        baseRole: "guest", provenance: { kind: "grant", grantId: input.grantId, role: "guest" } }));
     },
     async beginWaiting(input: RoomIdentityScope & { inviteTokenHash: string; displayName: string; expiresAt: string }) {
       const waiting = codec.createWaiting(input);
@@ -76,9 +87,10 @@ export function createRoomIdentityService(storage: RoomIdentityStorage, secret: 
       const nowMs = liveSampleMs(expiresAtSeconds);
       if (!current || nowMs === null) throw new IdentityStorageError("identity_not_active");
       const sessionId = randomUUID();
+      const signAtSeconds = Math.floor(nowMs / 1000), lifetimeSeconds = sessionLifetime(signAtSeconds);
       return { identity: current.identity, authority: current.authority, role: current.role, permissions: current.permissions,
-        isOwner: current.isOwner,
-        sessionId, sessionToken: sessionCodec.sign(current.identity, { nowSeconds: Math.floor(nowMs / 1000), lifetimeSeconds: options.sessionLifetimeSeconds ?? 900, sessionId }) };
+        isOwner: current.isOwner, sessionId, expiresInSeconds: lifetimeSeconds, expiresAtSeconds: signAtSeconds + lifetimeSeconds,
+        sessionToken: sessionCodec.sign(current.identity, { nowSeconds: signAtSeconds, lifetimeSeconds, sessionId }) };
     },
     async resolveSession(sessionToken: unknown, scope: RoomIdentityScope) {
       const verified = sessionCodec.verify(sessionToken, scope, seconds());
@@ -96,7 +108,7 @@ export function createRoomIdentityService(storage: RoomIdentityStorage, secret: 
         identity: current.identity, authority: current.authority, role: current.role, permissions: current.permissions,
         sessionId,
         sessionToken: sessionCodec.sign(current.identity, {
-          nowSeconds: Math.floor(nowMs / 1000), lifetimeSeconds: options.sessionLifetimeSeconds ?? 900, sessionId
+          nowSeconds: Math.floor(nowMs / 1000), lifetimeSeconds: sessionLifetime(Math.floor(nowMs / 1000)), sessionId
         })
       };
     },

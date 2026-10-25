@@ -31,6 +31,10 @@ export function emptyIdentityAuthority(scope: RoomIdentityScope, legacy?: RoomSe
 function validateAdmission(provenance: IdentityProvenance, baseRole: "guest" | "member"): IdentityProvenance {
   if (!provenance || typeof provenance !== "object" || Array.isArray(provenance)) fail("invalid_identity_input");
   if (provenance.kind === "guest" && baseRole === "guest") return { kind: "guest" };
+  // A portal grant was checked and consumed by the integration storage before this call.
+  if (provenance.kind === "grant" && validId(provenance.grantId) && provenance.role === "guest" && baseRole === "guest") {
+    return { kind: "grant", grantId: provenance.grantId, role: "guest" };
+  }
   if ((provenance.kind === "invite" || provenance.kind === "waiting-room") && validId(provenance.inviteId)
     && ["guest", "member", "presenter", "host"].includes(provenance.role)
     && baseRole === (provenance.role === "guest" ? "guest" : "member")) {

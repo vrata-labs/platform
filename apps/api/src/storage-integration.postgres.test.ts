@@ -69,7 +69,7 @@ test("Postgres integration storage keeps tenants, managed rooms, CAS and operati
     assert.equal(updated?.managed?.revision, 1);
     assert.equal(await storage.updateManagedRoomAccess(plain.roomId, 0, { status: "paused" }, randomUUID()), null);
     const extended = await storage.updateManagedRoomAccess(roomId, 1, { accessUntil: "2031-01-01T00:00:00.000Z" }, updateId);
-    assert(extended && extended !== "revision_mismatch");
+    assert(extended && extended !== "revision_mismatch" && extended !== "room_closed");
     assert.deepEqual([extended.managed?.accessUntil, extended.managed?.revision, extended.managed?.lastOperationId], ["2031-01-01T00:00:00.000Z", 2, updateId]);
 
     const start = { principal: "portal:stage", idempotencyKey: "operation-key-0001", kind: "room.create", requestHash: "sha256:" + "a".repeat(64), resourceType: "room", resourceId: randomUUID(), leaseSeconds: 30 };

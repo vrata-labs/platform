@@ -12,7 +12,8 @@ export type IdentityProvenance =
   | { kind: "invite"; inviteId: string; role: "guest" | "member" | "presenter" | "host" }
   | { kind: "waiting-room"; inviteId: string; requestId: string; role: "guest" | "member" | "presenter" | "host" }
   | { kind: "personal-owner" }
-  | { kind: "administrator-recovery"; recoveryId: string };
+  | { kind: "administrator-recovery"; recoveryId: string }
+  | { kind: "grant"; grantId: string; role: "guest" };
 
 export interface RoomIdentityRecord extends RoomIdentityProof {
   displayName: string;

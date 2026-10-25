@@ -2,7 +2,7 @@ import { createPublicKey, verify, type KeyObject } from "node:crypto";
 
 export const INTEGRATION_CONTRACT = "platform-integration-v1";
 export const INTEGRATION_AUDIENCE = "platform-integration-v1";
-export const INTEGRATION_SCOPES = ["upsertTenant", "createRoom", "getRoom", "updateRoomAccess", "getOperation", "findOperation"] as const;
+export const INTEGRATION_SCOPES = ["upsertTenant", "createRoom", "getRoom", "updateRoomAccess", "closeRoom", "issueGrant", "revokeGrant", "getUsage", "getOperation", "findOperation"] as const;
 export type IntegrationScope = typeof INTEGRATION_SCOPES[number];
 
 export const INTEGRATION_ASSERTION_MAX_LIFETIME_SECONDS = 60;

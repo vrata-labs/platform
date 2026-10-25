@@ -1,4 +1,5 @@
 import { createRoomAccessFromPermissions } from "@vrata/shared-types";
+import { capTokenTtlSeconds, managedRoomCutoffMs } from "../room-session-control.js";
 import type { RoomRecord, Storage } from "../storage-contracts.js";
 import { IdentityStorageError } from "./contracts.js";
 import { createRoomIdentityService } from "./service.js";
@@ -16,9 +17,14 @@ export interface V2AdmissionRequest {
   sessionToken?: unknown;
 }
 
-export type V2AdmissionResult = { status: 200 | 202 | 400 | 401 | 403 | 404 | 409 | 426 | 429; body: Record<string, unknown> };
+export type V2AdmissionResult = { status: 200 | 202 | 400 | 401 | 403 | 404 | 409 | 410 | 426 | 429; body: Record<string, unknown> };
 const deny = (status: V2AdmissionResult["status"], reason: string): V2AdmissionResult => ({ status, body: { error: "identity_required", reason } });
 const V2_ROOM_SESSION_LIFETIME_SECONDS = 900;
+
+/** A room session of a portal-managed room never outlives the room's effective cutoff. */
+export function v2RoomSessionLifetimeSeconds(room: RoomRecord | null, nowMs: number): number {
+  return capTokenTtlSeconds(room, V2_ROOM_SESSION_LIFETIME_SECONDS, Math.floor(nowMs / 1000));
+}
 
 /** At floor 2 every credential here is a possession proof, never a public participant ID. */
 export async function admitV2RoomSession(input: {
@@ -38,8 +44,12 @@ export async function admitV2RoomSession(input: {
   const rawDisplayName = typeof payload.displayName === "string" ? payload.displayName : "";
   const displayName = rawDisplayName.trim().replace(/\s+/g, " ").slice(0, 80);
   if (rawDisplayName && !displayName) return { status: 400, body: { error: "invalid_display_name" } };
+  const sessionLifetimeSeconds = v2RoomSessionLifetimeSeconds(input.room, (input.now ?? Date.now)());
+  if (sessionLifetimeSeconds <= 0) return { status: 410, body: { error: "room_access_denied", reason: "access_expired" } };
+  const cutoffMs = managedRoomCutoffMs(input.room);
   const service = createRoomIdentityService(input.storage.roomIdentities, input.secret, input.now ?? Date.now,
-    { identityLifetimeSeconds: 86_400, sessionLifetimeSeconds: V2_ROOM_SESSION_LIFETIME_SECONDS });
+    { identityLifetimeSeconds: 86_400, sessionLifetimeSeconds: V2_ROOM_SESSION_LIFETIME_SECONDS,
+      ...(cutoffMs === null ? {} : { sessionDeadlineSeconds: Math.floor(cutoffMs / 1000) }) });
   try {
     let issued: Awaited<ReturnType<typeof service.admit>>;
     if (payload.identityCredential !== undefined) {
@@ -48,6 +58,9 @@ export async function admitV2RoomSession(input: {
       issued = await service.redeemWaiting(payload.waitingCredential, scope);
     } else if (payload.recoveryCredential !== undefined) {
       issued = await service.redeemRecovery(payload.recoveryCredential, scope);
+    } else if (input.room.managed) {
+      // A portal-managed room admits new identities only through a grant exchange.
+      return { status: 403, body: { error: "room_access_denied", reason: "grant_required" } };
     } else {
       if (typeof payload.inviteToken !== "undefined"
         && (typeof payload.inviteToken !== "string" || !/^[A-Za-z0-9_-]{20,200}$/.test(payload.inviteToken))) {
@@ -68,7 +81,7 @@ export async function admitV2RoomSession(input: {
     return { status: 200, body: {
       identityProtocolVersion: 2, participantId: issued.identity.participantId,
       identityCredential: issued.credential, token: session.sessionToken, sessionId: session.sessionId,
-      expiresInSeconds: V2_ROOM_SESSION_LIFETIME_SECONDS, role: session.role, isOwner: session.isOwner,
+      expiresInSeconds: session.expiresInSeconds, role: session.role, isOwner: session.isOwner,
       authorityRevision: session.authority.revision,
       permissions: session.permissions, access: createRoomAccessFromPermissions(session.role, session.permissions)
     } };
@@ -80,6 +93,8 @@ export async function admitV2RoomSession(input: {
     if (error.code === "identity_capacity_reached") return { status: 429, body: { error: "room_access_denied", reason: "room_identity_full" } };
     if (error.code === "room_blocked") return { status: 403, body: { error: "room_access_denied", reason: "room_locked" } };
     if (error.code === "room_not_found") return { status: 404, body: { error: "room_not_found" } };
+    // The managed window closed while the request waited for storage.
+    if (error.code === "identity_session_expired" && cutoffMs !== null) return { status: 410, body: { error: "room_access_denied", reason: "access_expired" } };
     return deny(error.code === "identity_forbidden" ? 403 : 409,
       error.code === "identity_forbidden" ? "invite_required" : "identity_recovery_required");
   }

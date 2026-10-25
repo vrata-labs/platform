@@ -296,7 +296,7 @@ export async function fetchStateToken(apiBaseUrl: string, roomId: string, access
     })
   });
 
-  if ([202, 403, 401, 409, 426, 429].includes(response.status)) {
+  if ([202, 403, 401, 409, 410, 423, 426, 429].includes(response.status)) {
     const payload = await response.json().catch(() => ({})) as { reason?: string; accessRequestId?: string; requestId?: string; waitingCredential?: string };
     if (payload.reason) {
       throw new RuntimeAccessError(response.status, payload.reason, payload.accessRequestId, payload.requestId, payload.waitingCredential);
@@ -818,6 +818,11 @@ export async function fetchRoomSessionControl(apiBaseUrl: string, roomId: string
     },
     cache: "no-store"
   });
+  if (response.status === 410 || response.status === 423) {
+    // A portal-managed room that closed, expired or paused answers every room path with its reason.
+    const payload = await response.json().catch(() => ({})) as { reason?: unknown };
+    if (typeof payload.reason === "string") throw new RuntimeAccessError(response.status, payload.reason);
+  }
   if (!response.ok) {
     throw new Error(`failed_to_load_session_control:${response.status}`);
   }
