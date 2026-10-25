@@ -48,3 +48,9 @@ test("platform stand hook gives both keys to cloud-init and keeps the admin toke
   assert.match(hook, /bootstrap=true/);
   assert.match(hook, /<"\$STAGE_ADMIN_TOKEN"/);
 });
+
+test("dispatched deploy runs carry the request id in their name", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
+  assert.match(workflow, /^run-name: \$\{\{ inputs\.request && format\('Staging Deploy \{0\}', inputs\.request\) \|\| '' \}\}$/m);
+  assert.match(workflow, /      request:\n        description: [^\n]+\n        required: false\n        default: ""\n        type: string/);
+});

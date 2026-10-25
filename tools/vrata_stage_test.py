@@ -92,12 +92,13 @@ class Base(unittest.TestCase):
                 "admin": {"user": "vrata", "key": "stage/demo/admin"},
                 "github": {"repo": "o/r", "variable": "STAGE_PRESENT", "busy_workflows": ["CI"], "deploy_after": "CI"},
                 "hook": {"clone": str(root), "path": "infra/hook.sh"}, "grace_minutes": 1}}}))
-        self.cloud, self.github, self.spawned = FakeCloud(), FakeGitHub(), []
+        self.cloud, self.github, self.spawned, self.prefixes = FakeCloud(), FakeGitHub(), [], []
         self.stands = self.make()
 
     def make(self):
         def spawner(args, log):
-            self.spawned.append(args)
+            self.prefixes.append(args[:4])
+            self.spawned.append(args[4:])
             return vs.process_identity(os.getpid())
         return vs.Stands(vs.Config(self.config_path), vs.Registry(Path(self.tmp.name) / "state"), self.cloud,
                          self.github, spawner, log=lambda message: None)
@@ -141,12 +142,17 @@ class LeaseTests(Base):
     def test_first_acquire_creates_once_and_second_joins(self):
         first = self.stands.acquire("demo", "e2e", owner=None)
         second = self.stands.acquire("demo", "manual", owner=None)
-        self.assertEqual(self.spawned, [["up", "demo"]])
+        self.assertEqual(self.spawned, [["up", "demo", "--requester", first["lease"]], ["reap", "demo"]])
         self.assertEqual((first["phase"], second["phase"]), ("creating", "creating"))
         self.assertEqual(len(self.state()["leases"]), 2)
 
+    def test_background_operations_keep_the_configuration_and_registry(self):
+        self.stands.acquire("demo", "e2e", owner=None)
+        config, registry = str(self.config_path.resolve()), str(self.stands.registry.directory.resolve())
+        self.assertEqual(self.prefixes, [["--config", config, "--state-dir", registry]] * 2)
+
     def test_acquire_on_ready_stand_does_not_create(self):
-        self.set_state(phase="ready", server={"id": "srv"})
+        self.set_state(phase="ready", server={"id": "srv"}, reaper=vs.process_identity(os.getpid()))
         self.assertEqual(self.stands.acquire("demo", "deploy", owner=None)["phase"], "ready")
         self.assertEqual(self.spawned, [])
 
@@ -155,21 +161,37 @@ class LeaseTests(Base):
         expires = vs.parse_iso(result["expires"]) - vs.utcnow()
         self.assertLessEqual(expires.total_seconds(), vs.MAX_TTL)
 
-    def test_last_release_schedules_reaper_and_shared_release_does_not(self):
+    def test_release_keeps_the_single_watcher(self):
         self.set_state(phase="ready", server={"id": "srv"})
         a = self.stands.acquire("demo", "e2e", owner=None)["lease"]
         b = self.stands.acquire("demo", "e2e", owner=None)["lease"]
         self.assertEqual(self.stands.release(a)["remaining_leases"], 1)
-        self.assertEqual(self.spawned, [])
-        self.assertTrue(self.stands.release(b)["reaper"])
-        self.assertEqual(self.spawned, [["reap", "demo", "--after", "60"]])
+        self.assertTrue(self.stands.release(b)["watcher"])
+        self.assertEqual(self.spawned, [["reap", "demo"]])
         with self.assertRaises(vs.StageError):
             self.stands.release(b)
 
-    def test_status_heals_missing_reaper_for_idle_stand(self):
-        self.set_state(phase="ready", server={"id": "srv"})
+    def test_status_restarts_a_lost_watcher(self):
+        self.set_state(phase="ready", server={"id": "srv"}, reaper=dead_identity())
         self.stands.status("demo")
-        self.assertEqual(self.spawned, [["reap", "demo", "--after", "60"]])
+        self.assertEqual(self.spawned, [["reap", "demo"]])
+        self.set_state(phase="absent", server=None, reaper=None)
+        self.spawned.clear()
+        self.stands.status("demo")
+        self.assertEqual(self.spawned, [])
+
+    def test_failed_stand_held_by_another_lease_is_not_replaced(self):
+        server_id = self.cloud.create_server({"name": "vrata-demo-stage", "metadata": {"vrata-stage": "demo"}})
+        self.cloud.calls.clear()
+        self.set_state(phase="failed", server={"id": server_id}, reaper=vs.process_identity(os.getpid()))
+        holder = self.stands.acquire("demo", "debug", owner=None)["lease"]
+        self.assertEqual(self.spawned, [["up", "demo", "--requester", holder]])
+        self.set_state(phase="failed", op=None)
+        self.spawned.clear()
+        result = self.stands.acquire("demo", "e2e", owner=None)
+        self.assertEqual((result["phase"], result["failed_stand_held_by"]), ("failed", [holder]))
+        self.assertEqual(self.spawned, [])
+        self.assertEqual(self.cloud.calls, [])
 
     def test_renew_extends_only_known_lease(self):
         lease = self.stands.acquire("demo", "e2e", ttl=60, owner=None)["lease"]
@@ -224,6 +246,22 @@ class RemovalTests(Base):
         # The lease still wants a stand, so removal hands over to a new creation.
         self.assertEqual(self.spawned, [["up", "demo"]])
 
+    def test_lease_taken_while_certificates_are_saved_keeps_the_instance(self):
+        server_id = self.ready()
+        self.stands.save_caddy = lambda name: self.stands.acquire("demo", "user", owner=None)
+        result = self.stands.down("demo")
+        self.assertEqual(result["reason"], "leases")
+        self.assertIn(server_id, self.cloud.servers)
+        self.assertEqual(self.github.variables, [("STAGE_PRESENT", "false"), ("STAGE_PRESENT", "true")])
+        self.assertEqual(self.state()["phase"], "ready")
+
+    def test_run_started_before_the_delete_keeps_the_instance(self):
+        server_id = self.ready()
+        self.github.busy = [[], [], [{"databaseId": 11, "workflowName": "CI", "status": "queued"}]]
+        self.assertEqual(self.stands.down("demo")["reason"], "ci_busy")
+        self.assertIn(server_id, self.cloud.servers)
+        self.assertEqual(self.github.variables[-1], ("STAGE_PRESENT", "true"))
+
     def test_never_deletes_a_server_it_does_not_own(self):
         for metadata, name in (({}, "vrata-demo-stage"), ({"vrata-stage": "demo"}, "vrata-portal-prod-ru-v1")):
             self.cloud.servers["foreign"] = {"id": "foreign", "name": name, "status": "ACTIVE", "metadata": metadata}
@@ -242,11 +280,34 @@ class RemovalTests(Base):
         self.assertNotIn(orphan, self.cloud.servers)
         self.assertEqual(self.state()["phase"], "absent")
 
-    def test_reaper_waits_for_ci_then_removes(self):
+    def watch(self):
+        ticks = iter(range(0, 10**6, 100))
+        self.stands.sleep, self.stands.clock = (lambda seconds: None), (lambda: next(ticks))
+        return self.stands.reap("demo", poll=0, busy_retry=0)
+
+    def test_watcher_removes_after_lease_expiry_and_waits_for_ci(self):
         server_id = self.ready()
-        self.github.busy = [[{"databaseId": 9, "workflowName": "CI", "status": "in_progress"}], [], []]
-        self.assertTrue(self.stands.reap("demo", busy_retry=0)["removed"])
+        now = vs.utcnow()
+        self.set_state(reaper=vs.process_identity(os.getpid()), leases={"old": {
+            "purpose": "e2e", "created": vs.iso(now), "expires": vs.iso(now - dt.timedelta(seconds=1)), "owner": None}})
+        self.github.busy = [[{"databaseId": 9, "workflowName": "CI", "status": "in_progress"}]]
+        self.assertEqual(self.watch(), {"stage": "demo", "phase": "absent"})
         self.assertNotIn(server_id, self.cloud.servers)
+        self.assertIsNone(self.state()["reaper"])
+
+    def test_watcher_keeps_a_stand_in_use(self):
+        self.ready()
+        self.stands.acquire("demo", "e2e", owner=vs.process_identity(os.getpid()))
+        calls = []
+        def sleep(seconds):
+            calls.append(seconds)
+            if len(calls) > 3:
+                raise KeyboardInterrupt
+        self.stands.sleep = sleep
+        with self.assertRaises(KeyboardInterrupt):
+            self.stands.reap("demo", poll=7)
+        self.assertEqual(calls, [7, 7, 7, 7])
+        self.assertEqual(self.state()["phase"], "ready")
 
     def test_running_operation_blocks_removal(self):
         self.ready()
@@ -265,6 +326,7 @@ class CreationTests(Base):
         self.stands.adopt_host = lambda name, server_id: shell
         self.stands.restore_caddy = lambda name, shell: self.steps.append(("caddy",))
         self.stands.hook_env = lambda name, sha: {"STAGE_DEPLOY_SHA": sha}
+        self.stands.save_caddy = lambda name: self.steps.append(("save",))
         real_set = self.stands.set_ci
         self.stands.set_ci = lambda name, present: self.steps.append(("ci", present)) or real_set(name, present)
 
@@ -273,13 +335,19 @@ class CreationTests(Base):
         result = self.stands.up("demo")
         self.assertEqual(result["phase"], "ready")
         kinds = [step[:2] if step[0] == "hook" else step for step in self.steps]
-        self.assertEqual(kinds, [("hook", "user-data"), ("ssh", "cloud-init"), ("hook", "prepare"), ("caddy",), ("ci", True), ("hook", "deploy")])
+        self.assertEqual(kinds, [("hook", "user-data"), ("ssh", "cloud-init"), ("hook", "prepare"), ("caddy",), ("hook", "deploy"), ("ci", True)])
         self.assertEqual([call[0] for call in self.cloud.calls], ["create", "associate"])
         body = self.cloud.calls[0][1]
         self.assertEqual(body["metadata"]["vrata-stage"], "demo")
         self.assertEqual(body["imageRef"], "img")
         self.assertEqual(body["security_groups"], [{"name": "edge"}])
         self.assertEqual(self.state()["server"]["sha"], "a" * 40)
+
+    def test_sha_published_during_creation_is_reported(self):
+        shas = iter(["a" * 40, "c" * 40])
+        self.github.latest_success_sha = lambda repo, workflow: next(shas)
+        self.stands.up("demo")
+        self.assertEqual(self.state()["server"]["behind"], "c" * 40)
 
     def test_floating_ip_held_by_another_server_stops_before_creation(self):
         self.cloud.servers["old"] = {"id": "old", "name": "vrata-demo-stage-v1", "status": "ACTIVE", "metadata": {}}
@@ -297,6 +365,36 @@ class CreationTests(Base):
         self.assertEqual([call[0] for call in self.cloud.calls], ["delete", "create", "associate"])
         self.assertNotIn(old, self.cloud.servers)
         self.assertIn(("hook", "deploy", "b" * 40), self.steps)
+
+    def test_replacing_a_failed_instance_saves_certificates_first(self):
+        old = self.cloud.create_server({"name": "vrata-demo-stage", "metadata": {"vrata-stage": "demo"}})
+        self.cloud.calls.clear()
+        lease = self.stands.acquire("demo", "e2e", owner=None)["lease"]
+        self.set_state(phase="failed", server={"id": old}, op=None)
+        self.stands.up("demo", requester=lease)
+        self.assertEqual(self.steps[0], ("save",))
+        self.assertEqual([call[0] for call in self.cloud.calls], ["delete", "create", "associate"])
+
+    def test_replacement_refuses_while_ci_uses_the_failed_instance(self):
+        old = self.cloud.create_server({"name": "vrata-demo-stage", "metadata": {"vrata-stage": "demo"}})
+        self.cloud.calls.clear()
+        self.set_state(phase="failed", server={"id": old})
+        self.github.busy = [[{"databaseId": 5, "workflowName": "CI", "status": "in_progress"}]]
+        with self.assertRaisesRegex(vs.StageError, "ci_busy"):
+            self.stands.up("demo")
+        self.assertEqual(self.cloud.calls, [])
+
+    def test_direct_up_respects_other_users(self):
+        old = self.cloud.create_server({"name": "vrata-demo-stage", "metadata": {"vrata-stage": "demo"}})
+        self.cloud.calls.clear()
+        holder = self.stands.acquire("demo", "debug", owner=None)["lease"]
+        self.set_state(phase="failed", server={"id": old}, op=None)
+        with self.assertRaisesRegex(vs.StageError, "failed_stand_in_use:" + holder):
+            self.stands.up("demo")
+        self.set_state(phase="ready")
+        with self.assertRaisesRegex(vs.StageError, "stage_ready"):
+            self.stands.up("demo")
+        self.assertEqual(self.cloud.calls, [])
 
     def test_foreign_server_with_the_name_stops_creation(self):
         self.cloud.servers["x"] = {"id": "x", "name": "vrata-demo-stage", "status": "ACTIVE", "metadata": {}}
@@ -349,36 +447,50 @@ class HelperTests(Base):
         self.assertTrue(body["block_device_mapping_v2"][0]["delete_on_termination"])
 
     def test_busy_runs_filter_by_workflow_and_branch(self):
-        runs = [{"databaseId": 1, "workflowName": "CI", "status": "in_progress", "headBranch": "feature"},
-                {"databaseId": 2, "workflowName": "CI", "status": "queued", "headBranch": "main"},
-                {"databaseId": 3, "workflowName": "Deliver", "status": "completed", "headBranch": "main"},
-                {"databaseId": 4, "workflowName": "Deliver", "status": "waiting", "headBranch": "main"},
-                {"databaseId": 5, "workflowName": "Docs", "status": "in_progress", "headBranch": "main"}]
+        pages = {
+            "in_progress": [{"id": 1, "name": "CI", "status": "in_progress", "head_branch": "feature"},
+                            {"id": 5, "name": "Docs", "status": "in_progress", "head_branch": "main"}],
+            "queued": [{"id": 2, "name": "CI", "status": "queued", "head_branch": "main"}],
+            "waiting": [{"id": 4, "name": "Deliver", "status": "waiting", "head_branch": "main"}],
+        }
 
-        class Done:
-            returncode, stderr, stdout = 0, "", json.dumps(runs)
-        github = vs.GitHub(runner=lambda *args, **kwargs: Done())
-        self.assertEqual([run["databaseId"] for run in github.busy_runs("o/r", ["CI@main", "Deliver"])], [2, 4])
+        def runner(args, **kwargs):
+            status = args[2].split("status=")[1].split("&")[0]
+            runs = pages.get(status, [])
+            return type("Done", (), {"returncode": 0, "stderr": "",
+                                     "stdout": json.dumps({"total_count": len(runs), "workflow_runs": runs})})()
+        github = vs.GitHub(runner=runner)
+        self.assertEqual(sorted(run["databaseId"] for run in github.busy_runs("o/r", ["CI@main", "Deliver"])), [2, 4])
+        pages["queued"] = [{"id": 6, "name": "Other", "status": "queued", "head_branch": "main"}]
+        many = lambda args, **kwargs: type("Done", (), {"returncode": 0, "stderr": "",
+                                                        "stdout": json.dumps({"total_count": 101, "workflow_runs": []})})()
+        self.assertEqual(len(vs.GitHub(runner=many).busy_runs("o/r", ["CI"])), 1)
 
     def test_durations(self):
         self.assertEqual([vs.parse_duration(x) for x in ("90", "90m", "2h", "1d", "30s")], [5400, 5400, 7200, 86400, 30])
         with self.assertRaises(vs.StageError):
             vs.parse_duration("soon")
 
-    def test_dispatch_follows_the_new_run(self):
-        started = vs.iso(vs.utcnow() + dt.timedelta(seconds=1))
-        replies = [
-            "",
-            json.dumps([{"databaseId": 1, "createdAt": "2000-01-01T00:00:00Z", "status": "completed", "conclusion": "success"},
-                        {"databaseId": 2, "createdAt": started, "status": "in_progress", "conclusion": ""}]),
-            json.dumps([{"databaseId": 2, "createdAt": started, "status": "completed", "conclusion": "failure"}]),
-        ]
+    def test_dispatch_follows_its_own_run(self):
+        seen = {}
 
         class Gh:
+            calls = 0
+
             def gh(self, *args, input_text=None):
-                return replies.pop(0)
-        with self.assertRaisesRegex(vs.StageError, "workflow_failed:deploy.yml:2:failure"):
-            vs.dispatch("o/r", "deploy.yml", ["sha=abc"], github=Gh(), poll=0)
+                if args[0] == "workflow":
+                    seen.update(json.loads(input_text))
+                    return ""
+                Gh.calls += 1
+                mine = f"Deliver stage {seen['request']}"
+                if Gh.calls == 1:
+                    return json.dumps([{"databaseId": 1, "displayTitle": "Deliver prod abcdefabcdef", "status": "completed", "conclusion": "success"},
+                                       {"databaseId": 2, "displayTitle": mine, "status": "in_progress", "conclusion": ""}])
+                return json.dumps([{"databaseId": 2, "displayTitle": mine, "status": "completed", "conclusion": "failure"}])
+        with self.assertRaisesRegex(vs.StageError, "workflow_failed:deliver.yml:2:failure"):
+            vs.dispatch("o/r", "deliver.yml", ["target=stage"], github=Gh(), poll=0)
+        self.assertEqual(seen["target"], "stage")
+        self.assertRegex(seen["request"], r"^[0-9a-f]{12}$")
 
 
 if __name__ == "__main__":

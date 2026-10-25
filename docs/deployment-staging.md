@@ -59,9 +59,12 @@ vrata-stage release <lease>                                     # последн
    он совпадает с секретом `STAGING_ADMIN_TOKEN`.
 5. Восстанавливается том данных Caddy: сертификаты переживают сервер, и частые
    пересоздания не упираются в лимит Let's Encrypt (5 сертификатов на имя за 7 дней).
-6. `STAGING_AUTO_DEPLOY_ENABLED=true`, затем Staging Deploy `bootstrap=true`,
-   `activate_identity_v2=true` для последнего SHA `main` с успешным Docker Publish
-   (или заданного `--sha`). Стенд готов, когда этот прогон зелёный.
+6. Staging Deploy `bootstrap=true`, `activate_identity_v2=true` для последнего SHA `main`
+   с успешным Docker Publish (или заданного `--sha`). Только после зелёного прогона
+   `STAGING_AUTO_DEPLOY_ENABLED=true`: раньше автоматический деплой более нового SHA
+   мог бы попасть на пустой хост, а bootstrap затем откатил бы его. SHA, опубликованный
+   за время создания, `status` показывает в `server.behind`; его выкатывает следующий
+   push или ручной Staging Deploy под арендой.
 
 Удаление: нет живых аренд → нет активных прогонов Docker Publish, Staging Deploy,
 Rutube Canary, Template Catalog и Staging Smoke → `STAGING_AUTO_DEPLOY_ENABLED=false` →
