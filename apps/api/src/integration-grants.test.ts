@@ -4,6 +4,8 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
 
+import { createRoomIdentityCodec } from "@vrata/shared-types/identity-credential";
+
 import { createIntegrationRoutes } from "./integration-routes.js";
 import { completeGrantRevocation } from "./grant-revocation.js";
 import { exchangeRoomGrant } from "./room-grant-exchange.js";
@@ -55,12 +57,15 @@ async function harness() {
   return { storage, call, room, accessChanged, close: () => new Promise<void>(resolve => server.close(() => resolve())) };
 }
 
-test("grant requests are guest-only, bounded and allowlisted, and a personal room admits no guests", async () => {
+test("grant requests are bounded and allowlisted, accounts enter by visit, and a personal room admits no guests", async () => {
   const h = await harness();
   try {
     const demo = await h.room({ kind: "demo-instance", demoPolicyId: "qa-demo-v1" });
     for (const [body, message] of [
-      [{ role: "member", purpose: "visit", subject: "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VW" }, /Only guest grants/],
+      [{ role: "member", purpose: "visit" }, /account subject/],
+      [{ role: "host", purpose: "visit", subject: "acct_lowercase" }, /account subject/],
+      [{ role: "guest", purpose: "visit", subject: "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VW" }, /no subject/],
+      [{ role: "member", purpose: "invite", maxUses: 2, subject: "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VW" }, /invite grant is for guests/],
       [{ role: "guest", purpose: "preview-review" }, /preview-review/],
       [{ role: "guest", purpose: "visit", maxUses: 2 }, /exactly one use/],
       [{ role: "guest", purpose: "invite", maxUses: 51 }, /maxUses/],
@@ -76,6 +81,7 @@ test("grant requests are guest-only, bounded and allowlisted, and a personal roo
     }
     const personal = await h.room({ kind: "reference", template: { templateId: "personal-room-basic", version: "2.0.0" }, ownerSubject: "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VW" });
     assert.match((await h.call("POST", `${personal.path}/grants`, { body: { role: "guest", purpose: "visit" }, idempotencyKey: key() })).body?.error.message, /personal room/);
+    assert.match((await h.call("POST", `${personal.path}/grants`, { body: { role: "host", purpose: "visit", subject: "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VX" }, idempotencyKey: key() })).body?.error.message, /only its owner/);
 
     const scoped = await h.call("POST", `${demo.path}/grants`, { body: { role: "guest", purpose: "visit" }, idempotencyKey: key(), scope: ["createRoom"] });
     assert.deepEqual([scoped.status, scoped.body?.error.code], [403, "forbidden_scope"]);
@@ -88,6 +94,128 @@ test("grant requests are guest-only, bounded and allowlisted, and a personal roo
     assert.deepEqual([unconfigured.status, unconfigured.body?.error.code], [503, "dependency_unavailable"]);
   } finally {
     process.env.RUNTIME_BASE_URL = "https://app.example.test";
+    await h.close();
+  }
+});
+
+test("account grants: one participant per account on every device, first host only, and a revoke ends the account's access", async () => {
+  const h = await harness();
+  try {
+    await h.storage.identityProtocol.raise(2);
+    const meeting = await h.room({ kind: "reference", visibility: "unlisted" });
+    const [owner, colleague] = ["acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VW", "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VX"];
+    const issue = async (role: string, subject: string) => {
+      const grant = await h.call("POST", `${meeting.path}/grants`, { body: { role, purpose: "visit", subject }, idempotencyKey: key() });
+      assert.equal(grant.status, 201, JSON.stringify(grant.body));
+      assert.deepEqual([grant.body!.role, grant.body!.subject, grant.body!.maxUses], [role, subject, 1]);
+      return { grantId: grant.body!.grantId as string, code: new URL(grant.body!.entryUrl).hash.slice("#grant=".length) };
+    };
+    const exchange = async (code: string) => exchangeRoomGrant({ storage: h.storage, secret, requestId: "req_account", reserveAdmission: async () => true,
+      payload: { roomId: meeting.roomId, code, displayName: "Account" } });
+    const scope = { tenantId: meeting.tenant, roomId: meeting.roomId };
+
+    const ownerGrant = await issue("host", owner);
+    const host = await exchange(ownerGrant.code);
+    assert.equal(host.status, 200, JSON.stringify(host.body));
+    assert.match(host.body.participantId as string, /^acct_[0-9A-HJKMNP-TV-Z]{26}$/);
+    assert.deepEqual([host.body.role, JSON.stringify(host.body).includes(owner)], ["host", false], "the subject stays inside the platform");
+    const laptop = await exchange((await issue("host", owner)).code);
+    assert.deepEqual([laptop.body.participantId, laptop.body.role], [host.body.participantId, "host"], "a second device is the same participant");
+    const member = await exchange((await issue("host", colleague)).code);
+    assert.deepEqual([member.status, member.body.role], [200, "member"], "a later host grant does not take the room");
+    assert.notEqual(member.body.participantId, host.body.participantId);
+
+    // Revoking one grant of the account ends its access: both devices, and its other open grants.
+    const unused = await issue("member", owner);
+    const revoked = await h.call("POST", `${meeting.path}/grants/${ownerGrant.grantId}/revoke`, { body: { reason: "left the team" }, idempotencyKey: key() });
+    assert.equal(revoked.status, 200);
+    for (const credential of [host.body.identityCredential, laptop.body.identityCredential]) {
+      const current = await h.storage.roomIdentities.resolve(createRoomIdentityCodec(secret).verify(credential, scope)!);
+      assert.equal(current, null);
+    }
+    assert.deepEqual([(await exchange(unused.code)).status, (await h.storage.getManagedRoomGrant(unused.grantId))?.revokedAt !== null], [410, true]);
+    assert.equal((await h.storage.listIncompleteManagedGrantRevocations()).every(grant => grant.grantId !== ownerGrant.grantId), true);
+    assert(await h.storage.roomIdentities.resolve(createRoomIdentityCodec(secret).verify(member.body.identityCredential, scope)!), "another account keeps its access");
+
+    // A new grant after the revoke is a new participant without the host it had.
+    const back = await exchange((await issue("host", owner)).code);
+    assert.equal(back.status, 200, JSON.stringify(back.body));
+    assert.notEqual(back.body.participantId, host.body.participantId);
+    assert.equal(back.body.role, "member");
+  } finally {
+    await h.close();
+  }
+});
+
+test("a managed personal room belongs to its ownerSubject: every generation of that account owns it, no other enters", async () => {
+  const h = await harness();
+  try {
+    await h.storage.identityProtocol.raise(2);
+    const owner = "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VW";
+    const personal = await h.room({ kind: "reference", template: { templateId: "personal-room-basic", version: "2.0.0" }, ownerSubject: owner });
+    const issue = async (subject: string) => h.call("POST", `${personal.path}/grants`, { body: { role: "host", purpose: "visit", subject }, idempotencyKey: key() });
+    assert.match((await issue("acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VX")).body?.error.message, /only its owner/);
+    const scope = { tenantId: personal.tenant, roomId: personal.roomId };
+    const enter = async () => {
+      const grant = await issue(owner);
+      assert.equal(grant.status, 201, JSON.stringify(grant.body));
+      const entry = await exchangeRoomGrant({ storage: h.storage, secret, requestId: "req_owner", reserveAdmission: async () => true,
+        payload: { roomId: personal.roomId, code: new URL(grant.body!.entryUrl).hash.slice("#grant=".length) } });
+      assert.equal(entry.status, 200, JSON.stringify(entry.body));
+      return { grantId: grant.body!.grantId as string, entry, current: (await h.storage.roomIdentities.resolve(createRoomIdentityCodec(secret).verify(entry.body.identityCredential, scope)!))! };
+    };
+    const first = await enter();
+    assert.deepEqual([first.current.isOwner, first.current.role], [true, "host"]);
+    assert.equal((await h.storage.getRoom(personal.roomId))?.ownerParticipantId ?? null, null);
+
+    // After a revoke the owner comes back as a new participant and owns the room again; host stays an explicit change.
+    assert.equal((await h.call("POST", `${personal.path}/grants/${first.grantId}/revoke`, { body: {}, idempotencyKey: key() })).status, 200);
+    const again = await enter();
+    assert.notEqual(again.entry.body.participantId, first.entry.body.participantId);
+    assert.deepEqual([again.current.isOwner, again.current.role], [true, "member"]);
+  } finally {
+    await h.close();
+  }
+});
+
+test("the portal makes an account host explicitly; a guest of a grant never becomes host", async () => {
+  const h = await harness();
+  try {
+    await h.storage.identityProtocol.raise(2);
+    const meeting = await h.room({ kind: "reference", visibility: "unlisted" });
+    const scope = { tenantId: meeting.tenant, roomId: meeting.roomId };
+    const [owner, colleague, outsider] = ["acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VW", "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VX", "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VY"];
+    const enter = async (body: Record<string, unknown>) => {
+      const grant = await h.call("POST", `${meeting.path}/grants`, { body: { purpose: "visit", ...body }, idempotencyKey: key() });
+      assert.equal(grant.status, 201, JSON.stringify(grant.body));
+      const entry = await exchangeRoomGrant({ storage: h.storage, secret, requestId: "req_host", reserveAdmission: async () => true,
+        payload: { roomId: meeting.roomId, code: new URL(grant.body!.entryUrl).hash.slice("#grant=".length) } });
+      assert.equal(entry.status, 200, JSON.stringify(entry.body));
+      return { participantId: entry.body.participantId as string, proof: createRoomIdentityCodec(secret).verify(entry.body.identityCredential, scope)! };
+    };
+    const roleOf = async (proof: Parameters<typeof h.storage.roomIdentities.resolve>[0]) => (await h.storage.roomIdentities.resolve(proof))!.role;
+    const host = await enter({ role: "host", subject: owner });
+    const member = await enter({ role: "member", subject: colleague });
+    const guest = await enter({ role: "guest" });
+
+    const assign = (subject: string, idempotencyKey = key()) => h.call("POST", `${meeting.path}/host`, { body: { subject }, idempotencyKey });
+    assert.deepEqual([(await assign(outsider)).status, (await assign(outsider)).body?.error.code], [409, "subject_not_in_room"]);
+    assert.equal((await h.call("POST", `${meeting.path}/host`, { body: { subject: "acct_x" }, idempotencyKey: key() })).body?.error.code, "invalid_request");
+    const assignKey = key();
+    const assigned = await assign(colleague, assignKey);
+    assert.deepEqual([assigned.status, assigned.body], [200, { roomId: meeting.roomId, subject: colleague, role: "host" }]);
+    assert.equal((await assign(colleague, assignKey)).headers.get("idempotency-replayed"), "true");
+    assert.deepEqual([await roleOf(member.proof), await roleOf(host.proof)], ["host", "member"]);
+    assert.equal((await assign(colleague)).status, 200, "assigning the current host changes nothing");
+
+    // Neither the host nor an administrator transfer makes a guest of a grant the host.
+    const hostProof = { ...member.proof, expiresAtSeconds: Math.floor(Date.now() / 1000) + 600 };
+    const revision = (await h.storage.roomIdentities.authority(scope))!.revision;
+    await assert.rejects(h.storage.roomIdentities.transferHost(hostProof, guest.proof.identityId, revision), /identity_forbidden/);
+    await assert.rejects(h.storage.roomIdentities.transition(scope, { actorType: "room-session", proof: member.proof, expiresAtSeconds: hostProof.expiresAtSeconds }, revision,
+      { type: "transfer-host", targetParticipantId: guest.participantId }), /identity_forbidden/);
+    assert.equal(await roleOf(guest.proof), "guest");
+  } finally {
     await h.close();
   }
 });

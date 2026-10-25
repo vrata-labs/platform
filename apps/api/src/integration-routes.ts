@@ -7,12 +7,15 @@ import { loadDemoPolicies, type DemoPolicy } from "./demo-policies.js";
 import { isPortalManagedDeployment } from "./feature-flags.js";
 import { json } from "./http-responses.js";
 import { INTEGRATION_CONTRACT, loadIntegrationKeyring, verifyIntegrationAssertion, type IntegrationPrincipal, type IntegrationScope } from "./integration-auth.js";
+import { IdentityStorageError } from "./identity/contracts.js";
+import { currentSessionControlV2 } from "./identity/http-authority.js";
+import { getManagedAccessBlockReason } from "./room-session-control.js";
 import { parseBody } from "./request-body.js";
 import { completeGrantRevocation } from "./grant-revocation.js";
 import { createGrantCode, grantCodeHash, grantEntryUrl } from "./room-grants.js";
 import { resolveRoomTemplateCreate, templateInputError } from "./room-template-policy.js";
 import { stableJson, templateVersionContentHash } from "./storage-room-records.js";
-import type { IntegrationErrorObject, IntegrationOperationRecord, ManagedRoomAccessPatch, ManagedRoomBlockReason, ManagedRoomGrantRecord, RoomRecord, Storage } from "./storage.js";
+import type { IntegrationErrorObject, IntegrationOperationRecord, ManagedRoomAccessPatch, ManagedRoomBlockReason, ManagedRoomGrantRecord, ManagedRoomGrantRole, RoomRecord, RoomSessionControlState, Storage } from "./storage.js";
 
 const TENANT_ID_PATTERN = /^pt_[0-9A-HJKMNP-TV-Z]{26}$/;
 const SUBJECT_PATTERN = /^acct_[0-9A-HJKMNP-TV-Z]{26}$/;
@@ -34,7 +37,7 @@ const OPERATION_LEASE_SECONDS = 30;
 
 type ErrorCode = "invalid_request" | "unauthenticated" | "forbidden_scope" | "tenant_mismatch" | "room_not_found" | "idempotency_key_reused"
   | "idempotency_in_progress" | "revision_mismatch" | "template_not_allowed" | "dependency_unavailable"
-  | "room_closed" | "access_expired" | "room_paused" | "grant_invalid";
+  | "room_closed" | "access_expired" | "room_paused" | "grant_invalid" | "subject_not_in_room";
 
 const STATUS_BY_CODE: Record<ErrorCode, number> = {
   invalid_request: 400,
@@ -50,7 +53,8 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   room_closed: 410,
   access_expired: 410,
   room_paused: 423,
-  grant_invalid: 404
+  grant_invalid: 404,
+  subject_not_in_room: 409
 };
 
 class IntegrationRequestError extends Error {
@@ -77,6 +81,8 @@ export interface IntegrationRoutesContext {
   stateSecret?(): string;
   /** Called after a change that withdraws access, so live sessions and media end without waiting for the next tick. */
   accessChanged?(roomId: string): void;
+  /** Called after the integration API changed a room's authority (its host), so media reconciliation sees the new revision. */
+  authorityCommitted?(room: RoomRecord, revision: number, state: RoomSessionControlState): void;
 }
 
 function errorObject(error: IntegrationRequestError, requestId: string): IntegrationErrorObject {
@@ -177,6 +183,7 @@ export function serializeManagedGrant(grant: ManagedRoomGrantRecord, entryUrl?: 
     grantId: grant.grantId,
     roomId: grant.roomId,
     role: grant.role,
+    ...(grant.subject ? { subject: grant.subject } : {}),
     purpose: grant.purpose,
     maxUses: grant.maxUses,
     usedCount: grant.usedCount,
@@ -234,11 +241,15 @@ function parseGrantIssue(body: unknown) {
   if (!isPlainObject(body)) throw new IntegrationRequestError("invalid_request", "Request body must be a JSON object");
   assertOnlyKeys(body, ["role", "purpose", "subject", "displayName", "maxUses", "expiresAt", "returnContext"]);
   if (!["guest", "member", "presenter", "host"].includes(body.role as string)) throw new IntegrationRequestError("invalid_request", "role must be guest, member, presenter or host");
-  // Account-bound grants need account identities, which this platform version does not have yet.
-  if (body.role !== "guest" || body.subject !== undefined) throw new IntegrationRequestError("invalid_request", "Only guest grants without a subject are supported by this platform version");
+  const role = body.role as ManagedRoomGrantRole;
+  // A guest has no subject; a member, presenter or host is a portal account and enters by one visit each time.
+  if (role === "guest" ? body.subject !== undefined : typeof body.subject !== "string" || !SUBJECT_PATTERN.test(body.subject)) {
+    throw new IntegrationRequestError("invalid_request", role === "guest" ? "A guest grant has no subject" : "A member, presenter or host grant needs an account subject acct_<ULID>");
+  }
   if (body.purpose !== "visit" && body.purpose !== "invite") {
     throw new IntegrationRequestError("invalid_request", body.purpose === "preview-review" ? "preview-review grants are not supported by this platform version" : "purpose must be visit or invite");
   }
+  if (body.purpose === "invite" && role !== "guest") throw new IntegrationRequestError("invalid_request", "An invite grant is for guests; an account enters with a visit grant");
   const maxUses = body.maxUses ?? 1;
   if (typeof maxUses !== "number" || !Number.isInteger(maxUses) || maxUses < 1 || maxUses > 50) throw new IntegrationRequestError("invalid_request", "maxUses must be an integer from 1 to 50");
   if (body.purpose === "visit" && maxUses !== 1) throw new IntegrationRequestError("invalid_request", "A visit grant has exactly one use");
@@ -257,7 +268,7 @@ function parseGrantIssue(body: unknown) {
     }
     returnContext = { kind: context.kind as string, id: context.id, locale: context.locale };
   }
-  return { purpose: body.purpose, maxUses, expiresAt, displayName: body.displayName as string | undefined, returnContext } as const;
+  return { role, subject: role === "guest" ? null : body.subject as string, purpose: body.purpose, maxUses, expiresAt, displayName: body.displayName as string | undefined, returnContext } as const;
 }
 
 function parseClose(body: unknown): { expectedRevision: number; reason: string | null } {
@@ -465,9 +476,10 @@ export function createIntegrationRoutes(context: IntegrationRoutesContext) {
           name: parsed.name,
           roomType: parsed.personal ? "personal" : "standard",
           visibility: parsed.visibility,
-          guestAllowed: !parsed.personal && parsed.visibility === "unlisted",
-          ...(parsed.personal ? { ownerParticipantId: parsed.ownerSubject!, sessionControl: { hostParticipantId: parsed.ownerSubject! } } : {})
-        });
+          guestAllowed: !parsed.personal && parsed.visibility === "unlisted"
+          // The owner is the account of ownerSubject (managed metadata), admitted by a grant: no participant id string
+          // stands in for it, so the manifest and session control never show the subject.
+        }, { allowUnownedPersonal: parsed.personal });
       } catch (error) {
         throw templateFailureCode(error) ?? error;
       }
@@ -541,7 +553,9 @@ export function createIntegrationRoutes(context: IntegrationRoutesContext) {
     const parsed = parseGrantIssue(body);
     await requireTenant(storage, principal, tenantId);
     const room = await requireRoom(storage, principal, tenantId, roomId);
-    if (room.roomType === "personal") throw new IntegrationRequestError("invalid_request", "A personal room admits no guests");
+    if (room.roomType === "personal" && (parsed.role === "guest" || parsed.subject !== room.managed?.ownerSubject)) {
+      throw new IntegrationRequestError("invalid_request", parsed.role === "guest" ? "A personal room admits no guests" : "A personal room admits only its owner");
+    }
     const secret = context.stateSecret?.();
     const runtimeBaseUrl = process.env.RUNTIME_BASE_URL;
     if (!secret || !grantEntryUrl(runtimeBaseUrl, roomId, "probe")) {
@@ -558,12 +572,12 @@ export function createIntegrationRoutes(context: IntegrationRoutesContext) {
       if (Date.parse(expiresAt) <= Date.now()) throw new IntegrationRequestError("invalid_request", "expiresAt must be in the future");
       const code = createGrantCode();
       const issued = await storage.issueManagedRoomGrant({
-        grantId, roomId, role: "guest", purpose: parsed.purpose, maxUses: parsed.maxUses, expiresAt, codeHash: grantCodeHash(secret, code),
+        grantId, roomId, role: parsed.role, subject: parsed.subject, purpose: parsed.purpose, maxUses: parsed.maxUses, expiresAt, codeHash: grantCodeHash(secret, code),
         displayName: parsed.displayName ?? null, returnContext: parsed.returnContext, operationId: operation.operationId
       });
       if (!issued) throw new IntegrationRequestError("room_not_found", "Room not found");
       if (typeof issued === "string") throw blockError(issued);
-      context.logEvent({ service: "api", event: "integration_grant_issued", requestId, roomId, grantId, purpose: issued.purpose, maxUses: issued.maxUses });
+      context.logEvent({ service: "api", event: "integration_grant_issued", requestId, roomId, grantId, role: issued.role, purpose: issued.purpose, maxUses: issued.maxUses });
       return { status: 201, revision: issued.revision, body: serializeManagedGrant(issued), firstBody: serializeManagedGrant(issued, grantEntryUrl(runtimeBaseUrl, roomId, code)!) };
     });
   }
@@ -591,6 +605,46 @@ export function createIntegrationRoutes(context: IntegrationRoutesContext) {
     });
   }
 
+  // The explicit host change of a managed room: the account's current generation takes the host slot, as an
+  // administrator transfer would. A grant makes only the first host; every later host comes from here or the host.
+  async function assignHost(request: IncomingMessage, response: ServerResponse, storage: Storage, principal: IntegrationPrincipal, tenantId: string, roomId: string, requestId: string): Promise<void> {
+    const idempotencyKey = requireIdempotencyKey(request);
+    const body = await readJsonBody(request);
+    if (!isPlainObject(body)) throw new IntegrationRequestError("invalid_request", "Request body must be a JSON object");
+    assertOnlyKeys(body, ["subject"]);
+    if (typeof body.subject !== "string" || !SUBJECT_PATTERN.test(body.subject)) throw new IntegrationRequestError("invalid_request", "subject must be an account subject");
+    const subject = body.subject;
+    await requireTenant(storage, principal, tenantId);
+    await requireRoom(storage, principal, tenantId, roomId);
+    await runOperation(response, storage, {
+      principal, idempotencyKey, kind: "room.host", requestHash: integrationRequestHash("POST", `/integration/v1/tenants/${tenantId}/rooms/${roomId}/host`, body), resourceType: "room", resourceId: roomId, requestId
+    }, async () => {
+      const room = await requireRoom(storage, principal, tenantId, roomId);
+      const block = getManagedAccessBlockReason(room);
+      if (block) throw blockError(block);
+      const scope = { tenantId, roomId };
+      for (let attempt = 0; ; attempt++) {
+        const target = await storage.roomIdentities.accountIdentity(scope, subject);
+        if (!target) throw new IntegrationRequestError("subject_not_in_room", "The account has no active participant in this room; it becomes host after it enters");
+        const authority = await storage.roomIdentities.authority(scope);
+        if (!authority) throw new IntegrationRequestError("room_not_found", "Room not found");
+        if (authority.hostIdentityId === target.identityId) return { status: 200, revision: authority.revision, body: { roomId, subject, role: "host" } };
+        try {
+          const updated = await storage.roomIdentities.transition(scope, { actorType: "admin-token", actorId: principal.principal, role: "admin" }, authority.revision,
+            { type: "transfer-host", targetParticipantId: target.participantId });
+          context.authorityCommitted?.(room, updated.revision, await currentSessionControlV2(storage, room));
+          context.logEvent({ service: "api", event: "integration_room_host_assigned", requestId, roomId });
+          return { status: 200, revision: updated.revision, body: { roomId, subject, role: "host" } };
+        } catch (error) {
+          // Another change of the room's authority or of this account in between: read both again.
+          if (attempt < 2 && error instanceof IdentityStorageError && ["authority_conflict", "identity_not_active"].includes(error.code)) continue;
+          if (error instanceof IdentityStorageError && error.code === "room_blocked") throw blockError("room_closed");
+          throw error;
+        }
+      }
+    });
+  }
+
   async function readUsage(response: ServerResponse, storage: Storage, principal: IntegrationPrincipal, tenantId: string, url: URL): Promise<void> {
     const day = url.searchParams.get("day");
     if (!day || !DAY_PATTERN.test(day) || Number.isNaN(Date.parse(`${day}T00:00:00Z`)) || new Date(`${day}T00:00:00Z`).toISOString().slice(0, 10) !== day) {
@@ -602,7 +656,7 @@ export function createIntegrationRoutes(context: IntegrationRoutesContext) {
   }
 
   async function route(request: IncomingMessage, response: ServerResponse, method: string, url: URL, storage: Storage, requestId: string): Promise<void> {
-    const tenantMatch = url.pathname.match(/^\/integration\/v1\/tenants\/([^/]+)(?:\/(usage)|\/rooms(?:\/([^/]+)(?:\/(access|close|grants)(?:\/([^/]+)\/(revoke))?)?)?)?$/);
+    const tenantMatch = url.pathname.match(/^\/integration\/v1\/tenants\/([^/]+)(?:\/(usage)|\/rooms(?:\/([^/]+)(?:\/(access|close|grants|host)(?:\/([^/]+)\/(revoke))?)?)?)?$/);
     const operationMatch = url.pathname.match(/^\/integration\/v1\/operations(?:\/([^/]+))?$/);
     if (tenantMatch) {
       const tenantId = decodeURIComponent(tenantMatch[1]!);
@@ -617,6 +671,8 @@ export function createIntegrationRoutes(context: IntegrationRoutesContext) {
             : action === "access" ? (method === "PATCH" ? "updateRoomAccess" : null)
               : action === "close" ? (method === "POST" ? "closeRoom" : null)
                 : action === "grants" ? (method === "POST" ? (grantId === null ? "issueGrant" : "revokeGrant") : null)
+                  // Making an account the host is part of granting access to the room.
+                  : action === "host" ? (method === "POST" && grantId === null ? "issueGrant" : null)
                   : method === "GET" ? "getRoom" : null;
       if (!operation) throw new IntegrationRequestError("invalid_request", "Unsupported integration route", 404);
       const principal = await authenticate(request, storage, operation);
@@ -625,6 +681,7 @@ export function createIntegrationRoutes(context: IntegrationRoutesContext) {
       if (operation === "createRoom") return createRoom(request, response, storage, principal, tenantId, requestId);
       if (operation === "updateRoomAccess") return updateRoomAccess(request, response, storage, principal, tenantId, roomId!, requestId);
       if (operation === "closeRoom") return closeRoom(request, response, storage, principal, tenantId, roomId!, requestId);
+      if (action === "host") return assignHost(request, response, storage, principal, tenantId, roomId!, requestId);
       if (operation === "issueGrant") return issueGrant(request, response, storage, principal, tenantId, roomId!, requestId);
       if (operation === "revokeGrant") return revokeGrant(request, response, storage, principal, tenantId, roomId!, grantId!, requestId);
       if (operation === "getUsage") return readUsage(response, storage, principal, tenantId, url);

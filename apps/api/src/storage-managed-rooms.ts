@@ -9,6 +9,7 @@ import type {
   ManagedRoomGrantConsumeResult,
   ManagedRoomGrantInput,
   ManagedRoomGrantPurpose,
+  ManagedRoomGrantRole,
   ManagedRoomGrantRecord,
   ManagedRoomKind,
   ManagedRoomStatus,
@@ -106,7 +107,7 @@ export class MemoryManagedRooms {
     if (block) return block;
     const timestamp = this.timestamp();
     const grant: MemoryGrant = {
-      grantId: input.grantId, roomId: input.roomId, tenantId: room.tenantId, role: input.role, purpose: input.purpose,
+      grantId: input.grantId, roomId: input.roomId, tenantId: room.tenantId, role: input.role, subject: input.subject ?? null, purpose: input.purpose,
       maxUses: input.maxUses, usedCount: 0,
       expiresAt: new Date(Math.min(Date.parse(input.expiresAt), cutoffMs(room))).toISOString(),
       revokedAt: null, revokeReason: null, displayName: input.displayName ?? null, returnContext: input.returnContext ?? null,
@@ -124,9 +125,12 @@ export class MemoryManagedRooms {
   async revokeManagedRoomGrant(grantId: string, reason: string | null, operationId: string): Promise<ManagedRoomGrantRecord | null> {
     const grant = this.grants.get(grantId);
     if (!grant) return null;
-    if (!grant.revokedAt) {
-      const timestamp = this.timestamp();
-      Object.assign(grant, { revokedAt: timestamp, revokeReason: reason, revision: grant.revision + 1, lastOperationId: operationId, updatedAt: timestamp });
+    const timestamp = this.timestamp();
+    for (const candidate of this.grants.values()) {
+      const same = candidate === grant || (grant.subject !== null && candidate.roomId === grant.roomId && candidate.subject === grant.subject);
+      if (same && !candidate.revokedAt) {
+        Object.assign(candidate, { revokedAt: timestamp, revokeReason: reason, revision: candidate.revision + 1, lastOperationId: operationId, updatedAt: timestamp });
+      }
     }
     return this.publicGrant(grant);
   }
@@ -255,7 +259,8 @@ interface GrantRow {
   grant_id: string;
   room_id: string;
   tenant_id: string;
-  role: "guest";
+  role: ManagedRoomGrantRole;
+  subject: string | null;
   purpose: ManagedRoomGrantPurpose;
   max_uses: number;
   used_count: number;
@@ -270,12 +275,12 @@ interface GrantRow {
   updated_at: Date | string;
 }
 
-const GRANT_COLUMNS = `grant_id, room_id, tenant_id, role, purpose, max_uses, used_count, expires_at, revoked_at, revoke_reason,
+const GRANT_COLUMNS = `grant_id, room_id, tenant_id, role, subject, purpose, max_uses, used_count, expires_at, revoked_at, revoke_reason,
   display_name, return_context, revision, last_operation_id, created_at, updated_at`;
 
 function mapGrant(row: GrantRow): ManagedRoomGrantRecord {
   return {
-    grantId: row.grant_id, roomId: row.room_id, tenantId: row.tenant_id, role: row.role, purpose: row.purpose,
+    grantId: row.grant_id, roomId: row.room_id, tenantId: row.tenant_id, role: row.role, subject: row.subject ?? null, purpose: row.purpose,
     maxUses: row.max_uses, usedCount: row.used_count, expiresAt: isoString(row.expires_at)!, revokedAt: isoString(row.revoked_at),
     revokeReason: row.revoke_reason, displayName: row.display_name, returnContext: row.return_context ?? null, revision: row.revision,
     lastOperationId: row.last_operation_id, createdAt: isoString(row.created_at)!, updatedAt: isoString(row.updated_at)!
@@ -335,11 +340,11 @@ export class PostgresManagedRooms {
       if (!row) return null;
       if (row.block) return row.block;
       const inserted = await client.query<GrantRow>(
-        `insert into integration_grants (grant_id, room_id, tenant_id, code_hash, role, purpose, max_uses, expires_at, display_name, return_context, last_operation_id)
-         values ($1, $2, $3, $4, $5, $6, $7, least($8::timestamptz, $9::timestamptz), $10, $11::jsonb, $12)
+        `insert into integration_grants (grant_id, room_id, tenant_id, code_hash, role, purpose, max_uses, expires_at, display_name, return_context, last_operation_id, subject)
+         values ($1, $2, $3, $4, $5, $6, $7, least($8::timestamptz, $9::timestamptz), $10, $11::jsonb, $12, $13)
          returning ${GRANT_COLUMNS}`,
         [input.grantId, input.roomId, row.tenant_id, input.codeHash, input.role, input.purpose, input.maxUses, input.expiresAt, row.cutoff,
-          input.displayName ?? null, input.returnContext === undefined ? null : JSON.stringify(input.returnContext), input.operationId]
+          input.displayName ?? null, input.returnContext === undefined ? null : JSON.stringify(input.returnContext), input.operationId, input.subject ?? null]
       );
       return mapGrant(inserted.rows[0]!);
     });
@@ -350,14 +355,20 @@ export class PostgresManagedRooms {
     return result.rows[0] ? mapGrant(result.rows[0]) : null;
   }
 
-  // Touches only the grant row: an exchange locks the room before the grant, so this never waits in the other order.
+  // Touches only grant rows: an exchange locks the room before the grant, so this never waits in the other order.
+  // An account grant ends the account's access to the room: its other open grants there go with it, each finished
+  // later on its own identities, so a new grant issued after this revoke is untouched.
   async revokeManagedRoomGrant(grantId: string, reason: string | null, operationId: string): Promise<ManagedRoomGrantRecord | null> {
     const updated = await this.pool.query<GrantRow>(
-      `update integration_grants
-          set revoked_at = now(), revoke_reason = $2, revision = revision + 1, last_operation_id = $3, updated_at = now()
-        where grant_id = $1 and revoked_at is null
-        returning ${GRANT_COLUMNS}`, [grantId, reason, operationId]);
-    if (updated.rows[0]) return mapGrant(updated.rows[0]);
+      `with target as (select grant_id, room_id, subject from integration_grants where grant_id = $1)
+       update integration_grants g
+          set revoked_at = now(), revoke_reason = $2, revision = g.revision + 1, last_operation_id = $3, updated_at = now()
+         from target
+        where g.revoked_at is null
+          and (g.grant_id = target.grant_id or (target.subject is not null and g.room_id = target.room_id and g.subject = target.subject))
+        returning ${GRANT_COLUMNS.split(",").map(column => `g.${column.trim()}`).join(", ")}`, [grantId, reason, operationId]);
+    const own = updated.rows.find(row => row.grant_id === grantId);
+    if (own) return mapGrant(own);
     return this.getManagedRoomGrant(grantId);
   }
 

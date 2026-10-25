@@ -81,9 +81,14 @@ export async function exchangeRoomGrant(input: {
   const scope = { tenantId: consumed.room.tenantId, roomId };
   const service = createRoomIdentityService(storage.roomIdentities, input.secret, now,
     { identityLifetimeSeconds: IDENTITY_LIFETIME_SECONDS, sessionLifetimeSeconds: 900, sessionDeadlineSeconds: Math.floor(cutoffMs / 1000) });
-  let issued: Awaited<ReturnType<typeof service.admitGrant>>;
+  let issued: Awaited<ReturnType<typeof service.admitGrant>> & { resumed?: boolean };
   try {
-    issued = await service.admitGrant({ ...scope, displayName: displayName || grant.displayName || "Guest", grantId: grant.grantId });
+    // An account grant resumes the account's current generation in this room (the same participant on every
+    // device) or starts the next one; a guest grant always creates a new guest.
+    issued = grant.subject && grant.role !== "guest"
+      ? await service.admitAccountGrant({ ...scope, displayName: displayName || grant.displayName || "Participant", grantId: grant.grantId, role: grant.role, subject: grant.subject,
+        owner: consumed.room.roomType === "personal" && consumed.room.managed?.ownerSubject === grant.subject })
+      : await service.admitGrant({ ...scope, displayName: displayName || grant.displayName || "Guest", grantId: grant.grantId });
   } catch (error) {
     await storage.releaseManagedRoomGrantUse(grant.grantId).catch(() => undefined);
     if (error instanceof IdentityStorageError && error.code === "room_blocked") return failure("room_closed", "The room does not admit new participants", requestId);
@@ -93,8 +98,9 @@ export async function exchangeRoomGrant(input: {
   try {
     await storage.recordManagedRoomGrantIdentity(grant.grantId, issued.identity.identityId);
   } catch (error) {
-    // An identity the grant cannot revoke later must not stay usable.
-    await withdraw();
+    // A new identity the grant cannot revoke later must not stay usable. A resumed one is already linked to the
+    // grant that created it, and revoking any grant of the account revokes that one too: the other devices stay.
+    if (!issued.resumed) await withdraw();
     await storage.releaseManagedRoomGrantUse(grant.grantId).catch(() => undefined);
     throw error;
   }
@@ -117,7 +123,8 @@ export async function exchangeRoomGrant(input: {
     body: {
       roomId,
       participantId: issued.identity.participantId,
-      role: "guest",
+      // The role the room gives now: a host grant makes only the first host (identity v2 rules).
+      role: session.role,
       sessionToken: session.sessionToken,
       sessionExpiresAt: new Date(session.expiresAtSeconds * 1000).toISOString(),
       cutoff: new Date(cutoffMs).toISOString(),

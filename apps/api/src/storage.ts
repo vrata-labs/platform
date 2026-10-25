@@ -116,6 +116,7 @@ export type {
   ManagedRoomEnforcementRecord,
   ManagedRoomFeatures,
   ManagedRoomGrantRecord,
+  ManagedRoomGrantRole,
   ManagedRoomKind,
   ManagedRoomState,
   ManagedRoomStatus,
@@ -1036,7 +1037,8 @@ export class MemoryStorage implements Storage {
   }
   async createManagedRoom(input: Partial<RoomRecord>, managed: ManagedRoomCreateInput): Promise<RoomRecord> {
     if (input.roomId && this.rooms.has(input.roomId)) throw new Error("managed_room_exists");
-    const room = await this.createRoom(input);
+    // A managed personal room is owned by managed.ownerSubject through grants, never by a participant id string.
+    const room = this.createRoomSync(input, { allowUnownedPersonal: managed.ownerSubject != null });
     const timestamp = new Date().toISOString();
     const stored = this.rooms.get(room.roomId)!;
     stored.managed = {
@@ -2382,7 +2384,8 @@ export class PostgresStorage implements Storage {
     let roomId: string;
     try {
       await client.query("begin");
-      const room = await this.insertRoom(input, client);
+      // A managed personal room is owned by managed.ownerSubject through grants, never by a participant id string.
+      const room = await this.insertRoom(input, client, { allowUnownedPersonal: managed.ownerSubject != null });
       roomId = room.roomId;
       await client.query(
         `insert into integration_rooms (room_id, tenant_id, managed_by, kind, status, access_until, grace_seconds, revision, owner_subject, last_operation_id,

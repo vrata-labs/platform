@@ -154,6 +154,26 @@ test("portal-managed rooms on PostgreSQL: grants, exchange, cutoff, close, epoch
     assert.equal((await exchange(legacyPersonal.body!.room.roomId, codeOf(spare.body!.entryUrl))).body?.error.code, "room_not_found");
     await call("POST", `${grantsPath}/${spare.body!.grantId}/revoke`, { body: {}, key: idempotencyKey() });
 
+    // Account grants on PostgreSQL: the same participant on a second device, and a revoke that ends the account's access.
+    const accountGrant = async (role: string, subject: string) => {
+      const issued = await call("POST", `/integration/v1/tenants/${tenant}/rooms/${referenceId}/grants`, { body: { role, purpose: "visit", subject }, key: idempotencyKey() });
+      assert.equal(issued.status, 201, JSON.stringify(issued.body));
+      return { grantId: issued.body!.grantId as string, code: codeOf(issued.body!.entryUrl) };
+    };
+    const ownerSubject = "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VW";
+    const firstHost = await accountGrant("host", ownerSubject);
+    const ownerEntries = await Promise.all([exchange(referenceId, firstHost.code), exchange(referenceId, (await accountGrant("host", ownerSubject)).code)]);
+    assert.deepEqual(ownerEntries.map(entry => [entry.status, entry.body?.role]), [[200, "host"], [200, "host"]], JSON.stringify(ownerEntries.map(entry => entry.body)));
+    assert.equal(ownerEntries[0]!.body!.participantId, ownerEntries[1]!.body!.participantId);
+    assert.match(ownerEntries[0]!.body!.participantId, /^acct_/);
+    const spareEntry = await accountGrant("member", ownerSubject);
+    assert.equal((await call("POST", `/integration/v1/tenants/${tenant}/rooms/${referenceId}/grants/${firstHost.grantId}/revoke`, { body: {}, key: idempotencyKey() })).status, 200);
+    for (const entry of ownerEntries) assert.equal((await renew(referenceId, entry.body!.identityCredential)).status, 409);
+    assert.equal((await exchange(referenceId, spareEntry.code)).status, 410, "the other open grants of the account go with the revoke");
+    const rejoined = await exchange(referenceId, (await accountGrant("host", ownerSubject)).code);
+    assert.deepEqual([rejoined.status, rejoined.body?.role], [200, "member"]);
+    assert.notEqual(rejoined.body!.participantId, ownerEntries[0]!.body!.participantId);
+
     // visit (1) + invite (3) fill the four places; a further invite finds the room full.
     const invite = await call("POST", grantsPath, { body: { role: "guest", purpose: "invite", maxUses: 3 }, key: idempotencyKey() });
     const inviteCode = codeOf(invite.body!.entryUrl);

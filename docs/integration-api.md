@@ -79,13 +79,22 @@ The resource id is assigned when the operation starts, and a room or access chan
 
 ### Grants
 
-A grant is a one-time or bounded entry into a managed room (contract section 7). This version issues guest grants without a subject: `purpose: "visit"` with one use, or `purpose: "invite"` with up to 50. Personal rooms admit no guests.
+A grant is a one-time or bounded entry into a managed room (contract section 7). A guest grant has no subject: `purpose: "visit"` with one use, or `purpose: "invite"` with up to 50. A `member`, `presenter` or `host` grant is for a portal account: it needs `subject` (`acct_<ULID>`) and is always a one-use `visit`; the portal issues one per entry. A personal room admits no guests and no account but its `ownerSubject`.
 
 - The code has 256 bits, is returned once in `entryUrl = <RUNTIME_BASE_URL>/rooms/{roomId}#grant=<code>` and is stored only as an HMAC under a key derived from `STATE_TOKEN_SECRET`, also in the operation record. A replay of the issuing request returns the grant without `entryUrl`; the portal revokes such a grant and issues a new one.
 - `expiresAt` is clamped to the room's effective cutoff.
 - `POST /api/room-grants/exchange {roomId, code, displayName?}` (browser, no assertion) consumes one use under a lock of the room and creates a room identity v2 with provenance `grant`; it reads the grant again after recording the identity, so a revoke that ran meanwhile revokes it either way. The answer carries `participantId`, `identityCredential` (ri2), `sessionToken` (rs2), `sessionExpiresAt`, `cutoff` and `returnContext`. Errors: `409 grant_invalid` (unknown, expired, used up or another room's code), `410 grant_revoked`, `410 room_closed` / `access_expired`, `423 room_paused`, `503 capacity_full` (the uses of all grants of a demo instance reached its participant limit), `429 rate_limited`, `503 dependency_unavailable` before identity v2 is active.
 - The runtime reads `#grant=` at load, removes it from the address at once and keeps it in the tab until the exchange. Then it renews the identity like any v2 identity.
 - Revoking a grant revokes every identity that entered with it, then rotates the media epoch. A revoke interrupted on its way is finished by the enforcer; finishing it twice asks for one rotation.
+
+### Account entries
+
+- **One participant per account and generation.** The exchange of an account grant runs in one transaction under the room lock: if the account has an active identity in the room, the exchange returns a new credential and session for it — the same `participantId`, notes and role on a second device; otherwise it creates the next generation, a new identity with a new `participantId` `acct_<ULID>`. The participant id is random per room and generation and never equals the subject, so rooms cannot match an account; the subject stays in the identity's provenance and is never returned. A revoked or removed identity never returns (identity v2 revocation is terminal), so after a revoke or a host's removal the account comes back only as a new participant, without the personal data of the old one.
+- **Roles.** The answer carries the role the room gives now. A `host` grant makes the account host only as the first host of the room (authority revision 0, like a host invite); later the host changes by the host's transfer or by `POST …/rooms/{roomId}/host`. A `presenter` grant takes a free presenter slot for a new generation only; a returning generation keeps the host's decisions. A guest of a grant can never be made host.
+- **Personal rooms.** The owner of a managed personal room is its `ownerSubject`: every generation of that account takes the vacant owner slot. No participant id stands for the owner in the room record, so the manifest and session control do not show the subject.
+- **Revoke ends the account's access.** Revoking an account grant also revokes every other open grant of the same account in the room; each finishes on its own identities, so a grant issued after the revoke is untouched. A failed exchange gives the use back; it revokes the identity only if it created it, so a second device's failure does not cut off the first.
+- **Host command.** `POST /integration/v1/tenants/{tenantId}/rooms/{roomId}/host {subject}` (scope `issueGrant`, idempotent) makes the active participant of that account the host: `200 {roomId, subject, role: "host"}`, `409 subject_not_in_room` if the account has not entered or was revoked, `410`/`423` for a closed, expired or paused room. Assigning the current host changes nothing.
+- **Rollback.** A build without account grants refuses to issue them and enters an already issued one as a guest; account identities keep their participant ids and slots, and their host slot cannot be claimed by them there.
 
 ## Rules for managed rooms
 
@@ -100,4 +109,4 @@ A grant is a one-time or bounded entry into a managed room (contract section 7).
 - **No public catalogue.** `GET /api/tenants`, `GET /api/assets` and `GET /api/rooms` leave out managed tenants, their assets and their rooms for every caller except the admin token, including a room session of one of those rooms. A stand-alone platform without managed tenants answers as before. Scene bundles have no tenant yet; tenant bundles and the same filter come with custom bundles.
 - **Legacy rooms and links.** Nothing from before the portal is assigned to an account: a legacy personal room, a remembered participant id or an old room link never becomes a managed room or a grant, and a grant opens only the managed room it was issued for. A legacy personal room is recovered only through the administrator recovery of room identity v2 (`POST /api/rooms/{roomId}/identity-recovery`), never by matching a participant id from the browser.
 
-Preview rooms, custom bundles, account-bound grants and restoring epochs after a backup are later contract tasks.
+Preview rooms, custom bundles and restoring epochs after a backup are later contract tasks.

@@ -1,7 +1,7 @@
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { getRoomPermissions } from "@vrata/shared-types";
 import type { RoomSessionControlState } from "../storage-contracts.js";
-import { activeIdentity, assertIdentityProofDeadline, assertRoomActive, bumpAuthority, checkRevision, fail, identityLifecycle, identityWasRemoved, validCounter, validId } from "./authority.js";
+import { activeIdentity, assertIdentityProofDeadline, assertRoomActive, bumpAuthority, checkRevision, fail, identityLifecycle, identityWasRemoved, portalGuest, validAccountSubject, validCounter, validId } from "./authority.js";
 import { transitionIdentityAuthority } from "./transition.js";
 import { roomIdentityCapacityAvailable, waitingRequestCapacityAvailable } from "./admission-limits.js";
 import { projectScreenSourceAuthority } from "./media-source-authority.js";
@@ -12,6 +12,24 @@ import {
 } from "./contracts.js";
 
 const validHash = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/** acct_<ULID> of one account generation in one room: unrelated to the subject, so rooms cannot match an account. */
+function accountParticipantId(nowMs: number): string {
+  let time = nowMs;
+  let head = "";
+  for (let index = 0; index < 10; index++) { head = CROCKFORD[time % 32] + head; time = Math.floor(time / 32); }
+  const random = randomBytes(16);
+  let tail = "";
+  for (let index = 0; index < 16; index++) tail += CROCKFORD[random[index]! & 31];
+  return `acct_${head}${tail}`;
+}
+
+/** The identity of an account generation: a grant identity with the subject; at most one is active per room. */
+function accountGeneration(state: IdentityTransaction, subject: string): RoomIdentityRecord | null {
+  return [...state.identities.values()].find(identity => identity.provenance.kind === "grant" && "subject" in identity.provenance
+    && identity.provenance.subject === subject && !identity.revokedAt && !identityWasRemoved(state, identity.participantId)) ?? null;
+}
 
 // Copy the verified primitives before any await so a queued caller cannot widen
 // the original deadline or re-scope its proof while persistence loads authority.
@@ -196,10 +214,56 @@ export function createRoomIdentityStorage(persistence: IdentityPersistence, now 
         return structuredClone(record);
       });
     },
+    async admitAccount(input) {
+      assertIdentityScope(input);
+      if (typeof input.displayName !== "string" || input.displayName.length > 80 || !validId(input.grantId) || !validAccountSubject(input.subject)
+        || !["member", "presenter", "host"].includes(input.role)) fail("invalid_identity_input");
+      const provenance: IdentityProvenance = { kind: "grant", grantId: input.grantId, role: input.role, subject: input.subject };
+      // One transaction under the room lock: two first entries of an account end with one identity.
+      return persistence.transact(input, { accountSubject: input.subject, authoritySlots: true }, state => {
+        assertRoomActive(state);
+        const createdAt = timestamp();
+        let identity = accountGeneration(state, input.subject);
+        const resumed = identity !== null;
+        if (!identity) {
+          // A revoked or removed generation never returns: the next one is a new participant.
+          if (state.authority.lifecycle.lockedAt) fail("room_blocked");
+          identity = {
+            tenantId: input.tenantId, roomId: input.roomId, identityId: randomUUID(), participantId: accountParticipantId(Date.parse(createdAt)),
+            authEpoch: 1, displayName: input.displayName, baseRole: "member", provenance, createdAt, revokedAt: null
+          };
+          state.identities.set(identity.identityId, identity);
+        }
+        const authority = state.authority;
+        // Like a host invite: a grant makes only the first host of the room. After any authority change the host moves by
+        // transfer or by the portal's explicit command, so an old unused host grant cannot take the room back.
+        const firstHost = input.role === "host" && authority.hostIdentityId === null && authority.revision === 0;
+        if (firstHost) authority.hostIdentityId = identity.identityId;
+        // Only a new generation presents: a returning one keeps what the host decided about it.
+        const presenter = input.role === "presenter" && !resumed && authority.presenterIdentityId === null;
+        if (presenter) {
+          authority.presenterIdentityId = identity.identityId;
+          Object.assign(authority.lifecycle, { presenterGrantedAt: createdAt, presenterGrantedBy: identity.participantId, presenterRevokedAt: null, presenterRevokedBy: null });
+        }
+        // The owner of a managed personal room is its fixed ownerSubject, checked by the caller against the room record:
+        // every generation of that account takes the vacant owner slot, as no other account ever can.
+        const owner = input.owner === true && state.room.roomType === "personal" && authority.ownerIdentityId === null;
+        if (owner) authority.ownerIdentityId = identity.identityId;
+        if (firstHost || presenter || owner) bumpAuthority(state);
+        return { identity: structuredClone(identity), resumed };
+      });
+    },
     async get(scope, identityId) {
       assertIdentityScope(scope);
       if (!validId(identityId)) return null;
       return (await persistence.read(scope, { identityIds: [identityId] }))?.identities.get(identityId) ?? null;
+    },
+    async accountIdentity(scope, subject) {
+      assertIdentityScope(scope);
+      if (!validAccountSubject(subject)) return null;
+      const state = await persistence.read(scope, { accountSubject: subject });
+      const identity = state ? accountGeneration(state, subject) : null;
+      return identity ? structuredClone(identity) : null;
     },
     async authority(scope) {
       assertIdentityScope(scope);
@@ -276,6 +340,7 @@ export function createRoomIdentityStorage(persistence: IdentityPersistence, now 
         if (state.authority.hostIdentityId !== proof.identityId) fail("identity_forbidden");
         const target = state.identities.get(toIdentityId);
         if (!target || target.revokedAt || identityWasRemoved(state, target.participantId)) fail("identity_not_active");
+        if (portalGuest(target)) fail("identity_forbidden");
         state.authority.hostIdentityId = toIdentityId;
         if (state.authority.presenterIdentityId === toIdentityId) state.authority.presenterIdentityId = null;
         bumpAuthority(state);

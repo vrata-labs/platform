@@ -229,12 +229,15 @@ export interface ManagedRoomCreateInput {
 
 export type ManagedRoomBlockReason = "room_closed" | "access_expired" | "room_paused";
 export type ManagedRoomGrantPurpose = "visit" | "invite";
+export type ManagedRoomGrantRole = "guest" | "member" | "presenter" | "host";
 
 export interface ManagedRoomGrantRecord {
   grantId: string;
   roomId: string;
   tenantId: string;
-  role: "guest";
+  role: ManagedRoomGrantRole;
+  /** The portal account (acct_<ULID>) of a member, presenter or host grant; null for a guest. */
+  subject: string | null;
   purpose: ManagedRoomGrantPurpose;
   maxUses: number;
   usedCount: number;
@@ -252,7 +255,8 @@ export interface ManagedRoomGrantRecord {
 export interface ManagedRoomGrantInput {
   grantId: string;
   roomId: string;
-  role: "guest";
+  role: ManagedRoomGrantRole;
+  subject?: string | null;
   purpose: ManagedRoomGrantPurpose;
   maxUses: number;
   expiresAt: string;
