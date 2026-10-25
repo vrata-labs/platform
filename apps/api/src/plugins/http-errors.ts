@@ -1,7 +1,9 @@
 import { RoomPluginValidationError } from "@vrata/room-plugin-sdk";
 import { IdentityStorageError } from "../identity/contracts.js";
 import { identityFenceUnavailable } from "../identity/fence-transaction.js";
+import { ManagedRoomAccessBlocked } from "../identity/http-authority.js";
 import { IdentityBoundaryError } from "../identity/legacy-boundary.js";
+import { sessionBlockStatusCode } from "../room-session-control.js";
 import { RoomPluginAccessError } from "./access-contracts.js";
 import { RoomPluginBlobConfigurationError, RoomPluginBlobIoError } from "./blob-errors.js";
 import { RoomPluginStorageError } from "./contracts.js";
@@ -18,6 +20,7 @@ export function roomPluginHttpError(error: unknown): { status: number; body: { e
   const result = (status: number, code: string, reason?: string) => ({ status, body: { error: code, ...(reason ? { reason } : {}) } });
   if (error instanceof RoomPluginHttpOperationPending) return result(503, "plugin_operation_pending");
   if (identityFenceUnavailable(error)) return result(503, "identity_authority_unavailable");
+  if (error instanceof ManagedRoomAccessBlocked) return result(sessionBlockStatusCode(error.reason), "room_access_denied", error.reason);
   if (error instanceof IdentityBoundaryError) return result(error.status,
     error.status === 503 ? "identity_authority_unavailable" : error.reason === "identity_session_expired" ? "identity_session_expired" : "identity_required", error.reason);
   if (error instanceof IdentityStorageError) {

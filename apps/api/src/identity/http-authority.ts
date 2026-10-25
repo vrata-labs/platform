@@ -1,6 +1,7 @@
 import type { RoomPermission, RoomRole } from "@vrata/shared-types";
 import type { RoomIdentityAuthority, RoomIdentityRecord } from "./contracts.js";
-import type { RoomRecord, RoomSessionControlState, Storage } from "../storage-contracts.js";
+import type { ManagedRoomBlockReason, RoomRecord, RoomSessionControlState, Storage } from "../storage-contracts.js";
+import { getManagedAccessBlockReason } from "../room-session-control.js";
 import { createRoomIdentityService } from "./service.js";
 import { verifyExpiredSession } from "./session-expiry.js";
 import { IdentityBoundaryError } from "./legacy-boundary.js";
@@ -14,6 +15,11 @@ export interface VerifiedRoomRequestV2 {
   isOwner: boolean;
   sessionId: string;
   expiresAtSeconds: number;
+}
+
+/** A valid session of a paused, expired or closed managed room: no room data, whatever the session's own expiry. */
+export class ManagedRoomAccessBlocked extends Error {
+  constructor(readonly reason: ManagedRoomBlockReason) { super(reason); this.name = "ManagedRoomAccessBlocked"; }
 }
 
 /** Untrusted scope is only a bounded lookup hint; MAC and persisted scope follow. */
@@ -52,6 +58,9 @@ export async function resolveRoomRequestV2(input: {
   // Also cover expiry during the awaited authority read, without returning an
   // expired context to callers or treating the underlying identity as revoked.
   if (now() >= current.expiresAtSeconds * 1000) throw new IdentityBoundaryError(401, "identity_session_expired");
+  // The room record is read again for every request, so a pause or cutoff applies at once, not when the rs2 expires.
+  const managedBlock = getManagedAccessBlockReason(room, now());
+  if (managedBlock) throw new ManagedRoomAccessBlocked(managedBlock);
   return { room, identity: current.identity, authority: current.authority, role: current.role,
     permissions: current.permissions, isOwner: current.isOwner, sessionId: current.sessionId, expiresAtSeconds: current.expiresAtSeconds };
 }

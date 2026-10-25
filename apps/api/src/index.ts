@@ -59,7 +59,7 @@ import { validId } from "./identity/authority.js";
 import { createRoomIdentityService } from "./identity/service.js";
 import { createRoomIdentityCodec } from "@vrata/shared-types/identity-credential";
 import { admitV2RoomSession, type V2AdmissionRequest } from "./identity/http-admission.js";
-import { currentSessionControlV2, resolveRoomRequestV2, untrustedSessionRoom, type VerifiedRoomRequestV2 } from "./identity/http-authority.js";
+import { currentSessionControlV2, ManagedRoomAccessBlocked, resolveRoomRequestV2, untrustedSessionRoom, type VerifiedRoomRequestV2 } from "./identity/http-authority.js";
 import { applyRoomLifecycleV2, lifecycleV2Error, roomIdentityActorFromHttp } from "./identity/http-lifecycle.js";
 import { createMediaScreenService } from "./media-screen-service.js";
 import { IdentityStorageError } from "./identity/contracts.js";
@@ -4359,6 +4359,11 @@ export function startApiServer(port = apiPort) {
       }
       if (error instanceof InvalidSessionTokenInput) {
         json(response, 400, { error: "invalid_session_token" });
+        return;
+      }
+      if (error instanceof ManagedRoomAccessBlocked) {
+        incrementCounter(metrics.roomAccessDeniedTotal, error.reason);
+        json(response, sessionBlockStatusCode(error.reason), { error: "room_access_denied", reason: error.reason, requestId: getRequestId(request) });
         return;
       }
       if (error instanceof IdentityBoundaryError) {
