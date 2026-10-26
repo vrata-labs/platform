@@ -4,6 +4,7 @@ date: 2026-10-25
 source: сессия 2026-10-25, ревью `tools/vrata-stage.py`
 area: infra
 status: new
+priority: P2
 jira: не заведена
 ---
 
@@ -27,3 +28,6 @@ jira: не заведена
 ## Ссылки
 - `tools/vrata-stage.py` — `Stands.reap`
 - `docs/plans/2026-10-25-on-demand-stages.md`
+
+## Актуальность 2026-10-26
+Нужно решение владельца о сервисной учётной записи Selectel; кода до решения нет.

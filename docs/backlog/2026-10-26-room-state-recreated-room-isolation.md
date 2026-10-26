@@ -4,6 +4,7 @@ date: 2026-10-26
 source: T01a S3b-3, проверка медиа исполнителя
 area: room-state
 status: parked
+priority: P2
 jira: не заведена
 ---
 

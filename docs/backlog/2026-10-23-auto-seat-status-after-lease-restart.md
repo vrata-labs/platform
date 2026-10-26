@@ -4,6 +4,7 @@ date: 2026-10-23
 source: T01a, CI39964029611
 area: runtime
 status: parked
+priority: P2
 jira: не заведена
 ---
 
@@ -49,3 +50,6 @@ CI39964029611 (b399acf): room-plugin-seating упал на ожидании «З
 - packages/room-plugin-sdk/examples/auto-seat/entry.ts — обработка room.ready.
 - apps/runtime-web/src/plugins/controller.ts — scheduleExpiry, pauseEntries, notifySeating.
 - tests/e2e/room-plugin-seating.spec.ts — стадия member-seated.
+
+## Актуальность 2026-10-26
+В `packages/room-plugin-sdk/examples/auto-seat/entry.ts:91-92` обработчик `room.ready` по-прежнему ставит «не разрешена или не поддерживается», не проверив своё место; проверка своего места есть только в `attempt()` (стр. 38-39). Правка примера и теста — код; новый выпуск SDK с контрольными суммами — отдельно.

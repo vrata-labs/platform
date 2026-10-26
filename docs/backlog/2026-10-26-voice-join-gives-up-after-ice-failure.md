@@ -4,6 +4,7 @@ date: 2026-10-26
 source: Staging Deploy 40340484411 (attempt 2), журнал LiveKit стенда 15:10–15:11Z
 area: frontend
 status: new
+priority: P2
 jira: не заведена
 ---
 

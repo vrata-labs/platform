@@ -4,6 +4,7 @@ date: 2026-10-26
 source: T01a S3b, CI и локальные повторы
 area: e2e
 status: parked
+priority: P3
 jira: не заведена
 ---
 
