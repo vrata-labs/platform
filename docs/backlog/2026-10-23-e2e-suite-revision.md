@@ -3,7 +3,7 @@ name: e2e-suite-revision
 date: 2026-10-23
 source: T01a, CI 39964029611 и 40005256365, полный local 2026-10-23
 area: ci
-status: parked
+status: promoted
 jira: не заведена
 ---
 
@@ -31,6 +31,43 @@ jira: не заведена
 
 Самые долгие отдельные сценарии: передача двум докладчикам с медиа — 12 минут, публичное демо на четверых — 10, два докладчика — 8. Многие сценарии пересекаются: одни и те же шаги идут в v1- и v2-вариантах, в локальных двойниках и на staging. Тесты с жёсткими окнами 5–60 с на нескольких браузерах дают нестабильные отказы под нагрузкой: auto-seat на четверых, оркестрация v1, передача докладчикам, диалог замены.
 
+### Замеры 2026-10-25
+
+- CI 40226467925 (main 633e9c9): job `checks` идёт 62 минуты. Шаг E2E занимает 54,3 минуты: 257 тестов, workers=1. Lint, typecheck и build — меньше полуминуты каждый, все unit-тесты — 3,1 минуты, из них `apps/api` — 170 с.
+- Шаг «M0.5 acceptance» (1,7 минуты) повторяет 16 тестов `tests/e2e/m0.5`, которые уже прошли внутри `pnpm test:e2e`.
+- Полный staging gate на активном каталоге (Staging Template Catalog 40218008512): 81 тест, 46 минут, workers=1. Новый хост проходит его дважды: сначала gate на Wave 2 (12 минут), затем тот же набор при активации каталога.
+- Часть staging-тестов проверяет чисто клиентскую логику, которой реальное развёртывание ничего не добавляет: `plugin-resource-probe` (CPU-бенчмарк Workers в браузере, 2,6 минуты на staging) и `plugin-sandbox` (1,5 минуты).
+- Нестабильные тесты стоили полного пересоздания нового стенда платформы, по 25 минут каждое:
+  - `plugin-resource-probe` «synthetic DURING input is ignored…» сразу после двухминутного CPU-бенчмарка: опрос `activeInstances` вернул 0 вместо 2 (Staging Deploy 40212855682);
+  - `remote-browser-rutube` @rutube-full: порог числа кадров `> 15` получил ровно 15 (Staging Deploy 40213871436).
+
+### Анализ 2026-10-25
+
+Где время: CI e2e 54 минуты (257 тестов, один поток), staging gate 46 минут (81 тест, один поток), unit-тесты 3 минуты (из них `apps/api` 170 с). Изменения по убыванию эффекта:
+
+| Изменение | CI | Staging gate | Нужно решение |
+|---|---|---|---|
+| Разбить локальный e2e на 4 job по спискам спек, сбалансированным по длительности; lint, build, unit и rollback-базы — отдельной job параллельно | 62 → ~16 мин | — | нет |
+| Убрать повтор M0.5 (`ci.yml:179`) и `pnpm lint`/`typecheck` (тот же `tsc --noEmit`, что и build) | −2,3 мин | — | нет |
+| Не гонять e2e для изменений только в документации (job фильтра и gate-job) | −54 мин на docs-PR | — | нет |
+| Убрать со staging тесты чисто клиентской логики при наличии локального двойника: plugin-resource-probe, plugin-sandbox (кроме CSP), tool-replacement-dialog, meeting-tools-staging, session-upgrade, documents Android и delayed, seat-marker-visual, orchestration unsupported capture и boot presence | — | 46 → ~30 мин; Wave 2 gate 12 → ~7 | состав gate |
+| Тяжёлые сценарии только на v2: локальный `presenter-meeting.spec.ts` (вариант floor 1 сценария из `media-source-grants.spec.ts:284`), v1-вариант тяжёлой оркестрации | −5,6 мин | — | поддержка floor 1 для self-host |
+| Одна версия LiveKit в e2e (1.13.7 остался только в `compose.demo-local.yml:7`) | −1,4 мин | — | версия demo-local |
+| Android-вариант meeting-tools только для host | −1,1 мин | — | нет |
+| Presenter, native capture, при желании public-demo — со staging в ночной или предрелизный прогон | — | до ~18–24 мин | состав gate |
+| Wave 2 gate нового стенда сократить до smoke: activation gate всё равно гоняет полный набор | — | −~7 мин на новый стенд | точка отката каталога |
+| Rutube-full сделать неблокирующим или сузить триггер (`staging-deploy.yml:180`) | — | не измерено | Rutube как блокер |
+
+Попутные находки:
+- CI не задаёт `VRATA_E2E_IDENTITY_FLOOR`, поэтому тяжёлые локальные сценарии идут на floor 1, а staging работает на floor 2 (`reference-template-fixture.ts:62`).
+- production и self-host compose берут `livekit-server:latest` без закрепления, а e2e проверяют 1.13.7 и 1.13.9.
+- `retries: 1` в `runtime-staging.spec.ts:258` маскирует флаки.
+- Software-WebGL рендер эталонной сцены — главный расход UI-тестов: meeting-tools на сцене Wave 2 идёт 17 с, на эталонной — 97 с. Ограничитель кадров `installFunctionalFrameBudget` подключён не во всех тяжёлых фикстурах.
+- В unit-тестах `identity-expiry.test.ts` ждёт реальные 3-секундные дедлайны (~20 с), а 91 файл `apps/api` без Postgres можно запускать параллельно. Пять rollback-баз в CI (`ci.yml:74-147`) — храповик совместимости: решение зависит от поддерживаемых целей отката.
+- После сокращения CI примерно до 15 минут ожидания CI в Staging Deploy хватит, и пункт `main-auto-deploy-ci-wait` закроется сам.
+
+Открытые вопросы владельцу: поддерживается ли floor 1 для self-host; можно ли перевести demo-local на LiveKit 1.13.9; можно ли вынести тяжёлые сценарии со staging в ночной прогон; нужен ли полный Wave 2 gate на новом стенде; должен ли Rutube блокировать деплой; остаются ли в эксплуатации комнаты на шаблонах 0.1.0.
+
 ## Почему не сейчас
 
 Ревизия меняет состав и гарантии обязательных gate и затрагивает все потоки работ. Её
@@ -55,3 +92,9 @@ jira: не заведена
 - playwright.config.ts — workers=1 в CI.
 - tools/run-local-e2e.mjs — локальный запуск.
 - docs/reviews/2026-09-26-working-meeting-implementation.md — D-014, D-025, D-029.
+
+## Сделано 2026-10-26
+
+- #135: локальный e2e разбит на параллельные шарды по измеренной длительности (`tools/e2e-shard.mjs`), unit-тесты и сборка идут отдельной job. Убраны повтор M0.5 и дублирующие lint/typecheck, e2e не идёт для изменений только в документации. CI: 62 → ~16 минут (6 шардов, #136).
+- #136: в staging gate остались только проверки, которым нужен реальный стенд: 81 → 54 теста, 46 → 14,2 минуты (Staging Deploy 40242139289). Тяжёлые многоклиентные сценарии перенесены в `@staging-extended` (Staging Extended). Rutube больше не блокирует, на bootstrap идёт только smoke, тяжёлые v1-двойники удалены, LiveKit 1.13.9 закреплён во всех compose.
+- Осталось: identity floor 1 и пять rollback-баз (`floor-one-product-default`), фиксированные sleep и ограничитель кадров в тяжёлых UI-фикстурах, real-time ожидания в `identity-expiry.test.ts`, параллельный запуск файлов `apps/api` без Postgres.
