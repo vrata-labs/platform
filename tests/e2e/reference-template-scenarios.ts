@@ -248,7 +248,10 @@ test("reference presentation applies join-muted defaults and restores rendered P
   } finally { await publisher.context.close(); }
 });
 
-test("reference meeting synchronizes only declared surfaces across two participants", async ({ request, browser }, testInfo) => {
+// On staging the second participant's media path from a CI runner fails intermittently (ICE through the
+// runner NAT, the client gives up after ~17 s without retrying TCP or relay), so the scenario runs in
+// Staging Extended; the deploy gate keeps real two-party media through runtime-staging voice and orchestration.
+test(`${staging ? "@staging-extended " : ""}reference meeting synchronizes only declared surfaces across two participants`, async ({ request, browser }, testInfo) => {
   const publisher = await createFunctionalClient(browser);
   const page = publisher.page;
   try {

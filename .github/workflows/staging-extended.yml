@@ -1,7 +1,8 @@
 name: Staging Extended
 
 # Heavy multi-participant staging scenarios kept out of the deploy gate (@staging-extended): two sequential
-# Presenters, native screen capture and the four-party public demo. Run it under a vrata-stage lease before a
+# Presenters, native screen capture, the four-party public demo and two-party audio in the reference meeting,
+# whose second participant cannot always reach media from a CI runner. Run it under a vrata-stage lease before a
 # release or around an irreversible activation; the schedule only runs while the on-demand stand exists.
 run-name: ${{ inputs.request && format('Staging Extended {0}', inputs.request) || '' }}
 
@@ -34,6 +35,8 @@ jobs:
       PLAYWRIGHT_NO_WEB_SERVER: "1"
       PLAYWRIGHT_REPORT_NAME: staging-extended
       STAGING_ADMIN_TOKEN: ${{ secrets.STAGING_ADMIN_TOKEN }}
+      # A vrata-stage stand is ready only after its reference catalog activation, so extended runs use it.
+      VRATA_REFERENCE_CATALOG_ACTIVE: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
