@@ -22,7 +22,12 @@ function fromLanguageTag(tag: string | null | undefined): RuntimeLocale | null {
 export function readLocaleCookie(cookie: string): RuntimeLocale | null {
   for (const part of cookie.split(";")) {
     const [name, ...value] = part.trim().split("=");
-    if (name === PORTAL_LOCALE_COOKIE) return fromLanguageTag(decodeURIComponent(value.join("=")));
+    if (name !== PORTAL_LOCALE_COOKIE) continue;
+    try {
+      return fromLanguageTag(decodeURIComponent(value.join("=")));
+    } catch {
+      return null;
+    }
   }
   return null;
 }

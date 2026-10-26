@@ -23,6 +23,8 @@ test("the language comes from the tab choice, then ?lang, then the portal cookie
   assert.equal(resolveRuntimeLocale({ ...base, stored: "de", query: "fr", cookie: "vrata-locale=xx", languages: ["ru"] }), "ru", "unknown values are skipped");
   assert.equal(readLocaleCookie("other-vrata-locale=en; vrata-locale=ru"), "ru");
   assert.equal(readLocaleCookie("vrata-locale-x=ru"), null);
+  assert.equal(readLocaleCookie("vrata-locale=%"), null, "a broken cookie is skipped, not thrown");
+  assert.equal(resolveRuntimeLocale({ ...base, cookie: "vrata-locale=%E0%A4%A", languages: ["ru-RU"] }), "ru");
 });
 
 test("a switch renders texts in the new language and tells the listeners once", () => {

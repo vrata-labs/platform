@@ -70,6 +70,14 @@ export function stepXrMenu(state: XrMenuState, input: XrMenuStepInput): XrMenuSt
   };
 }
 
+/**
+ * Whether the menu takes this frame's input: it is open, or B/Y opens it right now. Decided before locomotion runs,
+ * so a trigger or stick pressed together with B/Y on the opening frame is not a teleport or a turn.
+ */
+export function xrMenuOwnsFrame(state: XrMenuState, input: { presenting: boolean; menuPressed: boolean }): boolean {
+  return input.presenting && (state.open || (input.menuPressed && !state.menuPressedLastFrame));
+}
+
 export interface XrMenuAudioState {
   available: boolean;
   joined: boolean;

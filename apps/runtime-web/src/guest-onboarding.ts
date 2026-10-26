@@ -15,6 +15,7 @@ export interface DisplayNameValidationResult {
   accepted: boolean;
   displayName: string;
   error: string | null;
+  errorKey: MessageKey | null;
 }
 
 export interface CompatibilityWarningInput {
@@ -37,12 +38,12 @@ export function shouldShowGuestOnboarding(input: GuestOnboardingPolicyInput): bo
 export function validateGuestDisplayName(value: string): DisplayNameValidationResult {
   const displayName = value.trim().replace(/\s+/g, " ");
   if (displayName.length < 2) {
-    return { accepted: false, displayName, error: t("onboarding.nameTooShort") };
+    return { accepted: false, displayName, error: t("onboarding.nameTooShort"), errorKey: "onboarding.nameTooShort" };
   }
   if (displayName.length > 40) {
-    return { accepted: false, displayName, error: t("onboarding.nameTooLong") };
+    return { accepted: false, displayName, error: t("onboarding.nameTooLong"), errorKey: "onboarding.nameTooLong" };
   }
-  return { accepted: true, displayName, error: null };
+  return { accepted: true, displayName, error: null, errorKey: null };
 }
 
 export function formatGuestControlsHint(mode: GuestOnboardingMode): string {

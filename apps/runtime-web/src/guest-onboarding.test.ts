@@ -42,12 +42,14 @@ test("guest onboarding validates display names", () => {
   assert.deepEqual(validateGuestDisplayName(" A "), {
     accepted: false,
     displayName: "A",
-    error: "Enter at least 2 characters."
+    error: "Enter at least 2 characters.",
+    errorKey: "onboarding.nameTooShort"
   });
   assert.deepEqual(validateGuestDisplayName("  Ada   Lovelace  "), {
     accepted: true,
     displayName: "Ada Lovelace",
-    error: null
+    error: null,
+    errorKey: null
   });
 });
 

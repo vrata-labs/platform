@@ -5,6 +5,7 @@ export type RoomReturnUrls = Record<RuntimeLocale, string>;
 interface ReturnStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
+  removeItem(key: string): void;
 }
 
 function httpsUrl(value: unknown): string | null {
@@ -34,11 +35,13 @@ export function createRoomReturnTab(storage: ReturnStorage, roomId: string) {
   let urls: RoomReturnUrls | null = null;
   try { urls = parseRoomReturnUrls(JSON.parse(storage.getItem(key) ?? "null")); } catch { urls = null; }
   return {
+    /** A new exchange replaces the way back; one without it leaves none, not the previous one. */
     remember(value: unknown) {
-      const parsed = parseRoomReturnUrls(value);
-      if (!parsed) return;
-      urls = parsed;
-      try { storage.setItem(key, JSON.stringify(parsed)); } catch { /* kept for this page only */ }
+      urls = parseRoomReturnUrls(value);
+      try {
+        if (urls) storage.setItem(key, JSON.stringify(urls));
+        else storage.removeItem(key);
+      } catch { /* kept for this page only */ }
     },
     urlFor: (locale: RuntimeLocale): string | null => urls?.[locale] ?? null
   };

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { getRuntimeIssue } from "./runtime-errors.js";
+import { renderText, type LocalizedText } from "./i18n/i18n.js";
 import { createRuntimeUiState } from "./runtime-state.js";
 import { applyPassiveMediaRecovery, applyPostBootControls, shouldStartPassiveMedia } from "./runtime-startup.js";
 
@@ -9,7 +10,7 @@ test("applyPostBootControls sets joined status and disables controls by flags", 
   const joinAudioButton = { disabled: false } as HTMLButtonElement;
   const muteButton = { disabled: false } as HTMLButtonElement;
   const startShareButton = { disabled: false } as HTMLButtonElement;
-  let status = "";
+  let status: LocalizedText | null = null;
   let audioDisabled = false;
 
   applyPostBootControls({
@@ -26,7 +27,8 @@ test("applyPostBootControls sets joined status and disables controls by flags", 
     }
   });
 
-  assert.equal(status, "Joined as Tester");
+  assert.deepEqual(status, { key: "status.joinedAs", params: { name: "Tester" } }, "the status keeps its key for a language switch");
+  assert.equal(renderText(status!), "Joined as Tester");
   assert.equal(joinAudioButton.disabled, true);
   assert.equal(startShareButton.disabled, true);
   assert.equal(muteButton.disabled, true);

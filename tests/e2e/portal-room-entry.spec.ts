@@ -113,18 +113,31 @@ test("a Russian guest gets the room in Russian, switches language in place, and 
   }
 });
 
-test("leaving the space removes the presence and returns to the card; Back enters the same room again", async ({ browser, request }) => {
+test("leaving the space removes the participant for the others and returns to the card; Back enters the same room again", async ({ browser, request }) => {
   test.setTimeout(180_000);
   const { roomId, entryUrl } = await demoEntry(request, { kind: "catalog-entry", id: "meeting-room", locale: "ru" });
   const context = await portalContext(browser);
+  const otherContext = await portalContext(browser);
   try {
     const page = await context.newPage();
-    await enter(page, entryUrl, "Guest");
+    await page.goto(entryUrl);
+    // Leaving is offered once the room is entered, not during the preflight or the boot.
+    await expect(page.locator("#leave-space")).toBeDisabled();
+    await page.locator("#guest-name-input").fill("Guest");
+    await page.locator("#guest-enter-without-audio").click({ noWaitAfter: true });
+    await expect.poll(async () => (await debug(page)).connected, { timeout: 60_000 }).toBe(true);
+    await expect(page.locator("#leave-space")).toBeEnabled({ timeout: 30_000 });
     await expect(page.locator("html")).toHaveAttribute("lang", "en", { timeout: 1000 });
     const { participantId } = await debug(page);
+    const other = await otherContext.newPage();
+    await enter(other, entryUrl, "Other");
+    const seen = () => other.evaluate(() => ((window as any).__VRATA_DEBUG__?.remoteParticipants ?? []).map((participant: { participantId: string }) => participant.participantId));
+    await expect.poll(seen, { timeout: 30_000 }).toContain(participantId);
+
     const presenceRemoved = page.waitForRequest(request => request.method() === "DELETE" && request.url().includes(`/api/rooms/${roomId}/presence/`));
     await page.locator("#leave-space").click();
     await presenceRemoved;
+    await expect.poll(seen, { timeout: 30_000 }).not.toContain(participantId);
     // An English browser goes to the English card, whatever language the inviter had.
     await page.waitForURL("https://en.portal.test/demos/meeting-room");
     await expect(page.locator("#portal-page")).toBeVisible();
@@ -135,10 +148,11 @@ test("leaving the space removes the presence and returns to the card; Back enter
     expect(new URL(page.url()).pathname).toBe(`/rooms/${roomId}`);
   } finally {
     await context.close();
+    await otherContext.close();
   }
 });
 
-test("without a return context the fallback page is the way back, and the left screen appears without any", async ({ browser, request }) => {
+test("without a return context the fallback page is the way back", async ({ browser, request }) => {
   test.setTimeout(180_000);
   const context = await portalContext(browser, "ru");
   try {
@@ -146,19 +160,32 @@ test("without a return context the fallback page is the way back, and the left s
     await enter(page, (await demoEntry(request)).entryUrl, "Гость");
     await page.locator("#leave-space").click();
     await page.waitForURL("https://ru.portal.test/");
+  } finally {
+    await context.close();
+  }
+});
 
-    // A tab that lost its way back (here: removed by hand) leaves to the left screen and can come back.
-    const second = await context.newPage();
-    await enter(second, (await demoEntry(request)).entryUrl, "Гость");
-    await second.evaluate(() => { for (const key of Object.keys(sessionStorage)) if (key.startsWith("vrata.return.")) sessionStorage.removeItem(key); });
-    await second.reload();
-    await expect.poll(async () => (await debug(second)).connected, { timeout: 60_000 }).toBe(true);
-    await second.locator("#leave-space").click();
-    await expect(second.locator("#space-left")).toBeVisible();
-    await expect(second.locator("#space-left-title")).toHaveText("Вы покинули пространство");
-    await expect.poll(async () => (await debug(second)).connected).toBe(false);
-    await second.locator("#space-left-rejoin").click();
-    await expect.poll(async () => (await debug(second)).connected, { timeout: 60_000 }).toBe(true);
+test("a tab without a way back leaves to the left screen, the boot does not enter again, and the guest can return", async ({ browser, request }) => {
+  test.setTimeout(240_000);
+  const context = await portalContext(browser, "ru");
+  try {
+    const page = await context.newPage();
+    await enter(page, (await demoEntry(request)).entryUrl, "Гость");
+    // The way back removed by hand, as in a tab that lost it.
+    await page.evaluate(() => { for (const key of Object.keys(sessionStorage)) if (key.startsWith("vrata.return.")) sessionStorage.removeItem(key); });
+    await page.reload();
+    await expect.poll(async () => (await debug(page)).connected, { timeout: 60_000 }).toBe(true);
+    await page.locator("#leave-space").click();
+    await expect(page.locator("#space-left")).toBeVisible();
+    await expect(page.locator("#space-left-title")).toHaveText("Вы покинули пространство");
+    await expect.poll(async () => (await debug(page)).connected).toBe(false);
+    // Leaving may come while the scene still loads: the boot finishes locally and does not enter the room again.
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.sceneDebug?.state), { timeout: 90_000 }).toBe("loaded");
+    await page.waitForTimeout(2000);
+    expect((await debug(page)).connected).toBe(false);
+    await expect(page.locator("#space-left")).toBeVisible();
+    await page.locator("#space-left-rejoin").click();
+    await expect.poll(async () => (await debug(page)).connected, { timeout: 60_000 }).toBe(true);
   } finally {
     await context.close();
   }

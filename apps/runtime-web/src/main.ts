@@ -205,7 +205,7 @@ import {
 } from "./seating/seat-anchor-reconcile.js";
 import { planSeatReclaimOnReconnect, shouldRetrySeatReclaim } from "./seating/seat-reclaim.js";
 import { resolveRuntimeInteractionRay, updateInteractionRayState } from "./interaction/interaction-frame.js";
-import { createXrMenuState, stepXrMenu, withoutLocomotionInput, XR_MENU_ACTIONS, xrMenuButtonLabel, type XrMenuAction, type XrMenuCommand } from "./xr-menu/xr-menu.js";
+import { createXrMenuState, stepXrMenu, withoutLocomotionInput, XR_MENU_ACTIONS, xrMenuButtonLabel, xrMenuOwnsFrame, type XrMenuAction, type XrMenuCommand } from "./xr-menu/xr-menu.js";
 import { createXrMenuView, resolveXrMenuHit } from "./xr-menu/xr-menu-view.js";
 import { clearInteractionRayView, createInteractionRayView, showInteractionRayPointView } from "./interaction/interaction-ray-view.js";
 import { createInteractionTargetPerformer } from "./interaction/interaction-perform.js";
@@ -1834,14 +1834,18 @@ function showRoomEnded(reason: string): void {
 }
 
 let spaceLeaving = false;
+let roomEntered = false;
 
 /**
  * "Leave the space": the participant goes, not only the headset view. Media and room-state stop and the tab returns to
  * the portal page the grant came from; without one it shows that the space was left and can be entered again.
  */
 async function leaveSpace(): Promise<void> {
-  if (spaceLeaving) return;
+  // Before the room is entered there is nothing to leave yet; after a session block the ended screen is shown instead.
+  if (spaceLeaving || !roomEntered || sessionControlBlocked) return;
   spaceLeaving = true;
+  // No presence is published from here on, so nothing re-creates it after the DELETE.
+  runtimeBootReady = false;
   leaveSpaceButton.disabled = true;
   vrReadyEl.hidden = true;
   setStatus({ key: "status.leaving" });
@@ -1853,7 +1857,10 @@ async function leaveSpace(): Promise<void> {
     if (step === "end_xr") {
       await currentXrSession?.end().catch(() => undefined);
     } else if (step === "remove_presence") {
-      // Bounded: a slow API must not keep the participant in the room after they asked to leave.
+      // An update already on its way lands first, then the DELETE, which outlives the page (keepalive). The waits are
+      // bounded: a slow API must not keep the participant on the page after they asked to leave.
+      const deadline = Date.now() + 4000;
+      while (apiPresenceSyncInFlight && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25));
       await Promise.race([removePresence(apiBaseUrl, roomId, participantId, token).catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 1500))]);
     } else if (step === "stop_session") {
       stopRoomSession("left_space", "left_space");
@@ -2614,15 +2621,20 @@ function confirmInteractionTarget(frameContext: RuntimeFrameContext): void {
   forcedTestInteractionSeatId = null;
 }
 
+/** Ends XR drawing without a stroke: the pencil is hidden and an unfinished stroke is dropped. */
+function releaseWhiteboardXrDrawInput(frameContext: RuntimeFrameContext): void {
+  if (xrWhiteboardPointerActive) {
+    cancelWhiteboardPreview();
+  }
+  xrWhiteboardPointerActive = false;
+  lastXrWhiteboardHit = null;
+  syncWhiteboardPencilVisuals(frameContext, false);
+}
+
 function updateWhiteboardXrDrawInput(frameContext: RuntimeFrameContext): void {
   const canDraw = canUseWhiteboardXrDrawInput(frameContext);
   if (!canDraw) {
-    if (xrWhiteboardPointerActive) {
-      cancelWhiteboardPreview();
-    }
-    xrWhiteboardPointerActive = false;
-    lastXrWhiteboardHit = null;
-    syncWhiteboardPencilVisuals(frameContext, false);
+    releaseWhiteboardXrDrawInput(frameContext);
     return;
   }
   const hit = resolveDebugSurfaceHitFromXrPencil(frameContext, "xr-controller");
@@ -4724,7 +4736,7 @@ async function checkGuestMicrophone(): Promise<boolean> {
 function completeGuestOnboarding(options: { withoutAudio: boolean; vr?: boolean; resolve: () => void }): void {
   const validation = validateGuestDisplayName(guestNameInput.value);
   if (!validation.accepted) {
-    setGuestOnboardingStatus(validation.error ?? t("onboarding.nameTooShort"));
+    setGuestOnboardingStatus({ key: validation.errorKey ?? "onboarding.nameTooShort" });
     guestNameInput.focus();
     return;
   }
@@ -6455,6 +6467,7 @@ function updateMovement(delta: number, frameContext: RuntimeFrameContext): void 
 }
 
 async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): Promise<void> {
+  if (spaceLeaving) return;
   const pose = localPoseController.getPose();
   const useTrackedHead = renderer.xr.isPresenting && !presenceXrMockEnabled;
   const worldPosition = useTrackedHead ? camera.getWorldPosition(new THREE.Vector3()) : resolveNonXrHeadWorldPosition(pose);
@@ -7811,10 +7824,11 @@ renderer.setAnimationLoop(() => {
   if (recentFrameBudgetMs.length > 60) {
     recentFrameBudgetMs.splice(0, recentFrameBudgetMs.length - 60);
   }
-  // An open XR menu takes this frame's input; locomotion and drawing see a resting sample.
-  const locomotionFrameContext = xrMenuState.open ? withoutLocomotionInput(frameContext) : frameContext;
-  updateMovement(delta, locomotionFrameContext);
-  updateWhiteboardXrDrawInput(locomotionFrameContext);
+  // The XR menu takes this frame's input when it is open or opens now: locomotion sees a resting sample, drawing stops.
+  const xrMenuOwnsInput = xrMenuOwnsFrame(xrMenuState, { presenting: frameContext.source === "xr", menuPressed: frameContext.xr?.menuPressed ?? false });
+  updateMovement(delta, xrMenuOwnsInput ? withoutLocomotionInput(frameContext) : frameContext);
+  if (xrMenuOwnsInput) releaseWhiteboardXrDrawInput(frameContext);
+  else updateWhiteboardXrDrawInput(frameContext);
   applyBotPose(nowMs / 1000);
   updateLocalPresenceDiagnostics();
   updateAvatarLipsync(delta);
@@ -8109,6 +8123,12 @@ async function main(): Promise<void> {
     debugState.roomStateMode = "api_fallback";
     setRoomStateStatus("Room-state: fallback API");
     void reportDiagnostics("room_state_connect_failed");
+  }
+  // From here the participant is in the room and may leave it. The rest of the boot loads the avatar and the scene
+  // locally and stops at the session check below once leaving has stopped the session.
+  if (!sessionControlBlocked) {
+    roomEntered = true;
+    leaveSpaceButton.disabled = false;
   }
 
   if (avatarSandboxEnabled) {

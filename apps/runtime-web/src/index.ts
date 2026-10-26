@@ -1005,6 +1005,8 @@ export async function upsertPresence(
 export async function removePresence(apiBaseUrl: string, roomId: string, participantId: string, sessionToken: string): Promise<void> {
   await fetch(new URL(`/api/rooms/${roomId}/presence/${participantId}`, apiBaseUrl), {
     method: "DELETE",
+    // The page usually goes away right after (leaving, closing the tab): the removal must outlive it.
+    keepalive: true,
     headers: {
       "authorization": `Bearer ${sessionToken}`
     }

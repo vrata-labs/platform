@@ -3,7 +3,7 @@ import test from "node:test";
 import * as THREE from "three";
 
 import type { RuntimeFrameContext } from "../input/runtime-frame-context.js";
-import { createXrMenuState, stepXrMenu, withoutLocomotionInput, XR_LEAVE_CONFIRM_MS, xrMenuButtonLabel, type XrMenuStepInput } from "./xr-menu.js";
+import { createXrMenuState, stepXrMenu, withoutLocomotionInput, XR_LEAVE_CONFIRM_MS, xrMenuButtonLabel, xrMenuOwnsFrame, type XrMenuStepInput } from "./xr-menu.js";
 import { resolveXrMenuHit, resolveXrMenuPlacement } from "./xr-menu-view.js";
 
 const idle: XrMenuStepInput = { presenting: true, menuPressed: false, confirm: false, hoveredAction: null, nowMs: 1000 };
@@ -50,6 +50,16 @@ test("leaving the space takes a second press within the confirmation time", () =
   assert.deepEqual([late.commands, late.state.leaveArmedUntilMs !== null], [[], true], "a late second press arms again instead of leaving");
   const reopened = run([...open, { confirm: true, hoveredAction: "leave", nowMs: 2000 }, { menuPressed: true, nowMs: 2100 }, { nowMs: 2200 }, { menuPressed: true, nowMs: 2300 }]);
   assert.equal(reopened.state.leaveArmedUntilMs, null, "closing the menu disarms leaving");
+});
+
+test("the menu owns the input of the frame where B/Y opens it, while it is open and on the frame it closes", () => {
+  const closed = createXrMenuState();
+  assert.equal(xrMenuOwnsFrame(closed, { presenting: true, menuPressed: false }), false);
+  assert.equal(xrMenuOwnsFrame(closed, { presenting: true, menuPressed: true }), true, "B/Y with the trigger on the same frame is no teleport");
+  assert.equal(xrMenuOwnsFrame(closed, { presenting: false, menuPressed: true }), false);
+  const open = run([{ menuPressed: true }]).state;
+  assert.equal(xrMenuOwnsFrame(open, { presenting: true, menuPressed: true }), true, "the press that closes it is the menu's too");
+  assert.equal(xrMenuOwnsFrame({ ...closed, menuPressedLastFrame: true }, { presenting: true, menuPressed: true }), false, "a held button after closing is not a new press");
 });
 
 test("labels follow the microphone state", () => {
