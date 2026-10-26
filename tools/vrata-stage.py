@@ -1006,14 +1006,15 @@ def spawn_detached(args, log_path):
 
 # ---------------------------------------------------------------- GitHub workflow helper for hooks
 
-def dispatch(repo, workflow, fields, ref="main", github=None, poll=20, timeout=4 * 3600, confirm_polls=6,
+def dispatch(repo, workflow, fields, ref="main", github=None, poll=20, timeout=4 * 3600, confirm_polls=9,
              dispatches=3):
     """Run a workflow and wait for that very run: its run-name carries a unique request id.
 
     Starting a run is not safe to repeat blindly: a dispatch whose answer was lost may still have created it.
     After a network failure the run is looked up by its request id for confirm_polls polls first, and only a
-    run that never appeared is dispatched again, with the same id. Polls that fail on the network are skipped
-    until the deadline: a GitHub hiccup does not abandon a run that keeps going."""
+    run that never appeared is dispatched again, with the same id; should a late run still show up next to the
+    repeated one, the earliest is followed. Polls that fail on the network are skipped until the deadline: a
+    GitHub hiccup does not abandon a run that keeps going."""
     github = github or GitHub()
     request = secrets.token_hex(6)
     inputs = dict(field.split("=", 1) for field in fields)
