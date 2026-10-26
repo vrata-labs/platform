@@ -4,6 +4,7 @@ date: 2026-10-25
 source: сессия 2026-10-25, переключение stage платформы на создание по требованию
 area: infra
 status: new
+priority: P2
 jira: не заведена
 ---
 
@@ -27,3 +28,6 @@ jira: не заведена
 ## Ссылки
 - `tools/vrata-stage.py` — `Stands.up`, `Stands.wait_active`
 - `docs/deployment-staging.md` — раздел «Стенд по требованию»
+
+## Актуальность 2026-10-26
+В `tools/vrata-stage.py` есть повтор HTTP-вызовов API (`call`, четыре попытки для GET/PUT/DELETE), но сервер в `ERROR` после создания по-прежнему переводит стенд в `failed` без повтора.

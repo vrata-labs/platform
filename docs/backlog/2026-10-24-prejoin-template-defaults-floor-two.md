@@ -4,6 +4,7 @@ date: 2026-10-24
 source: T01a, проверка после активации floor 2
 area: runtime
 status: parked
+priority: P1
 jira: не заведена
 ---
 
@@ -48,3 +49,6 @@ jira: не заведена
 - apps/runtime-web/src/template-preferences.ts — fetchPublicTemplateSettings, joinMuted.
 - apps/runtime-web/src/main.ts — main(), completeGuestOnboarding.
 - apps/api/src/identity/legacy-boundary.ts — legacyBoundaryApplies.
+
+## Актуальность 2026-10-26
+Анонимное чтение манифеста по-прежнему в `apps/runtime-web/src/template-preferences.ts:35` (`fetchPublicTemplateSettings`); floor 2 работает на staging и в production портала — затронут каждый гость публичной комнаты.

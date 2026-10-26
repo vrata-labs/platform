@@ -4,6 +4,7 @@ date: 2026-10-11
 source: T01a-S2b-AD
 area: backend
 status: parked
+priority: P2
 jira: не заведена
 ---
 
@@ -47,3 +48,6 @@ lease. Callback routing и запуск LiveKit publisher требуют отд�
 - apps/room-state/src/index.ts — forwardRemoteBrowserPatch и callback route.
 - apps/room-state/src/state.ts — patchRemoteBrowserExecutorState.
 - docs/arch/09_phase_m1_8_multi_surface_layouts.md — несколько поверхностей.
+
+## Актуальность 2026-10-26
+Литерал `surfaceId: "debug-main"` остаётся в `apps/remote-browser/src/index.ts:731`.

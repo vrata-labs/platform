@@ -4,6 +4,7 @@ date: 2026-10-26
 source: сессия 2026-10-25/26, ревизия тестов; решение владельца «поддержка floor 1 не нужна»
 area: backend
 status: new
+priority: P1
 jira: не заведена
 ---
 
@@ -34,3 +35,6 @@ jira: не заведена
 - `tests/e2e/reference-template-fixture.ts:62`
 - `.github/workflows/ci.yml` — rollback-базы в job `core`
 - `tools/identity-rollback-guard.mjs`
+
+## Актуальность 2026-10-26
+По-прежнему `let minimum = 1` в `apps/api/src/identity/protocol.ts:27`, фикстура `reference-template-fixture.ts:62` по умолчанию на floor 1, пять rollback-сборок в `ci.yml:111-170`. Дневная работа вместе с владельцем identity: меняет продукт и CI.
