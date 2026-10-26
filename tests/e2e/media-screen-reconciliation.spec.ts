@@ -9,7 +9,7 @@ import { startReferenceTemplateFixture } from "./reference-template-fixture";
 
 test.use({ trace: "off", screenshot: "off", video: "off", launchOptions: { args: ["--autoplay-policy=no-user-gesture-required"] } });
 const requireApi = createRequire(resolve("apps/api/package.json"));
-const { RoomServiceClient } = requireApi("livekit-server-sdk");
+const { RoomServiceClient, AccessToken } = requireApi("livekit-server-sdk");
 
 /** Only the API's native RoomService RPCs pass through this owned fault bridge.
  * Browser signaling connects directly to the same real SFU, with real API-issued JWTs. */
@@ -162,7 +162,7 @@ for (const version of ["1.13.9"] as const) test(`server media reconciliation ${v
     bridge.failUpdates(true);
     const revoke = await request.post(`${origin}/api/rooms/${roomId}/presenters/${former.participantId}/revoke`, { headers }); expect(revoke.status()).toBe(200);
     const committed = await revoke.json(); expect(committed.mediaScreenReconciliation.state).toBe("pending");
-    expect(committed.mediaScreenReconciliation.enforcementVersion).toBe(3);
+    expect(committed.mediaScreenReconciliation.enforcementVersion).toBe(4);
     await expect.poll(() => bridge.counts().deniedUpdates, { timeout: 10_000 }).toBeGreaterThan(0);
     const status = async () => { const response = await request.get(`${origin}/api/rooms/${roomId}/session-control`, { headers }); expect(response.status()).toBe(200); return (await response.json()).mediaScreenReconciliation; };
     expect((await status()).state).not.toBe("observed");
@@ -201,7 +201,7 @@ for (const version of ["1.13.9"] as const) test(`server media reconciliation ${v
     const hostMicSid = (await service.getParticipant(hostMedia.room, hostMedia.identity)).tracks.find((track: any) => track.source === 2).sid;
     bridge.failRemovals(true);
     const remove = await request.post(`${origin}/api/rooms/${roomId}/participants/${former.participantId}/remove`, { headers }); expect(remove.status()).toBe(200);
-    const removed = await remove.json(); expect(removed.mediaScreenReconciliation.state).toBe("pending"); expect(removed.mediaScreenReconciliation.enforcementVersion).toBe(3);
+    const removed = await remove.json(); expect(removed.mediaScreenReconciliation.state).toBe("pending"); expect(removed.mediaScreenReconciliation.enforcementVersion).toBe(4);
     await expect.poll(() => bridge.counts().deniedRemovals, { timeout: 10_000 }).toBeGreaterThan(0);
     expect(await remainingTargets()).toBe(3); expect((await status()).state).not.toBe("observed");
     await expect.poll(() => signal(receiver, microphoneSid), { timeout: 10_000 }).toBe(true);
@@ -274,7 +274,12 @@ for (const version of ["1.13.9"] as const) {
       }
       const publisher = await admittedMicrophone(), listener = await admittedMicrophone(), page = await browser.newPage(), receiver = await browser.newPage(); pages.push(page, receiver);
       const service = new RoomServiceClient(native.httpUrl, "devkey", "secret");
-      await connect(receiver, native, listener.token); await connect(page, native, publisher.token);
+      // A remote-browser executor publishing into the same native room, as the API grants it.
+      const executorGrant = new AccessToken("devkey", "secret", { identity: "remote-browser:lifecycle-object", ttl: "600s" });
+      executorGrant.addGrant({ room: publisher.room, roomJoin: true, canPublish: true, canSubscribe: false });
+      const executor = await browser.newPage(); pages.push(executor);
+      await connect(receiver, native, listener.token); await connect(page, native, publisher.token); await connect(executor, native, await executorGrant.toJwt());
+      await executor.evaluate(() => { (window as any).__s2.room.localParticipant.setPermissions = () => false; });
       expect(await publish(page, "microphone")).toBe(true);
       await expect.poll(async () => (await service.getParticipant(publisher.room, publisher.identity)).tracks.some((track: any) => track.source === 2), { timeout: 10_000 }).toBe(true);
       const microphoneSid = (await service.getParticipant(publisher.room, publisher.identity)).tracks.find((track: any) => track.source === 2).sid;
@@ -283,8 +288,11 @@ for (const version of ["1.13.9"] as const) {
       const response = action === "disable" ? await request.post(`${origin}/api/rooms/${roomId}/disable`, { headers })
         : await request.delete(`${origin}/api/rooms/${roomId}`, { headers });
       expect(response.status()).toBe(200);
-      await expect.poll(async () => (await service.listParticipants(publisher.room)).length, { timeout: 15_000 }).toBe(0);
+      // Delete is terminal: the executor goes too. Disable is reversible: the executor, which never reconnects, stays.
+      const remaining = action === "delete" ? [] : ["remote-browser:lifecycle-object"];
+      await expect.poll(async () => (await service.listParticipants(publisher.room)).map((peer: any) => peer.identity), { timeout: 15_000 }).toEqual(remaining);
       for (const client of [page, receiver]) await expect.poll(() => client.evaluate(() => (window as any).__s2.room.state), { timeout: 10_000 }).toBe("disconnected");
+      await expect.poll(() => executor.evaluate(() => (window as any).__s2.room.state), { timeout: 10_000 }).toBe(action === "delete" ? "disconnected" : "connected");
       if (action === "disable") {
         expect((await request.post(`${origin}/api/rooms/${roomId}/enable`, { headers })).status()).toBe(200);
         const enabledPublisher = await browser.newPage(), enabledListener = await browser.newPage(); pages.push(enabledPublisher, enabledListener);
@@ -297,7 +305,7 @@ for (const version of ["1.13.9"] as const) {
           const control = await request.get(`${origin}/api/rooms/${roomId}/session-control`, { headers }); expect(control.status()).toBe(200);
           return (await control.json()).mediaScreenReconciliation.state;
         }, { timeout: 15_000 }).toBe("observed");
-        expect((await service.listParticipants(publisher.room)).length).toBe(2);
+        expect((await service.listParticipants(publisher.room)).length).toBe(3);
       }
     } finally {
       await Promise.allSettled(pages.map(page => page.close()));
@@ -398,7 +406,7 @@ for (const version of ["1.13.9"] as const) test(`server media lineage ${version}
       const status = await request.get(`${origin}/api/rooms/${roomId}/session-control`, { headers }); expect(status.status()).toBe(200);
       const reconciliation = (await status.json()).mediaScreenReconciliation;
       return `${reconciliation.enforcementVersion}:${reconciliation.state}`;
-    }, { timeout: 15_000 }).toBe("3:observed");
+    }, { timeout: 15_000 }).toBe("4:observed");
     expect((await service.listParticipants(original.room)).map((peer: any) => peer.identity).sort()).toEqual([listening.identity, recovered.identity].sort());
 
     // Delete and recreate the same room ID: the old JWT names the previous generation and is retired there.

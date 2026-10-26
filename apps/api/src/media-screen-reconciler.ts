@@ -5,10 +5,11 @@ import type { RoomScreenSourceAuthority } from "./identity/contracts.js";
 import { parseMediaRoomName, type ParsedMediaRoom } from "./managed-media-names.js";
 import { validId } from "./identity/authority.js";
 import type { MediaBoundary } from "./identity/protocol.js";
-import { mustEvictUserMedia, screenSourceLowering, screenSourcesRetired, verifiedSourcePeer } from "./media-source-permissions.js";
+import { mustEvictExecutorMedia, mustEvictUserMedia, screenSourceLowering, screenSourcesRetired, verifiedSourcePeer } from "./media-source-permissions.js";
 
-/** 3: eviction also checks the selected identity lineage (revocation, absence, codec-3 epoch) and the room generation. */
-export const MEDIA_RECONCILIATION_VERSION = 3;
+/** 3: eviction also checks the selected identity lineage (revocation, absence, codec-3 epoch) and the room generation.
+ * 4: remote-browser executor connections are retired in missing, ended and retired-generation native rooms. */
+export const MEDIA_RECONCILIATION_VERSION = 4;
 
 export interface MediaScreenAuthority {
   readonly tenantId: string | null;
@@ -47,6 +48,8 @@ const lineage = (value: MediaScreenAuthority, participantIds: readonly string[])
   return [id, state ? [state.epoch, state.active] : null];
 }));
 const userPeer = (peer: Pick<ParticipantInfo, "identity">) => !peer.identity.startsWith("remote-browser:");
+/** The executor identity of one object; it carries no binding attribute and is never a user. */
+const executorPeer = (peer: Pick<ParticipantInfo, "identity">) => /^remote-browser:[^:]+$/.test(peer.identity);
 
 /** Reconstruct desired state from durable authority, not a process-local transition queue.
  * Permission writes use the fixed class lowering; public removal, inactive rooms, retired
@@ -141,8 +144,8 @@ export function createMediaScreenReconciler(input: {
       // Decision-relevant authority: lifecycle, slots, removals, generation and the selected lineage.
       const decisionKey = JSON.stringify([authorityFingerprint(bk, desired), lineage(desired, ids)]);
       const stale = retired(context, room, desired);
-      // An empty retired generation leaves the current room's observation alone; one with users does not.
-      if (!stale || peers.some(userPeer)) invalidate(roomId);
+      // An empty retired generation leaves the current room's observation alone; one with connections does not.
+      if (!stale || peers.some(peer => userPeer(peer) || executorPeer(peer))) invalidate(roomId);
       const recheck = async () => {
         const current = await read(roomId, ids);
         return JSON.stringify([authorityFingerprint(bk, current), lineage(current, ids)]) === decisionKey;
@@ -153,6 +156,15 @@ export function createMediaScreenReconciler(input: {
         if (!alive(captured)) return;
         if (now() >= deadline) { complete = false; break; }
         peerCursors.set(room.name, start + ++visited);
+        if (executorPeer(peer)) {
+          if (!mustEvictExecutorMedia(desired.authority, stale)) continue;
+          if (!await recheck()) { complete = false; break; }
+          if (!alive(captured)) return;
+          await context.native.removeParticipant(room.name, peer.identity);
+          if (!alive(captured)) return;
+          emit("evicted");
+          continue;
+        }
         if (!userPeer(peer)) continue;
         if (!binding) { complete = false; continue; }
         if (mustEvictUserMedia(desired.authority, binding, stale)) {
@@ -186,8 +198,10 @@ export function createMediaScreenReconciler(input: {
       const originalSids = new Map(peers.map(peer => [peer.identity, peer.sid]));
       if (currentPeers.length > maxPeers) complete = false;
       const after: Peer[] = [];
+      let executorsPresent = false;
       for (const info of currentPeers.slice(0, maxPeers)) {
         if (!alive(captured)) return;
+        if (executorPeer(info)) { executorsPresent = true; continue; }
         if (!userPeer(info)) continue;
         const binding = await verify(room, info);
         if (!binding) complete = false;
@@ -196,13 +210,14 @@ export function createMediaScreenReconciler(input: {
       // Generations are re-listed after the post-read: a retired room created during this pass is seen too.
       for (const sibling of (await listing(context)).filter(other => other.roomId === roomId && other.name !== room.name)) {
         if (!alive(captured)) return;
-        if ((await context.native.listParticipants(sibling.name)).some(userPeer)) complete = false;
+        if ((await context.native.listParticipants(sibling.name)).some(peer => userPeer(peer) || executorPeer(peer))) complete = false;
       }
       if (!alive(captured)) return;
       const afterIds = [...new Set([...ids, ...after.flatMap(peer => peer.binding ? [peer.binding.participantId] : [])])].sort();
       const fresh = await read(roomId, afterIds);
       if (!alive(captured)) return;
       if (retired(context, room, fresh) || lineage(fresh, ids) !== lineage(desired, ids)) complete = false;
+      if (executorsPresent && mustEvictExecutorMedia(fresh.authority, false)) complete = false;
       for (const { info: current, binding } of after) {
         if (!binding) continue;
         if (mustEvictUserMedia(fresh.authority, binding)) { complete = false; continue; }

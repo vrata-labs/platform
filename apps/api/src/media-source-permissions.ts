@@ -14,6 +14,14 @@ export function mustEvictUserMedia(authority: RoomScreenSourceAuthority | null, 
   return !state || !state.active || binding.epoch !== undefined && binding.epoch !== state.epoch;
 }
 
+/** The remote-browser executor has no room identity and does not reconnect by itself, so it is retired only where
+ * no later state can make it current again: a missing or ended room, or a retired native-room generation. A disabled
+ * room is reversible and keeps its executor. Whether the executor instance is still the object's current one is not
+ * decided here. */
+export function mustEvictExecutorMedia(authority: RoomScreenSourceAuthority | null, retired: boolean): boolean {
+  return retired || !authority || authority.roomEnded === true;
+}
+
 /** Codec-2 user grants have a fixed non-source tuple. Never copy a preceding connection's permissions. */
 export function screenSourceLowering(scope: UserMediaScope): Partial<ParticipantPermission> | null {
   if (scope === "m") return null;

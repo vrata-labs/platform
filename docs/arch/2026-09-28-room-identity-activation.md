@@ -699,6 +699,33 @@ accepted 81/81 plus 1/1 mandatory Rutube on attempt 2 (attempt 1 stopped on a me
 keyboard-navigation timeout and rolled back to the previous image on the migrated database).
 The media boundary stays at codec 2.
 
+### Executor retirement in terminal rooms: T13a-S3b-3a
+
+The remote-browser executor joins LiveKit as `remote-browser:<objectId>` with no
+room identity and no binding attribute, and it publishes once per session: it
+does not reconnect after a removal. Reconciliation used to skip it entirely, so
+an executor kept publishing in a deleted or ended room and in a retired native
+room for as long as its JWT (refreshed by the SFU) lived.
+
+Reconciliation version 4 retires executor connections only where no later state
+can make them current again: the room record is missing, the room is ended
+(terminal within a generation), or the native room is a retired generation
+(codec 2 past the boundary, another room incarnation, another portal access
+epoch). A disabled room keeps its executor, because disable is reversible and a
+removed executor would not come back. The same pre-write recheck as for users
+guards the removal; a still-present executor of an ended room keeps the status
+pending, and a sibling generation holding an executor blocks the observation.
+
+Not covered here (S3b-3b): whether the connected executor instance is still the
+object's current one. The executor identity is shared by every instance of an
+object, so a removal addressed to it could hit a newer instance, and a stale
+instance's JWT would displace the current one on rejoin. Room-state also answers
+its binding check with a single negative for a missing room, a missing object,
+a stopped object and a different instance. A real instance lease needs a
+per-instance media identity across API, room-state and the executor, a
+three-state binding answer (authorized, denied, unknown) and the room generation
+in room-state.
+
 ### Shared staging delivery (floor 1)
 
 The initial paired integration of main and these prerequisites was accepted as

@@ -35,7 +35,7 @@ export function projectScreenSourceAuthority(state: IdentityTransaction, partici
         active: !identity.revokedAt && !identityWasRemoved(state, participantId) })]] : [];
     }));
   }
-  return Object.freeze({ revision: state.authority.revision, roomActive,
+  return Object.freeze({ revision: state.authority.revision, roomActive, roomEnded: state.authority.lifecycle.endedAt != null,
     publisherParticipantIds: Object.freeze([...publishers].sort()),
     removedParticipantIds: Object.freeze(Object.keys(state.authority.lifecycle.removedParticipants).sort()),
     ...(state.roomObservationVersion ? { observationVersion: state.roomObservationVersion } : {}),

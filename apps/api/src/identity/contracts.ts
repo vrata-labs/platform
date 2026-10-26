@@ -64,6 +64,8 @@ export interface RoomMediaParticipantState {
 export interface RoomScreenSourceAuthority {
   readonly revision: number;
   readonly roomActive: boolean;
+  /** Ended is terminal within a room generation; disabled is reversible and stays false here. */
+  readonly roomEnded?: boolean;
   readonly publisherParticipantIds: readonly string[];
   readonly removedParticipantIds?: readonly string[];
   /** Volatile row/object token for observation-cache freshness only, never admission or identity. */

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ParticipantInfo, ParticipantPermission, TrackInfo, TrackSource } from "livekit-server-sdk";
 import { createUserMediaIdentity } from "@vrata/shared-types";
-import { mustEvictUserMedia, screenSourceLowering, screenSourcesRetired, verifiedSourcePeer } from "./media-source-permissions.js";
+import { mustEvictExecutorMedia, mustEvictUserMedia, screenSourceLowering, screenSourcesRetired, verifiedSourcePeer } from "./media-source-permissions.js";
 
 test("terminal removal is independent of source class or current screen role", () => {
   const active = { revision: 2, roomActive: true, publisherParticipantIds: ["host"], removedParticipantIds: ["removed"] };
@@ -80,4 +80,13 @@ test("native retirement requires exact full permissions and absence of every dis
     assert.equal(screenSourcesRetired({ ...peer, permission }, scope), scope === "s");
   }
   assert.equal(screenSourcesRetired(new ParticipantInfo(), "m"), false);
+});
+
+test("executor media is retired only in missing, ended and retired-generation rooms", () => {
+  const active = { revision: 1, roomActive: true, roomEnded: false, publisherParticipantIds: [] };
+  assert.equal(mustEvictExecutorMedia(active, false), false);
+  assert.equal(mustEvictExecutorMedia({ ...active, roomActive: false }, false), false, "disable is reversible and the executor does not reconnect");
+  assert.equal(mustEvictExecutorMedia({ ...active, roomActive: false, roomEnded: true }, false), true);
+  assert.equal(mustEvictExecutorMedia(null, false), true, "a deleted room");
+  assert.equal(mustEvictExecutorMedia(active, true), true, "a retired generation");
 });
