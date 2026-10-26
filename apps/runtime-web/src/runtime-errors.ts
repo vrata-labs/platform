@@ -1,3 +1,5 @@
+import { t, type MessageKey } from "./i18n/i18n.js";
+
 export type RuntimeIssueCode =
   | "mic_denied"
   | "no_audio_device"
@@ -19,19 +21,23 @@ export interface RuntimeIssue {
   recoverable: boolean;
   retryable: boolean;
   severity: RuntimeIssueSeverity;
-  userMessage: string;
+  /** In the current UI language. */
+  readonly userMessage: string;
+  messageKey: MessageKey;
   diagnosticsNote: string;
   suggestedAction: string;
 }
 
+type RuntimeIssueEntry = Omit<RuntimeIssue, "userMessage">;
+
 function createRuntimeIssueMap(): Record<RuntimeIssueCode, RuntimeIssue> {
-  return {
+  const entries: Record<RuntimeIssueCode, RuntimeIssueEntry> = {
     mic_denied: {
       code: "mic_denied",
       recoverable: true,
       retryable: false,
       severity: "warn",
-      userMessage: "Microphone blocked; room continues without audio",
+      messageKey: "issue.micDenied",
       diagnosticsNote: "mic_denied",
       suggestedAction: "Allow microphone access and retry audio"
     },
@@ -40,7 +46,7 @@ function createRuntimeIssueMap(): Record<RuntimeIssueCode, RuntimeIssue> {
       recoverable: true,
       retryable: false,
       severity: "warn",
-      userMessage: "No microphone found; room continues without audio",
+      messageKey: "issue.micNotFound",
       diagnosticsNote: "no_audio_device",
       suggestedAction: "Connect a microphone and retry audio"
     },
@@ -49,7 +55,7 @@ function createRuntimeIssueMap(): Record<RuntimeIssueCode, RuntimeIssue> {
       recoverable: true,
       retryable: false,
       severity: "warn",
-      userMessage: "Microphone unsupported by this browser; room continues without audio",
+      messageKey: "issue.micUnsupported",
       diagnosticsNote: "audio_unsupported",
       suggestedAction: "Use a browser and device with WebRTC microphone support"
     },
@@ -58,7 +64,7 @@ function createRuntimeIssueMap(): Record<RuntimeIssueCode, RuntimeIssue> {
       recoverable: true,
       retryable: true,
       severity: "error",
-      userMessage: "Audio service unavailable; room continues in presence-only mode",
+      messageKey: "issue.audioUnavailable",
       diagnosticsNote: "livekit_failed",
       suggestedAction: "Retry audio when connection recovers"
     },
@@ -67,7 +73,7 @@ function createRuntimeIssueMap(): Record<RuntimeIssueCode, RuntimeIssue> {
       recoverable: true,
       retryable: true,
       severity: "warn",
-      userMessage: "Media connection blocked; scene can load, but audio and sharing need WebRTC network access",
+      messageKey: "issue.mediaBlocked",
       diagnosticsNote: "media_network_blocked",
       suggestedAction: "Try Wi-Fi or a network that allows WebRTC traffic"
     },
@@ -76,7 +82,7 @@ function createRuntimeIssueMap(): Record<RuntimeIssueCode, RuntimeIssue> {
       recoverable: true,
       retryable: false,
       severity: "warn",
-      userMessage: "Screen sharing was not allowed; room continues without sharing",
+      messageKey: "issue.shareDenied",
       diagnosticsNote: "screen_share_denied",
       suggestedAction: "Allow screen sharing and retry"
     },
@@ -85,7 +91,7 @@ function createRuntimeIssueMap(): Record<RuntimeIssueCode, RuntimeIssue> {
       recoverable: true,
       retryable: false,
       severity: "warn",
-      userMessage: "Screen sharing unsupported by this browser; room continues without sharing",
+      messageKey: "issue.shareUnsupported",
       diagnosticsNote: "screen_share_unsupported",
       suggestedAction: "Use a browser and device with getDisplayMedia screen capture support"
     },
@@ -94,7 +100,7 @@ function createRuntimeIssueMap(): Record<RuntimeIssueCode, RuntimeIssue> {
       recoverable: true,
       retryable: true,
       severity: "error",
-      userMessage: "Realtime sync unavailable; using API fallback",
+      messageKey: "issue.realtimeUnavailable",
       diagnosticsNote: "room_state_failed",
       suggestedAction: "Keep room open while realtime reconnects"
     },
@@ -103,7 +109,7 @@ function createRuntimeIssueMap(): Record<RuntimeIssueCode, RuntimeIssue> {
       recoverable: false,
       retryable: false,
       severity: "warn",
-      userMessage: "Room access denied",
+      messageKey: "issue.accessDenied",
       diagnosticsNote: "room_access_denied",
       suggestedAction: "Use a valid invite link or ask the host for approval"
     },
@@ -112,7 +118,7 @@ function createRuntimeIssueMap(): Record<RuntimeIssueCode, RuntimeIssue> {
       recoverable: true,
       retryable: false,
       severity: "info",
-      userMessage: "VR unavailable on this device or disabled for this environment",
+      messageKey: "issue.xrUnavailable",
       diagnosticsNote: "xr_unavailable",
       suggestedAction: "Continue on desktop or mobile"
     },
@@ -121,7 +127,7 @@ function createRuntimeIssueMap(): Record<RuntimeIssueCode, RuntimeIssue> {
       recoverable: true,
       retryable: false,
       severity: "warn",
-      userMessage: "VR session could not start; room continues in desktop mode",
+      messageKey: "issue.xrEnterFailed",
       diagnosticsNote: "xr_enter_failed",
       suggestedAction: "Retry Enter VR or continue on desktop"
     },
@@ -130,11 +136,15 @@ function createRuntimeIssueMap(): Record<RuntimeIssueCode, RuntimeIssue> {
       recoverable: false,
       retryable: false,
       severity: "error",
-      userMessage: "Runtime error; include the report ID when contacting support",
+      messageKey: "issue.runtimeError",
       diagnosticsNote: "runtime_unhandled_error",
       suggestedAction: "Reload the room and share the report ID if the issue repeats"
     }
   };
+  for (const entry of Object.values(entries)) {
+    Object.defineProperty(entry, "userMessage", { enumerable: true, get: () => t(entry.messageKey) });
+  }
+  return entries as Record<RuntimeIssueCode, RuntimeIssue>;
 }
 
 const runtimeIssueMap = createRuntimeIssueMap();

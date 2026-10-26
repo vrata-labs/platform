@@ -1,3 +1,5 @@
+import { t, type MessageKey } from "./i18n/i18n.js";
+
 export type GuestOnboardingMode = "desktop" | "mobile" | "vr";
 
 export interface GuestOnboardingPolicyInput {
@@ -35,29 +37,43 @@ export function shouldShowGuestOnboarding(input: GuestOnboardingPolicyInput): bo
 export function validateGuestDisplayName(value: string): DisplayNameValidationResult {
   const displayName = value.trim().replace(/\s+/g, " ");
   if (displayName.length < 2) {
-    return { accepted: false, displayName, error: "Enter at least 2 characters." };
+    return { accepted: false, displayName, error: t("onboarding.nameTooShort") };
   }
   if (displayName.length > 40) {
-    return { accepted: false, displayName, error: "Use 40 characters or fewer." };
+    return { accepted: false, displayName, error: t("onboarding.nameTooLong") };
   }
   return { accepted: true, displayName, error: null };
 }
 
 export function formatGuestControlsHint(mode: GuestOnboardingMode): string {
   if (mode === "mobile") {
-    return "Controls: left drag moves, right drag looks around, tap the panel title to hide controls.";
+    return t("onboarding.controlsMobile");
   }
   if (mode === "vr") {
-    return "Controls: left stick moves, right stick snap-turns, controller ray selects seats and panels.";
+    return t("onboarding.controlsVr");
   }
-  return "Controls: WASD or arrows move, Shift sprints, drag the scene to look around.";
+  return t("onboarding.controlsDesktop");
 }
 
 export function formatGuestCompatibilityWarnings(input: CompatibilityWarningInput): string[] {
   const warnings: string[] = [];
-  if (!input.webGlAvailable) warnings.push("WebGL unavailable: the room may not render on this browser.");
-  if (!input.webSocketAvailable) warnings.push("Realtime connection unavailable: presence may be limited.");
-  if (!input.audioInputSupported) warnings.push("Microphone unsupported: you can still enter without audio.");
-  if (!input.screenShareSupported) warnings.push("Screen share unsupported on this device.");
+  if (!input.webGlAvailable) warnings.push(t("onboarding.warningWebGl"));
+  if (!input.webSocketAvailable) warnings.push(t("onboarding.warningWebSocket"));
+  if (!input.audioInputSupported) warnings.push(t("onboarding.warningMicrophone"));
+  if (!input.screenShareSupported) warnings.push(t("onboarding.warningScreenShare"));
   return warnings;
+}
+
+export type MicrophoneCheckFailure = "blocked" | "missing" | "unavailable";
+
+/** Why a microphone check failed: the browser or the user refused, there is no device, or capture does not work here. */
+export function classifyMicrophoneCheckError(error: unknown): MicrophoneCheckFailure {
+  const name = typeof (error as { name?: unknown } | null)?.name === "string" ? (error as { name: string }).name : "";
+  if (name === "NotAllowedError" || name === "SecurityError" || name === "PermissionDeniedError") return "blocked";
+  if (name === "NotFoundError" || name === "DevicesNotFoundError" || name === "OverconstrainedError") return "missing";
+  return "unavailable";
+}
+
+export function microphoneCheckFailureMessage(failure: MicrophoneCheckFailure): MessageKey {
+  return failure === "blocked" ? "onboarding.microphoneBlocked" : failure === "missing" ? "onboarding.microphoneMissing" : "onboarding.microphoneDenied";
 }

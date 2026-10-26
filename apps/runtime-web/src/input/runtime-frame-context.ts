@@ -17,6 +17,8 @@ export interface RuntimeFrameContext {
     sanitizedAxes: XrAxesSample;
     rawAxes: XrAxesSample;
     triggerPressed: boolean;
+    /** B or Y on either controller: opens and closes the XR menu. */
+    menuPressed?: boolean;
     rayVisibleLatched: boolean;
   };
 }
