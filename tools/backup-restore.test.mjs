@@ -390,6 +390,8 @@ function fakeDeployment(t, { privateConfigured = true, rows, provider = "minio-d
         const noneIndex = script.indexOf("mc anonymous set none");
         const mirrorIndex = script.indexOf("mc mirror");
         assert.ok(noneIndex >= 0 && mirrorIndex > noneIndex, "private policy none must execute before loading private bytes");
+        const verifyIndex = script.indexOf(`[ "$(mc anonymous get-json "vrata/$ROOM_PLUGIN_BUCKET")" = '{}' ]`);
+        assert.ok(verifyIndex > noneIndex && mirrorIndex > verifyIndex, "private policy must be verified absent before loading private bytes");
         assert.equal(script.includes("anonymous set download"), false);
         assert.equal(script.includes("$MINIO_BUCKET"), false);
         if (noneIndex >= 0) fixture.privatePolicy = fixture.restorePolicy ?? {};
@@ -939,7 +941,7 @@ test("mutation removing private anonymous-none command fails before any private 
   const run = fixture.operations.runCompose;
   fixture.operations.runCompose = (compose, args, io) => {
     if (args[0] === "run" && args.at(-1).includes("$ROOM_PLUGIN_BUCKET") && args.at(-1).includes("--remove")) {
-      args = [...args.slice(0, -1), args.at(-1).replace(`policy=$(mc anonymous get-json "vrata/$ROOM_PLUGIN_BUCKET") && { [ "$policy" = '{}' ] || mc anonymous set none "vrata/$ROOM_PLUGIN_BUCKET" >/dev/null; } && `, "")];
+      args = [...args.slice(0, -1), args.at(-1).replace(`policy=$(mc anonymous get-json "vrata/$ROOM_PLUGIN_BUCKET") && { [ "$policy" = '{}' ] || mc anonymous set none "vrata/$ROOM_PLUGIN_BUCKET" >/dev/null; } && [ "$(mc anonymous get-json "vrata/$ROOM_PLUGIN_BUCKET")" = '{}' ] && `, "")];
     }
     return run(compose, args, io);
   };

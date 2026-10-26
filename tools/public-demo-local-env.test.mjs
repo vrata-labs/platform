@@ -87,8 +87,6 @@ function validComposeModel(env) {
       },
       "minio-bootstrap": {
         image: PUBLIC_DEMO_LOCAL_IMAGES.minioBootstrap,
-        pull_policy: "build",
-        build: { dockerfile: "infra/docker/mc.demo-local.Dockerfile" },
         environment: {
           MINIO_ROOT_USER: env.MINIO_ROOT_USER,
           MINIO_ROOT_PASSWORD: env.MINIO_ROOT_PASSWORD,
@@ -262,10 +260,10 @@ test("compose model assertion accepts only the isolated production-mode model", 
   );
 
   const unpinnedClient = validComposeModel(env);
-  unpinnedClient.services["minio-bootstrap"].build.dockerfile = "infra/docker/mutable.Dockerfile";
+  unpinnedClient.services["minio-bootstrap"].image = "pgsty/mc:latest";
   assert.throws(
     () => assertPublicDemoLocalComposeModel(unpinnedClient, env),
-    expectedError("public_demo_local_pinned_build_invalid:minio-bootstrap")
+    expectedError("public_demo_local_image_mismatch:minio-bootstrap")
   );
 
   const unpinnedStorage = validComposeModel(env);

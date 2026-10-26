@@ -127,10 +127,10 @@ test("retired Quay manifests of releases accepted before SeaweedFS are mapped to
   assert.equal(readFileSync(f.compose, "utf8"), historical);
 });
 
-test("current staging Compose runs pinned SeaweedFS and the YCR mc image untouched by the helper", (t) => {
+test("current staging Compose runs pinned SeaweedFS and mc images untouched by the helper", (t) => {
   const compose = readFileSync(new URL("../infra/docker/compose.staging.yml", import.meta.url), "utf8");
   assert.match(compose, /\n  minio:\n(?:    .*\n)*?    image: chrislusf\/seaweedfs:[0-9.]+@sha256:[0-9a-f]{64}\n/);
-  assert.ok(compose.includes(`    image: ${pinnedMc}\n`));
+  assert.match(compose, /\n  minio-bootstrap:\n(?:    .*\n)*?    image: pgsty\/mc:RELEASE\.[0-9TZ-]+@sha256:[0-9a-f]{64}\n/);
   assert.doesNotMatch(compose, /image: (?:quay\.io\/)?minio\//);
   const f = fixture(t, compose);
   assert.equal(run(f).status, 0);

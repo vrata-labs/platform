@@ -192,6 +192,8 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      # Changes with storage-server.sh so that Compose recreates the server (checked by storage-route test).
+      VRATA_STORAGE_SERVER_SHA256: 41146afadab19358dc8b475d6f62db5b84f9eea3ce3678c9a60f17e51d904bcc
     volumes:
       - ./storage-server.sh:/storage-server.sh:ro
       - storage-data:/data
@@ -203,12 +205,9 @@ services:
       retries: 36
 
   minio-bootstrap:
-    # Built from the checksum-pinned upstream mc binary; MinIO no longer publishes images.
-    image: vrata-mc:a92b5f1af200ca25d54d78432ef6b0c47fd4340abf9759ce5d10275cd57e3318
-    pull_policy: build
-    build:
-      context: ../..
-      dockerfile: infra/docker/mc.demo-local.Dockerfile
+    # S3 client for bootstrap and backup: the maintained multi-arch mc build of the pgsty MinIO fork
+    # (AGPL-3.0, a separate container); upstream MinIO no longer publishes mc images.
+    image: pgsty/mc:RELEASE.2026-10-18T00-00-00Z@sha256:6ecdaec70bc5e8cf9d0e9a70c190f3beb1c83f11617ff4333f1fcd71ab1daf18
     depends_on:
       preflight:
         condition: service_completed_successfully

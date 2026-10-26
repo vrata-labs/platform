@@ -18,7 +18,7 @@ async function fixture(t: TestContext, policies: Record<string, string> = { "vra
   const mc = join(root, "mc");
   await writeFile(mc, `#!${process.execPath}\nconst fs=require('node:fs'); const p=process.env.TEST_MC_STATE; const s=JSON.parse(fs.readFileSync(p,'utf8'));
 const a=process.argv.slice(2);s.calls.push(a); const save=()=>fs.writeFileSync(p,JSON.stringify(s)); const fail=()=>{save();process.exit(1)};
-if(a[0]==='mb'){if(!s.buckets.includes(a.at(-1)))s.buckets.push(a.at(-1))}
+if(a[0]==='mb'){s.mbAttempts=(s.mbAttempts||0)+1;if(s.mbAttempts<=Number(process.env.TEST_WARMUP_FAILURES||0))fail();if(!s.buckets.includes(a.at(-1)))s.buckets.push(a.at(-1))}
 if(a[0]==='anonymous'){const bucket=a.at(-1);
 if(process.env.TEST_DENY_PRIVATE_POLICY==='1'&&bucket==='vrata/private-plugins')fail();
 if(!s.buckets.includes(bucket))fail();
@@ -28,7 +28,8 @@ else if(a[1]==='set')s.policies[bucket]=a[2]}
 save();\n`);
   await chmod(mc, 0o755);
   const env = { ...process.env, PATH: `${root}:${process.env.PATH}`, TEST_MC_STATE: state,
-    MINIO_ROOT_USER: "test-key", MINIO_ROOT_PASSWORD: "test-secret", MINIO_BUCKET: "public-assets", ROOM_PLUGIN_BUCKET: "private-plugins", MINIO_SCENE_PREFIX: "scenes/" };
+    MINIO_ROOT_USER: "test-key", MINIO_ROOT_PASSWORD: "test-secret", MINIO_BUCKET: "public-assets", ROOM_PLUGIN_BUCKET: "private-plugins", MINIO_SCENE_PREFIX: "scenes/",
+    STORAGE_BOOTSTRAP_ATTEMPTS: "3", STORAGE_BOOTSTRAP_DELAY: "0" };
   return { env, async state() { return JSON.parse(await readFile(state, "utf8")) as { calls: string[][]; policies: Record<string, string> }; } };
 }
 const joined = (calls: string[][], command: string) => calls.findIndex(args => args.join(" ") === command);
@@ -43,6 +44,18 @@ test("bootstrap idempotently keeps the private bucket policy-free before public 
   assert.ok(privateCheck >= 0 && publicPolicy > privateCheck);
   assert.equal(state.calls.filter(args => args.join(" ") === "mb --ignore-existing vrata/private-plugins").length, 2);
   assert.equal(state.calls.filter(args => args[0] === "cp" && args.at(-1) === "vrata/public-assets/scenes/compose-smoke/scene.json").length, 2);
+});
+test("bootstrap retries storage refusals during warm-up within a bounded budget", async t => {
+  const f = await fixture(t);
+  await execute("sh", [bootstrap], { env: { ...f.env, TEST_WARMUP_FAILURES: "2" } });
+  const state = await f.state();
+  assert.equal(state.policies["vrata/public-assets"], "download");
+  assert.equal(state.calls.filter(args => args[0] === "mb" && args.at(-1) === "vrata/private-plugins").length, 3);
+  const never = await fixture(t);
+  await assert.rejects(execute("sh", [bootstrap], { env: { ...never.env, TEST_WARMUP_FAILURES: "100" } }));
+  const refused = await never.state();
+  assert.equal(refused.calls.filter(args => args[0] === "mb").length, 3);
+  assert.equal(refused.calls.some(args => args[0] === "anonymous"), false);
 });
 test("bootstrap removes an anonymous policy found on the private bucket", async t => {
   const f = await fixture(t, { "vrata/public-assets": "download", "vrata/private-plugins": "download" });

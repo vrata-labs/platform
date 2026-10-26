@@ -19,6 +19,8 @@ Current compose files run SeaweedFS in the `minio` service and keep objects in t
 3. Run `pnpm restore:compose` with that backup (see `docs/backup-restore.md`), then check rooms, scene bundles, documents and room plugins.
 4. Remove the `minio-data` volume only after the restored deployment is verified.
 
+Rolling back across this switch by image tag is not supported: an older checkout starts MinIO, whose images can no longer be pulled, on the old `minio-data` volume without the objects written since. Restore the pre-upgrade backup on the old release instead.
+
 ## Backup Before Upgrade
 
 Create and validate a compose backup before changing image tags:

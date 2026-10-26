@@ -18,7 +18,7 @@ UDP echo этого состояния не создают.
 | Room-state | `wss://state.111.88.217.54.sslip.io` |
 | LiveKit | `wss://livekit.111.88.217.54.sslip.io` |
 | Remote browser | `wss://browser.111.88.217.54.sslip.io` |
-| Public objects (SeaweedFS, только GET/HEAD публичного bucket) | `https://storage.111.88.217.54.sslip.io` |
+| Public objects (SeaweedFS, только чтение объектов публичного bucket) | `https://storage.111.88.217.54.sslip.io` |
 | Checkout | `/opt/vrata`, root-owned |
 | Private env | `/opt/vrata/infra/docker/.env.staging`, 0600 |
 | Release / assets / recovery | `/opt/vrata-stage-state`, вне checkout |
@@ -224,7 +224,7 @@ checksum-verified копии; повреждённые/незавершённы�
    foundation versions взять из accepted record. Релиз на SeaweedFS override не требует. Для application repos/tag использовать принятые YCR images.
 3. Запустить отдельные PostgreSQL, хранилище и приложение; явный `COMPOSE_PROJECT_NAME`
    отделяет volumes. Не выполнять build и не использовать рабочие stage volumes.
-4. Восстановить копию, передав оба Compose файла:
+4. Восстановить копию. Для релиза на SeaweedFS `--compose-file "$RESTORE_OVERRIDE"` не передаётся:
 
 ```bash
 node tools/backup-restore.mjs restore --backup-dir "$OFF_HOST_BACKUP" \

@@ -16,29 +16,34 @@ if [ "$MINIO_BUCKET" = "$ROOM_PLUGIN_BUCKET" ]; then
   exit 1
 fi
 
-for _ in $(seq 1 30); do
-  if mc alias set vrata "${MINIO_ENDPOINT:-http://minio:9000}" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 2
-done
+# SeaweedFS answers its health check before the filer lock is ready (about half a minute after a start) and
+# refuses writes until then. Every step is idempotent and retried within a bounded budget.
+attempts=${STORAGE_BOOTSTRAP_ATTEMPTS:-30}
+retry() {
+  n=1
+  until "$@"; do
+    [ "$n" -ge "$attempts" ] && return 1
+    n=$((n + 1))
+    sleep "${STORAGE_BOOTSTRAP_DELAY:-2}"
+  done
+}
 
-mc alias set vrata "${MINIO_ENDPOINT:-http://minio:9000}" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
-mc mb --ignore-existing "vrata/$ROOM_PLUGIN_BUCKET"
+retry mc alias set vrata "${MINIO_ENDPOINT:-http://minio:9000}" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
+retry mc mb --ignore-existing "vrata/$ROOM_PLUGIN_BUCKET"
 # SeaweedFS rejects removing a policy that does not exist, so remove only one that is there; a failed read
 # (missing bucket, credentials, network) stops the bootstrap. The bucket must end up without any policy.
-private_policy=$(mc anonymous get-json "vrata/$ROOM_PLUGIN_BUCKET")
+private_policy=$(retry mc anonymous get-json "vrata/$ROOM_PLUGIN_BUCKET")
 if [ "$private_policy" != "{}" ]; then
-  mc anonymous set none "vrata/$ROOM_PLUGIN_BUCKET"
-  private_policy=$(mc anonymous get-json "vrata/$ROOM_PLUGIN_BUCKET")
+  retry mc anonymous set none "vrata/$ROOM_PLUGIN_BUCKET"
+  private_policy=$(retry mc anonymous get-json "vrata/$ROOM_PLUGIN_BUCKET")
 fi
 if [ "$private_policy" != "{}" ]; then
   printf '%s\n' 'room plugin bucket still has an anonymous policy' >&2
   exit 1
 fi
-mc mb --ignore-existing "vrata/$MINIO_BUCKET"
-mc anonymous set download "vrata/$MINIO_BUCKET"
+retry mc mb --ignore-existing "vrata/$MINIO_BUCKET"
+retry mc anonymous set download "vrata/$MINIO_BUCKET"
 
 if [ -n "${MINIO_SCENE_PREFIX:-}" ]; then
-  mc cp --attr "Content-Type=application/json" /seed/scene.json "vrata/$MINIO_BUCKET/${MINIO_SCENE_PREFIX}compose-smoke/scene.json"
+  retry mc cp --attr "Content-Type=application/json" /seed/scene.json "vrata/$MINIO_BUCKET/${MINIO_SCENE_PREFIX}compose-smoke/scene.json"
 fi

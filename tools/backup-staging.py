@@ -57,6 +57,12 @@ def backup(root, output_dir):
         services = json.loads(capture(compose + ["config", "--format", "json"], root))["services"]
         if foundation != (services["minio"]["image"], services["minio-bootstrap"]["image"]):
             raise ValueError("staging_backup_foundation_mismatch")
+    # The running storage and its one-shot client must be the accepted images, not only the declared ones.
+    for service, expected in zip(("minio", "minio-bootstrap"), foundation):
+        running = capture(compose + ["ps", "-a", "-q", service], root)
+        if (not running or "\n" in running
+                or capture(["docker", "inspect", "--format", "{{.Config.Image}}", running], root) != expected):
+            raise ValueError("staging_backup_foundation_mismatch")
     output_dir = Path(output_dir).resolve()
     output_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%fZ")

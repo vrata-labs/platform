@@ -67,7 +67,7 @@ docker compose --env-file infra/docker/.env.selfhost -f infra/docker/compose.sel
 - `VRATA_INTERNAL_SERVICE_TOKEN`: replace with a strong secret.
 - `REMOTE_BROWSER_INTERNAL_TOKEN`: use a separate strong secret for the experimental executor boundary.
 - `POSTGRES_PASSWORD`: replace with a strong password.
-- `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD`: replace with production values. They are the S3 key of the bundled storage: printable ASCII without quotes or backslashes, at least 3 and 8 characters long.
+- `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD`: replace with production values. They are the S3 key of the bundled storage: printable ASCII without double quotes or backslashes, at least 3 and 8 characters long.
 - `VRATA_APP_BASE_URL`, `ROOM_STATE_PUBLIC_URL`, `LIVEKIT_URL`, and `REMOTE_BROWSER_PUBLIC_URL`: set to the URLs that browsers can reach.
 - `LIVEKIT_NODE_IP`: set to the public IP address advertised by the LiveKit node. Production preflight rejects loopback, private, reserved, and placeholder values.
 - `VRATA_LIVEKIT_TCP_PORT` and `VRATA_LIVEKIT_UDP_PORT`: open these directly on the host for LiveKit WebRTC ICE/TCP fallback and UDP media traffic.
@@ -81,8 +81,9 @@ Remote browser is experimental and defaults to `REMOTE_BROWSER_ENABLED=false`. T
 The compose service `minio` runs [SeaweedFS](https://github.com/seaweedfs/seaweedfs) (Apache-2.0) with its S3 gateway on port 9000, pinned by image digest. MinIO community was archived with unpatched advisories and its images are no longer published, so it is not used any more. The service name, the port, the `MINIO_*` variables and the `minio-default` provider are kept for compatibility: the API endpoint and the room-plugin storage fingerprint stay `http://minio:9000`.
 
 - `infra/docker/storage-server.sh` starts the server with one S3 identity, `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`. The API and the bootstrap share it, so the API key can also manage buckets and policies.
-- `minio-bootstrap` uses the `mc` client built locally from the checksum-pinned upstream binary (`infra/docker/mc.demo-local.Dockerfile`). It creates the public `MINIO_BUCKET` with an anonymous download policy and the private `ROOM_PLUGIN_BUCKET` without any policy.
-- Only the server listens on the internal network: master, volume and filer ports are not published. Self-host publishes the S3 port on `127.0.0.1` for `MINIO_PUBLIC_BASE_URL=http://127.0.0.1:9000`; production and staging publish public objects through Caddy, which passes only `GET`/`HEAD` of non-empty keys in the public bucket.
+- `minio-bootstrap` and the backup tool use the `mc` client from `pgsty/mc` (the maintained multi-arch build of the pgsty MinIO fork, AGPL-3.0, pinned by digest): upstream MinIO no longer publishes client images. Bootstrap creates the public `MINIO_BUCKET` with an anonymous download policy and the private `ROOM_PLUGIN_BUCKET` without any policy, retrying for about a minute while the storage warms up.
+- Master, volume and filer listen on loopback inside the container; other containers reach only the S3 API and its gRPC port. Self-host publishes the S3 port on `127.0.0.1` for `MINIO_PUBLIC_BASE_URL=http://127.0.0.1:9000`; production and staging publish public objects through Caddy, which passes only `GET`/`HEAD` (and CORS `OPTIONS`) of non-empty keys in the public bucket without a query.
+- For about half a minute after a start the storage refuses writes (its filer lock is not ready yet); conditional writes stay atomic, refused requests are retried by the client.
 
 ## Persistent Data
 

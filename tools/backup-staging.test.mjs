@@ -37,7 +37,8 @@ with tempfile.TemporaryDirectory() as directory:
         replacement=dict(record,imageSha=b,snapshotId=b+"-"+asset,runId="2")
         state.manifest_path.write_text(json.dumps(replacement));state.legacy_path.write_text(b)
         return type("Result",(),{"returncode":0})()
-    with patch.object(m,"capture",side_effect=["container","registry.example/api:"+a]),patch.object(m.subprocess,"run",side_effect=interrupted_export):
+    legacy_running=["minio-container",m.minio.PINNED_MINIO,"mc-container",m.minio.PINNED_MC]
+    with patch.object(m,"capture",side_effect=["container","registry.example/api:"+a,*legacy_running]),patch.object(m.subprocess,"run",side_effect=interrupted_export):
         rejects(lambda:m.backup(root,base/"backups"),"release_changed")
     copies=list((base/"backups").iterdir());assert len(copies)==1
     assert not (copies[0]/"manifest.json").exists()
@@ -54,7 +55,10 @@ with tempfile.TemporaryDirectory() as directory:
         if command[2]=="backup":
             output=Path(command[command.index("--backup-dir")+1]);output.mkdir();(output/"manifest.json").write_text("{}")
         return type("Result",(),{"returncode":0})()
-    with patch.object(m,"capture",side_effect=["container","registry.example/api:"+a,config("docker.io/storage@sha256:"+"1"*64),"registry.example/api:"+a]),patch.object(m.subprocess,"run",side_effect=export):
+    storage="docker.io/storage@sha256:"+"1"*64
+    with patch.object(m,"capture",side_effect=["container","registry.example/api:"+a,config(storage),"minio-container","docker.io/storage@sha256:"+"3"*64]):
+        rejects(lambda:m.backup(root,base/"running"),"foundation_mismatch")
+    with patch.object(m,"capture",side_effect=["container","registry.example/api:"+a,config(storage),"minio-container",storage,"mc-container",m.minio.PINNED_MC,"registry.example/api:"+a]),patch.object(m.subprocess,"run",side_effect=export):
         assert m.backup(root,base/"current")["validated"]
     assert commands[0][2]=="backup" and commands[0].count("--compose-file")==1,commands[0]
 `], { encoding: "utf8" });

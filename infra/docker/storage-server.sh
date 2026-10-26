@@ -29,6 +29,8 @@ printf '{"identities":[{"name":"vrata","credentials":[{"accessKey":"%s","secretK
 # The image entrypoint drops to the seaweed user before starting the server.
 chown -R seaweed:seaweed "$config"
 
-exec /entrypoint.sh server -dir=/data -ip=minio -ip.bind=0.0.0.0 \
+# Master, volume and filer listen on loopback only: neighbouring containers reach the S3 API (and its
+# gRPC port) but not the internal interfaces. The Iceberg and Lance gateways are not used.
+exec /entrypoint.sh server -dir=/data -ip=127.0.0.1 -ip.bind=127.0.0.1 \
   -master.volumeSizeLimitMB=1024 -volume.max=0 \
-  -s3 -s3.port=9000 -s3.config="$config/s3.json"
+  -s3 -s3.port=9000 -s3.ip.bind=0.0.0.0 -s3.port.iceberg=0 -s3.port.lance=0 -s3.config="$config/s3.json"

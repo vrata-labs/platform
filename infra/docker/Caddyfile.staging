@@ -57,13 +57,13 @@
   # Public scene and document objects only: GET/HEAD (and CORS preflight) of a non-empty key in the public
   # bucket, without a query string. Writes, listings, the private plugin bucket and S3 subresources stay on
   # the internal network; everything else is refused with 403, which the private storage probe expects.
+  # Caddy path matchers see a cleaned, case-insensitive path while the proxy forwards the original, so one
+  # expression checks the raw request: exact bucket prefix, a key, no query, no dot or empty segments and no
+  # encoded separators. Separate expression lines in one matcher are not combined with AND.
   @public_object {
     method GET HEAD OPTIONS
-    path /{$MINIO_BUCKET}/*
-    not path /{$MINIO_BUCKET}/
-    expression `{query} == ""`
-    not expression `{uri}.matches("(?i)%2f|%5c|%00")`
-    not path_regexp (^|/)\.\.(/|$)
+    expression `{path}.startsWith("/{$MINIO_BUCKET}/") && {path} != "/{$MINIO_BUCKET}/" && {query} == ""
+      && !{uri}.matches("(?i)%2f|%5c|%00|%2e") && !{path}.matches("(^|/)\\.{1,2}(/|$)") && !{path}.contains("//")`
   }
   handle @public_object {
     reverse_proxy minio:9000
