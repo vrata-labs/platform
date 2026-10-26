@@ -2541,3 +2541,14 @@ Authoritative accepted-release.json до и после публичного read
 - Стенд по требованию 111.88.217.54 (аренда ad7c094b). Readback: published 3445a5c, asset 0a3b492e788bad82bf20a92476a628bf30c6dfbe; health ok, identityProtocolVersion 2, mediaIdentityCodec 2; demo-room, control-plane и /diagnostics — 200.
 - Первая попытка заодно проверила откат после миграции: образ db92bee штатно поднялся на базе, уже получившей rooms.media_incarnation и policy media_codec.
 - Медиа-граница не поднималась: выдача остаётся кодеком 2. Активация S3b-2 необратима и ждёт отдельного подтверждения пользователя.
+
+## S3b-1 — принято в main, 2026-10-25
+
+| Gate | Точный результат |
+|---|---|
+| main | 02be917 (#134, дерево совпадает с головой ветки 66e95fa), затем 3aef663 (#135, шардирование CI) |
+| [CI40232231244](https://github.com/vrata-labs/platform/actions/runs/40232231244) на 02be917 | Failure, заменён: portal-managed-grants («socket hang up» на закрытии комнаты) и room-plugin-seating (известная нестабильность). Портальный тест на том же коде зелёный в CI 3445a5c, 3aef663 и в двух полных local |
+| [CI40238055052](https://github.com/vrata-labs/platform/actions/runs/40238055052) на 3aef663 | Success, четыре шарда, 259 тестов |
+| [Staging40238386915](https://github.com/vrata-labs/platform/actions/runs/40238386915) | Автодеплой main: 81 passed + Rutube 1/1, опубликован 3aef663; шаг чтения состояния каталога (#132) впервые отработал на хосте с активным каталогом |
+
+- Автодеплой 02be917 ([40232517961](https://github.com/vrata-labs/platform/actions/runs/40232517961)) остановился на ожидании CI до выкатки, как и ожидалось до #135. Аренда стенда ad7c094b освобождена после gate 3aef663.
