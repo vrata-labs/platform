@@ -3,7 +3,7 @@ name: vrata-stage-transient-provider-retry
 date: 2026-10-25
 source: сессия 2026-10-25, переключение stage платформы на создание по требованию
 area: infra
-status: new
+status: promoted
 priority: P2
 jira: не заведена
 ---
@@ -41,4 +41,8 @@ jira: не заведена
 - Сбой опроса в ожидании пропускается до общего дедлайна.
 
 Сервер Selectel в `ERROR` после создания («Failed to allocate the network(s)») по-прежнему переводит стенд в `failed` без повтора: пункт остаётся открытым для этой части.
+
+## Сделано 2026-10-26: повтор сборки сервера
+
+26.10 сборка сервера ещё раз упала с «Failed to allocate the network(s)». Теперь `up` удаляет свой сервер в `ERROR` и собирает его заново, всего до трёх сборок с паузами 30 и 60 с. Повторяются только временные ошибки Nova: «Failed to allocate the network», «No valid host was found» и «Exceeded maximum number of retries». Квоты, образ и flavor сразу переводят создание в `failed`. Плавающий IP привязывается только к собранному серверу. Пункт закрыт.
 

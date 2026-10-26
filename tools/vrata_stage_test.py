@@ -39,6 +39,9 @@ class FakeCloud:
     def create_server(self, body):
         server_id = f"srv-{len(self.calls)}"
         self.servers[server_id] = {"id": server_id, "name": body["name"], "status": "ACTIVE", "metadata": body["metadata"]}
+        fault = self.build_faults.pop(0) if getattr(self, "build_faults", None) else None
+        if fault:
+            self.servers[server_id].update(status="ERROR", fault={"code": 500, "message": fault})
         self.ports[server_id] = [{"id": "port-" + server_id}]
         self.calls.append(("create", body))
         return server_id
@@ -426,6 +429,35 @@ class CreationTests(Base):
         self.assertEqual(body["imageRef"], "img")
         self.assertEqual(body["security_groups"], [{"name": "edge"}])
         self.assertEqual(self.state()["server"]["sha"], "a" * 40)
+
+    def test_a_transient_build_fault_is_deleted_and_built_again(self):
+        self.cloud.build_faults = ["Build of instance x aborted: Failed to allocate the network(s), not rescheduling."]
+        sleeps = []
+        self.stands.sleep = sleeps.append
+        result = self.stands.up("demo")
+        self.assertEqual(result["phase"], "ready")
+        self.assertEqual([call[0] for call in self.cloud.calls], ["create", "delete", "create", "associate"])
+        self.assertEqual(list(self.cloud.servers), [result["server"]])
+        self.assertEqual(self.state()["server"]["id"], result["server"])
+        self.assertIn("build_retried", [event["event"] for event in self.state()["history"]])
+        self.assertIn(30, sleeps)
+
+    def test_other_build_faults_and_the_last_attempt_fail_the_creation(self):
+        self.stands.sleep = lambda seconds: None
+        self.cloud.build_faults = ["Quota exceeded for cores: Requested 4, but already used 20 of 20 cores"]
+        with self.assertRaisesRegex(vs.StageError, "server_error:.*Quota exceeded"):
+            self.stands.up("demo")
+        self.assertEqual([call[0] for call in self.cloud.calls], ["create"])
+        self.assertEqual(self.state()["phase"], "failed")
+        self.cloud.calls.clear()
+        self.set_state(phase="absent", server=None, op=None)
+        for server_id in list(self.cloud.servers):
+            self.cloud.servers.pop(server_id)
+        self.cloud.build_faults = ["No valid host was found. There are not enough hosts available."] * 3
+        with self.assertRaisesRegex(vs.StageError, "No valid host"):
+            self.stands.up("demo")
+        self.assertEqual([call[0] for call in self.cloud.calls], ["create", "delete", "create", "delete", "create"])
+        self.assertEqual(self.state()["phase"], "failed")
 
     def test_sha_published_during_creation_is_reported(self):
         shas = iter(["a" * 40, "c" * 40])

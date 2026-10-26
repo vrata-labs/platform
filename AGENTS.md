@@ -235,5 +235,5 @@ The staging stand exists only while a session, CI or the owner needs it, and is 
 - After staging verification, when abandoning the task or switching to work without the stand: `vrata-stage release <lease>`. The last release removes the stand after a pause unless a CI run still uses it.
 - Never release or shorten leases of others; show a suspicious lease to the user. `vrata-stage down --force` only on the user's explicit request.
 - A failed creation (no capacity in `ru-2c`, provider error, failed bootstrap deploy) is a blocker: report it with `vrata-stage status platform` and the log it names; do not create servers by hand.
-- `vrata-stage` repeats gh calls that fail on the network or on GitHub's side. Starting a workflow is never repeated blindly: after a lost answer the hook looks for its run by request id and dispatches again with the same id only if no run appeared.
+- `vrata-stage` rebuilds a server whose build ends in a transient Nova fault (network allocation, no valid host), three builds at most, and repeats gh calls that fail on the network or on GitHub's side. Starting a workflow is never repeated blindly: after a lost answer the hook looks for its run by request id and dispatches again with the same id only if no run appeared.
 - Final reports after staging work name the lease id, whether it was released, and the stand phase.
