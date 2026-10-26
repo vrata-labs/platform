@@ -5328,6 +5328,9 @@ function applyIssue(issue: RuntimeIssue, input: {
   roomStateLabel?: string;
   updateStatus?: boolean;
 }): void {
+  // A stopped session (paused, ended, removed, left) keeps its own status: a request that fails late because of the stop
+  // must not turn it into "realtime unavailable".
+  if (sessionControlBlocked) return;
   if (input.roomStateLabel) {
     setRoomStateStatus(input.roomStateLabel);
   }
