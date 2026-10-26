@@ -46,6 +46,8 @@ test("platform stand hook gives both keys to cloud-init and keeps the admin toke
   }
   const hook = readFileSync(new URL("../infra/staging/on-demand-hook.sh", import.meta.url), "utf8");
   assert.match(hook, /bootstrap=true/);
+  assert.match(hook, /-f "activate_identity_v2=\$\{STAGE_IDENTITY_V2:-true\}" \\\n\s+-f "activate_media_codec3=\$\{STAGE_MEDIA_CODEC3:-true\}"/,
+    "a fresh stand raises the identity floor and then the media codec boundary in its bootstrap deploy");
   assert(hook.indexOf("staging-deploy.yml") < hook.indexOf("--workflow template-catalog.yml"), "the catalog is activated after the bootstrap deploy");
   assert.match(hook, /-f operation=activate -f "expected_image_sha=\$STAGE_DEPLOY_SHA"/);
   assert.match(hook, /<"\$STAGE_ADMIN_TOKEN"/);

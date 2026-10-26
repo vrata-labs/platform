@@ -50,9 +50,11 @@ PY
     remote "sudo python3 /tmp/vrata-admin-token.py /opt/vrata/infra/docker/.env.staging && rm -f /tmp/vrata-admin-token.py /tmp/vrata-ci.pub" <"$STAGE_ADMIN_TOKEN"
     ;;
   deploy)
-    # A new host has no accepted release: bootstrap, and raise the identity floor before the first gate.
+    # A new host has no accepted release: bootstrap, and raise the identity floor and then the media codec boundary
+    # before the first gate, so a fresh stand matches the activated shared staging. Both raises are irreversible.
     python3 -B "$VRATA_STAGE_BIN" dispatch --repo "$STAGE_REPO" --workflow staging-deploy.yml \
-      -f "deploy_sha=$STAGE_DEPLOY_SHA" -f bootstrap=true -f "activate_identity_v2=${STAGE_IDENTITY_V2:-true}"
+      -f "deploy_sha=$STAGE_DEPLOY_SHA" -f bootstrap=true -f "activate_identity_v2=${STAGE_IDENTITY_V2:-true}" \
+      -f "activate_media_codec3=${STAGE_MEDIA_CODEC3:-true}"
     # Its first gate runs on the Wave 2 catalog and records the Wave 2 marker; the reference catalog that the full
     # staging suite expects is activated only by its own gated transition on the accepted image.
     python3 -B "$VRATA_STAGE_BIN" dispatch --repo "$STAGE_REPO" --workflow template-catalog.yml \
