@@ -18,7 +18,7 @@ UDP echo этого состояния не создают.
 | Room-state | `wss://state.111.88.217.54.sslip.io` |
 | LiveKit | `wss://livekit.111.88.217.54.sslip.io` |
 | Remote browser | `wss://browser.111.88.217.54.sslip.io` |
-| MinIO public objects | `https://storage.111.88.217.54.sslip.io` |
+| Public objects (SeaweedFS, только чтение объектов публичного bucket) | `https://storage.111.88.217.54.sslip.io` |
 | Checkout | `/opt/vrata`, root-owned |
 | Private env | `/opt/vrata/infra/docker/.env.staging`, 0600 |
 | Release / assets / recovery | `/opt/vrata-stage-state`, вне checkout |
@@ -156,7 +156,7 @@ bindings не удаляются; исходные upload-копии можно 
 ## Ошибка и восстановление
 
 До публикации accepted JSON автоматический rollback возвращает предыдущие checkout,
-images, полный scene snapshot и pre-rollout room URLs. PostgreSQL/MinIO volumes
+images, полный scene snapshot и pre-rollout room URLs. Volumes PostgreSQL и хранилища
 сохраняются. Без previous release bootstrap оставляет диагностику и данные для повтора.
 
 После публикации JSON ошибка legacy/baseline — repair, не откат контейнеров.
@@ -195,14 +195,15 @@ Rollback требует доступных YCR images; удаление volumes 
 
 Во время backup исключить одновременную поставку и записи, которые должны попасть в
 единую recovery point. `backup-staging.py` проверяет accepted record, working API
-image и env до экспорта и повторно после; использует общий источник pinned MinIO/MC:
+image и env до экспорта и повторно после. Релиз, принятый ещё на MinIO, экспортируется
+с общим override pinned MinIO/MC; более новый — образами хранилища из своего Compose:
 
 ```bash
 sudo python3 -B /opt/vrata/tools/backup-staging.py --root /opt/vrata \
   --output-dir /opt/vrata-stage-state/backups
 ```
 
-SQL, MinIO inventory/objects, image metadata и accepted JSON входят в checksum manifest.
+SQL, inventory и объекты хранилища, image metadata и accepted JSON входят в checksum manifest.
 Directories получают 0700, файлы 0600. Передать выбранную копию через SSH/tar в
 gitignored `backups/beget-stage/` на рабочей машине и повторно валидировать:
 
@@ -219,11 +220,11 @@ checksum-verified копии; повреждённые/незавершённы�
 1. Создать временный checkout точного accepted image SHA. Взять отдельный env,
    project name `vrata-restore`, loopback ports и новые локальные secrets.
    Не передавать staging env на существующий локальный Compose-проект.
-2. Сформировать override pinned MinIO/MC тем же helper; foundation versions взять
-   из accepted record. Для application repos/tag использовать принятые YCR images.
-3. Запустить отдельные PostgreSQL/MinIO и приложение; явный `COMPOSE_PROJECT_NAME`
+2. Для релиза, принятого на MinIO, сформировать override pinned MinIO/MC тем же helper;
+   foundation versions взять из accepted record. Релиз на SeaweedFS override не требует. Для application repos/tag использовать принятые YCR images.
+3. Запустить отдельные PostgreSQL, хранилище и приложение; явный `COMPOSE_PROJECT_NAME`
    отделяет volumes. Не выполнять build и не использовать рабочие stage volumes.
-4. Восстановить копию, передав оба Compose файла:
+4. Восстановить копию. Для релиза на SeaweedFS `--compose-file "$RESTORE_OVERRIDE"` не передаётся:
 
 ```bash
 node tools/backup-restore.mjs restore --backup-dir "$OFF_HOST_BACKUP" \
@@ -231,8 +232,8 @@ node tools/backup-restore.mjs restore --backup-dir "$OFF_HOST_BACKUP" \
   --compose-file "$RESTORE_OVERRIDE" --smoke-base-url "$RESTORE_URL" --confirm-restore
 ```
 
-5. Сравнить room records, MinIO object inventory и SHA256 контрольного документа;
-   скачать документ из локального восстановленного MinIO. Scene URLs из БД могут
+5. Сравнить room records, inventory объектов и SHA256 контрольного документа;
+   скачать документ из локального восстановленного хранилища. Scene URLs из БД могут
    указывать на stage: для полностью локальной сцены нужны private assets по asset SHA.
 6. Сохранить restore evidence и удалить только временный restore project после проверки.
 

@@ -18,22 +18,9 @@ export const DEFAULT_PUBLIC_DEMO_LOCAL_ENV_PATH = "infra/docker/.env.demo-local.
 export const PUBLIC_DEMO_LOCAL_IMAGES = Object.freeze({
   postgres: "postgres:16@sha256:a3b7f434b2dc57ce85a67e171163eb8ab1a1ebcb39d27484661f26b1dfbe30d6",
   livekit: "livekit/livekit-server:v1.13.9@sha256:d0c04791bf63ca8dcea123571827d56ba9504bd57c8d5de60ee03b5408cc3154",
-  minio: "vrata-demo-minio:5cb1e6309f2bd70e7d0ca77f33782beac1745790deb4c1f94444f1e7dec5fcb6",
-  minioBootstrap: "vrata-demo-mc:a92b5f1af200ca25d54d78432ef6b0c47fd4340abf9759ce5d10275cd57e3318",
+  minio: "chrislusf/seaweedfs:4.51@sha256:f7a49e3f3972ebed5be2ed4befa4a0c68eb7bdddba6e692d42729ceb545134b8",
+  minioBootstrap: "pgsty/mc:RELEASE.2026-10-18T00-00-00Z@sha256:6ecdaec70bc5e8cf9d0e9a70c190f3beb1c83f11617ff4333f1fcd71ab1daf18",
   caddy: "caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b"
-});
-
-const PINNED_LOCAL_BUILDS = Object.freeze({
-  minio: {
-    dockerfile: "infra/docker/minio.demo-local.Dockerfile",
-    checksum: "5cb1e6309f2bd70e7d0ca77f33782beac1745790deb4c1f94444f1e7dec5fcb6",
-    releaseAsset: "minio.linux-amd64.RELEASE.2025-02-28T09-55-16Z"
-  },
-  "minio-bootstrap": {
-    dockerfile: "infra/docker/mc.demo-local.Dockerfile",
-    checksum: "a92b5f1af200ca25d54d78432ef6b0c47fd4340abf9759ce5d10275cd57e3318",
-    releaseAsset: "mc.linux-amd64.RELEASE.2025-03-12T17-29-24Z"
-  }
 });
 
 const SOURCE_SHA_PATTERN = /^[0-9a-f]{40}$/;
@@ -312,13 +299,6 @@ export function assertPublicDemoLocalComposeModel(model, env) {
   assertPinnedImage(services, "minio", PUBLIC_DEMO_LOCAL_IMAGES.minio);
   assertPinnedImage(services, "minio-bootstrap", PUBLIC_DEMO_LOCAL_IMAGES.minioBootstrap);
   assertPinnedImage(services, "caddy", PUBLIC_DEMO_LOCAL_IMAGES.caddy);
-  for (const [serviceName, pinned] of Object.entries(PINNED_LOCAL_BUILDS)) {
-    const service = services[serviceName];
-    if (service.pull_policy !== "build" || service.build?.dockerfile !== pinned.dockerfile) {
-      fail(`public_demo_local_pinned_build_invalid:${serviceName}`);
-    }
-  }
-
   for (const [name, service] of Object.entries(services)) {
     if (typeof service.image === "string" && /(^|:)latest(?:@|$)/i.test(service.image)) {
       fail(`public_demo_local_floating_image:${name}`);
@@ -488,14 +468,6 @@ export function checkPublicDemoLocalCompose(outputPath = DEFAULT_PUBLIC_DEMO_LOC
   if ((statSync(absolute).mode & 0o077) !== 0) fail("public_demo_local_env_not_private");
   const env = parsePublicDemoLocalEnv(readFileSync(absolute, "utf8"));
   assertPublicDemoLocalEnv(env);
-  for (const [serviceName, pinned] of Object.entries(PINNED_LOCAL_BUILDS)) {
-    const dockerfile = readFileSync(resolve(cwd, pinned.dockerfile), "utf8");
-    if (!dockerfile.includes(`ADD --checksum=sha256:${pinned.checksum}`)
-      || !dockerfile.includes(`/releases/download/RELEASE.`)
-      || !dockerfile.includes(`/${pinned.releaseAsset}`)) {
-      fail(`public_demo_local_pinned_build_invalid:${serviceName}`);
-    }
-  }
   const model = JSON.parse(execFileSync("docker", [
     "compose", "--env-file", absolute,
     "-f", "infra/docker/compose.selfhost.yml",

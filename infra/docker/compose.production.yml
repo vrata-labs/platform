@@ -183,22 +183,36 @@ services:
       timeout: 5s
       retries: 10
 
+  # Bundled S3 storage: SeaweedFS (Apache-2.0); MinIO community is archived and unpatched. The service keeps
+  # the name `minio` and port 9000 so the API endpoint, plugin storage fingerprints and accepted releases stay.
   minio:
-    image: minio/minio:RELEASE.2025-02-28T09-55-16Z
-    command: server /data --console-address ":9001"
+    restart: unless-stopped
+    image: chrislusf/seaweedfs:4.51@sha256:f7a49e3f3972ebed5be2ed4befa4a0c68eb7bdddba6e692d42729ceb545134b8
+    entrypoint: ["/bin/sh", "/storage-server.sh"]
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      # Changes with storage-server.sh so that Compose recreates the server (checked by storage-route test).
+      VRATA_STORAGE_SERVER_SHA256: 41146afadab19358dc8b475d6f62db5b84f9eea3ce3678c9a60f17e51d904bcc
     volumes:
-      - minio-data:/data
+      - ./storage-server.sh:/storage-server.sh:ro
+      - storage-data:/data
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9000/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 36
 
   minio-bootstrap:
-    image: minio/mc:RELEASE.2025-03-12T17-29-24Z
+    # S3 client for bootstrap and backup: the maintained multi-arch mc build of the pgsty MinIO fork
+    # (AGPL-3.0, a separate container); upstream MinIO no longer publishes mc images.
+    image: pgsty/mc:RELEASE.2026-10-18T00-00-00Z@sha256:6ecdaec70bc5e8cf9d0e9a70c190f3beb1c83f11617ff4333f1fcd71ab1daf18
     depends_on:
       preflight:
         condition: service_completed_successfully
       minio:
-        condition: service_started
+        condition: service_healthy
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
@@ -293,7 +307,7 @@ services:
       retries: 10
 
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
     networks: [default, remote-browser-internal]
     depends_on:
       preflight:
@@ -314,6 +328,7 @@ services:
       VRATA_STATE_DOMAIN: ${VRATA_STATE_DOMAIN}
       VRATA_LIVEKIT_DOMAIN: ${VRATA_LIVEKIT_DOMAIN}
       VRATA_STORAGE_DOMAIN: ${VRATA_STORAGE_DOMAIN}
+      MINIO_BUCKET: ${MINIO_BUCKET}
       VRATA_IDENTITY_PROXY_TOKEN: ${VRATA_IDENTITY_PROXY_TOKEN:?VRATA_IDENTITY_PROXY_TOKEN is required}
     volumes:
       - ${CADDY_CONFIG_FILE}:/etc/caddy/Caddyfile:ro
@@ -323,7 +338,7 @@ services:
 
 volumes:
   postgres-data:
-  minio-data:
+  storage-data:
   caddy-data:
   caddy-config:
 

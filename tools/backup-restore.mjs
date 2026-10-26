@@ -1112,7 +1112,9 @@ async function runRestore(options, operations = {}) {
   const preparation = await legacyRestorePreparation(compose, manifest, dumpTables, captureCompose);
 
   process.stdout.write("[backup] restore_warning=will_apply_postgres_dump_and_replace_minio_bucket_objects\n");
-  // Remove anonymous policy before uploading private bytes, even on a previously public target.
+  // Remove anonymous policy before uploading private bytes, even on a previously public target. SeaweedFS rejects
+  // removing an absent policy, so only an existing one is removed; a failed read or a policy that is still
+  // there after removal stops the restore before any private byte is loaded.
   if (manifest.roomPlugins) {
     const verifyDir = createTempBackupDir();
     mkdirSync(join(verifyDir, "objects"), { mode: 0o700 });
@@ -1121,7 +1123,7 @@ async function runRestore(options, operations = {}) {
         "run", "--rm", "--no-deps", "-v", `${join(backupDir, PLUGIN_ROOT)}:/backup:ro`, "-v", `${verifyDir}:/verify`,
         ...privateMcEnvironment(storage),
         "--entrypoint", "/bin/sh", "minio-bootstrap", "-lc",
-        "mc alias set vrata \"$MINIO_ENDPOINT\" \"$MINIO_ROOT_USER\" \"$MINIO_ROOT_PASSWORD\" >/dev/null && mc mb --ignore-existing \"vrata/$ROOM_PLUGIN_BUCKET\" >/dev/null && mc anonymous set none \"vrata/$ROOM_PLUGIN_BUCKET\" >/dev/null && mc mirror --overwrite --remove /backup/objects \"vrata/$ROOM_PLUGIN_BUCKET\" >/dev/null && mc anonymous get-json \"vrata/$ROOM_PLUGIN_BUCKET\" > /verify/bucket-policy.json && mc mirror --overwrite \"vrata/$ROOM_PLUGIN_BUCKET\" /verify/objects >/dev/null && mc ls --json --recursive \"vrata/$ROOM_PLUGIN_BUCKET\" > /verify/objects.jsonl"
+        "mc alias set vrata \"$MINIO_ENDPOINT\" \"$MINIO_ROOT_USER\" \"$MINIO_ROOT_PASSWORD\" >/dev/null && mc mb --ignore-existing \"vrata/$ROOM_PLUGIN_BUCKET\" >/dev/null && policy=$(mc anonymous get-json \"vrata/$ROOM_PLUGIN_BUCKET\") && { [ \"$policy\" = '{}' ] || mc anonymous set none \"vrata/$ROOM_PLUGIN_BUCKET\" >/dev/null; } && [ \"$(mc anonymous get-json \"vrata/$ROOM_PLUGIN_BUCKET\")\" = '{}' ] && mc mirror --overwrite --remove /backup/objects \"vrata/$ROOM_PLUGIN_BUCKET\" >/dev/null && mc anonymous get-json \"vrata/$ROOM_PLUGIN_BUCKET\" > /verify/bucket-policy.json && mc mirror --overwrite \"vrata/$ROOM_PLUGIN_BUCKET\" /verify/objects >/dev/null && mc ls --json --recursive \"vrata/$ROOM_PLUGIN_BUCKET\" > /verify/objects.jsonl"
       ]);
       await verifyRestoredPrivateObjects(verifyDir, manifest);
     } finally {

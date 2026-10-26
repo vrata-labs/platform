@@ -8,7 +8,7 @@ Until `v0.1.0` is released, public GHCR images may not exist. From a source chec
 
 - Docker with Compose v2.
 - A Linux host or local Docker environment.
-- Ports for app, room-state, LiveKit, and MinIO. The remote-browser executor remains private to the compose network; Caddy exposes only its token-protected `/frames` WebSocket.
+- Ports for app, room-state and LiveKit; the bundled S3 storage listens on `127.0.0.1` only. The remote-browser executor remains private to the compose network; Caddy exposes only its token-protected `/frames` WebSocket.
 - For public HTTPS deployment: domains or test hostnames for app/state/livekit/browser endpoints.
 
 ## Source-Build Quickstart
@@ -67,7 +67,7 @@ docker compose --env-file infra/docker/.env.selfhost -f infra/docker/compose.sel
 - `VRATA_INTERNAL_SERVICE_TOKEN`: replace with a strong secret.
 - `REMOTE_BROWSER_INTERNAL_TOKEN`: use a separate strong secret for the experimental executor boundary.
 - `POSTGRES_PASSWORD`: replace with a strong password.
-- `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD`: replace with production values.
+- `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD`: replace with production values. They are the S3 key of the bundled storage: printable ASCII without double quotes or backslashes, at least 3 and 8 characters long.
 - `VRATA_APP_BASE_URL`, `ROOM_STATE_PUBLIC_URL`, `LIVEKIT_URL`, and `REMOTE_BROWSER_PUBLIC_URL`: set to the URLs that browsers can reach.
 - `LIVEKIT_NODE_IP`: set to the public IP address advertised by the LiveKit node. Production preflight rejects loopback, private, reserved, and placeholder values.
 - `VRATA_LIVEKIT_TCP_PORT` and `VRATA_LIVEKIT_UDP_PORT`: open these directly on the host for LiveKit WebRTC ICE/TCP fallback and UDP media traffic.
@@ -76,12 +76,21 @@ The bundled compose file runs LiveKit in `--dev` mode for the `0.1` beta quickst
 
 Remote browser is experimental and defaults to `REMOTE_BROWSER_ENABLED=false`. To opt in, set a narrow `REMOTE_BROWSER_ALLOWED_ORIGINS` list and review `REMOTE_BROWSER_MAX_SESSIONS`, `REMOTE_BROWSER_SESSION_TTL_SECONDS`, `REMOTE_BROWSER_CPU_LIMIT`, `REMOTE_BROWSER_MEMORY_LIMIT`, and `REMOTE_BROWSER_PIDS_LIMIT`. Do not expose the executor port directly to untrusted networks.
 
+## Bundled Object Storage
+
+The compose service `minio` runs [SeaweedFS](https://github.com/seaweedfs/seaweedfs) (Apache-2.0) with its S3 gateway on port 9000, pinned by image digest. MinIO community was archived with unpatched advisories and its images are no longer published, so it is not used any more. The service name, the port, the `MINIO_*` variables and the `minio-default` provider are kept for compatibility: the API endpoint and the room-plugin storage fingerprint stay `http://minio:9000`.
+
+- `infra/docker/storage-server.sh` starts the server with one S3 identity, `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`. The API and the bootstrap share it, so the API key can also manage buckets and policies.
+- `minio-bootstrap` and the backup tool use the `mc` client from `pgsty/mc` (the maintained multi-arch build of the pgsty MinIO fork, AGPL-3.0, pinned by digest): upstream MinIO no longer publishes client images. Bootstrap creates the public `MINIO_BUCKET` with an anonymous download policy and the private `ROOM_PLUGIN_BUCKET` without any policy, retrying for about a minute while the storage warms up.
+- Master, volume and filer listen on loopback inside the container; other containers reach only the S3 API and its gRPC port. Self-host publishes the S3 port on `127.0.0.1` for `MINIO_PUBLIC_BASE_URL=http://127.0.0.1:9000`; production and staging publish public objects through Caddy, which passes only `GET`/`HEAD` (and CORS `OPTIONS`) of non-empty keys in the public bucket without a query.
+- For about half a minute after a start the storage refuses writes (its filer lock is not ready yet); conditional writes stay atomic, refused requests are retried by the client.
+
 ## Persistent Data
 
 The self-host compose file stores data in Docker volumes:
 
 - `postgres-data` for room/control-plane data;
-- `minio-data` for scene bundle objects;
+- `storage-data` for scene bundle, document and room-plugin objects;
 - `caddy-data` and `caddy-config` for Caddy state.
 
 Back up these volumes before upgrades. Use `pnpm backup:compose`, validate the produced manifest with `pnpm backup:validate`, and keep the artifacts outside git. See `docs/backup-restore.md` and `docs/upgrades.md`.
@@ -91,7 +100,7 @@ Back up these volumes before upgrades. Use `pnpm backup:compose`, validate the p
 The minimal `0.1` flow is API-driven:
 
 - prepare a scene bundle with `scene.json` and assets;
-- upload it to MinIO or S3-compatible storage;
+- upload it to the bundled or another S3-compatible storage;
 - register scene bundle metadata through the API;
 - bind the bundle to a room;
 - open the room URL and verify diagnostics.

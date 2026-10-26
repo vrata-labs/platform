@@ -8,9 +8,10 @@ URL or boolean privacy declaration can substitute for this private namespace.
 
 ## Provisioning
 
-MinIO bootstrap creates the private bucket idempotently and applies anonymous
-none before applying the existing public bucket's anonymous download policy and
-scene seed. Equal or malformed bucket names stop bootstrap before any policy
+Storage bootstrap (`minio-bootstrap`, the `mc` client against the bundled
+SeaweedFS) creates the private bucket idempotently and leaves it without any
+anonymous policy (an existing one is removed) before applying the public
+bucket's anonymous download policy and scene seed. Equal or malformed bucket names stop bootstrap before any policy
 change. Public scenes/documents retain their existing download policy.
 
 For s3-compatible storage, the operator must create ROOM_PLUGIN_BUCKET and deny
@@ -24,7 +25,7 @@ trusted operator. This check does not migrate or collect historical objects.
 ## Deployed verification
 
 Run after the exact commit is published by the normal git/CI staging pipeline and
-MinIO bootstrap has completed. From the deployed checkout, using its staging env:
+storage bootstrap has completed. From the deployed checkout, using its staging env:
 
 ```sh
 docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml exec -T api node apps/api/dist/plugins/verify-private-storage.js
@@ -38,13 +39,14 @@ is executed, no binding is created and no package is published.
 
 The probe requires byte-exact signed GET after acknowledged signed PUT, then an
 unsigned GET returning exactly 403 against the actual storage endpoint. 200,
-404, redirects, 5xx and network failures fail verification. For MinIO it also
-checks the existing MINIO_PUBLIC_BASE_URL through the storage reverse proxy.
+404, redirects, 5xx and network failures fail verification. For the bundled
+storage it also checks the existing MINIO_PUBLIC_BASE_URL through the storage
+reverse proxy, which answers 403 for anything but public objects.
 ROOM_PLUGIN_ANONYMOUS_ENDPOINT may specify another external storage endpoint
 (without bucket suffix); it is additional to, never a replacement for, the direct
 unsigned check. All API compose variants explicitly forward this optional field;
 an env-file alone does not inject arbitrary variables into containers. Missing,
-empty or whitespace-only overrides fall back to MINIO_PUBLIC_BASE_URL for MinIO.
+empty or whitespace-only overrides fall back to MINIO_PUBLIC_BASE_URL for the bundled storage.
 For custom S3, an absent/blank override means only the mandatory direct check;
 there is no inferred mapping from public assets URLs. Nonblank overrides are
 trimmed and used as supplied: invalid/unreachable routes fail verification, with

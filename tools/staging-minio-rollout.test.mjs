@@ -117,16 +117,24 @@ test("SIGTERM is forwarded and the old Compose source is restored", { timeout: 1
   assert.equal(readFileSync(f.compose, "utf8"), legacy);
 });
 
-test("staging Compose retired Quay manifests are mapped to immutable YCR digests", (t) => {
-  const compose = readFileSync(new URL("../infra/docker/compose.staging.yml", import.meta.url), "utf8");
-  assert.ok(compose.includes(`    image: ${retiredQuayMinio}\n`));
-  assert.ok(compose.includes(`    image: ${retiredQuayMc}\n`));
-  assert.doesNotMatch(compose, /image: minio\//);
-  const f = fixture(t, compose);
+test("retired Quay manifests of releases accepted before SeaweedFS are mapped to immutable YCR digests", (t) => {
+  const historical = `services:\n  minio:\n    image: ${retiredQuayMinio}\n  minio-bootstrap:\n    image: ${retiredQuayMc}\n`;
+  const f = fixture(t, historical);
   assert.equal(run(f).status, 0);
   const used = readFileSync(join(f.dir, "observed.yml"), "utf8");
   assert.ok(used.includes(`    image: ${pinnedMinio}\n`));
   assert.ok(used.includes(`    image: ${pinnedMc}\n`));
+  assert.equal(readFileSync(f.compose, "utf8"), historical);
+});
+
+test("current staging Compose runs pinned SeaweedFS and mc images untouched by the helper", (t) => {
+  const compose = readFileSync(new URL("../infra/docker/compose.staging.yml", import.meta.url), "utf8");
+  assert.match(compose, /\n  minio:\n(?:    .*\n)*?    image: chrislusf\/seaweedfs:[0-9.]+@sha256:[0-9a-f]{64}\n/);
+  assert.match(compose, /\n  minio-bootstrap:\n(?:    .*\n)*?    image: pgsty\/mc:RELEASE\.[0-9TZ-]+@sha256:[0-9a-f]{64}\n/);
+  assert.doesNotMatch(compose, /image: (?:quay\.io\/)?minio\//);
+  const f = fixture(t, compose);
+  assert.equal(run(f).status, 0);
+  assert.equal(readFileSync(join(f.dir, "observed.yml"), "utf8"), compose);
   assert.equal(readFileSync(f.compose, "utf8"), compose);
 });
 

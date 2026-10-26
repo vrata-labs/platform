@@ -31,6 +31,10 @@ Vrata uses SemVer: `MAJOR.MINOR.PATCH`. Until `1.0.0`, breaking changes can happ
 - Personal room mode with self-service owner room creation, owner-only default access, invite guest support, personal workspace template, last pose persistence, runtime entry point, diagnostics, and metrics.
 - Markdown sticky board surface with room-state-synced notes, safe canvas Markdown rendering, move/update/delete actions, permissions, diagnostics, and e2e coverage.
 
+### Changed
+
+- The bundled S3 storage is SeaweedFS instead of MinIO community, which was archived with unpatched advisories (unauthenticated object writes among them) and no longer publishes images. The compose service keeps the name `minio`, port 9000 and the `MINIO_*` variables; data lives in the new `storage-data` volume. The `mc` client of bootstrap and backup comes from the maintained `pgsty/mc` image. Self-host S3 listens on `127.0.0.1` only, and the public storage route in production and staging serves only reads (`GET`/`HEAD`, CORS `OPTIONS`) of public objects. Existing self-host data moves with backup and restore, see `docs/upgrades.md`.
+
 ### Known Limitations
 
 - Asset license audit is still pending.

@@ -39,7 +39,7 @@ curl -fsS http://127.0.0.1:4000/health
 
 Env создаётся один раз без перезаписи, с правами `0600`, отдельными случайными секретами и образом с полным SHA; генератор требует чистое рабочее дерево. Не используйте example env с `devkey/secret` или `LIVEKIT_URL` публичного staging. `--check` анализирует **rendered** Compose model без вывода секретов: опубликованные порты только loopback, API в production mode, dev-role query выключен, LiveKit без `--dev`, с согласованными ключами и TCP/UDP 7881. Система использует собственные Compose project/volumes. Перед активацией учитывайте: она делает три reference templates активными **во всём этом одноразовом локальном каталоге**.
 
-MinIO и mc собираются в local overlay из официальных Linux release binaries с закреплёнными SHA-256 поверх pinned Alpine base: прежние публичные образы MinIO/mc в Quay/Docker Hub больше не доступны для нового pull. Оба внешних бинарника распространяются по GNU AGPLv3; репозиторий VRATA не включает их копии. Сборка ограничена `linux/amd64`; каталог и production/staging Compose остаются без изменений.
+Хранилище (сервис `minio`) — SeaweedFS из Docker Hub, клиент `mc` для bootstrap — образ `pgsty/mc`; оба закреплены по digest и собраны для amd64 и arm64. `mc` распространяется по GNU AGPLv3, SeaweedFS — по Apache-2.0; репозиторий VRATA не включает их копии.
 
 В этом профиле `MINIO_PUBLIC_BASE_URL=http://minio:9000` — адрес **внутри** Compose для серверного чтения PDF. Браузеры получают документы через авторизованные маршруты API; прямые MinIO URL из метаданных не используются как публичные ссылки для демонстрации.
 

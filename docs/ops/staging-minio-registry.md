@@ -1,5 +1,10 @@
 # Staging MinIO registry recovery
 
+> Since the switch to SeaweedFS (October 2026) the compose files no longer run MinIO: the `minio` service is
+> SeaweedFS pinned by digest, and `minio-bootstrap` uses `pgsty/mc` pinned by digest in every recipe. This page and `tools/staging-minio-rollout.py` remain for releases accepted
+> before the switch: their checkouts still reference the retired images, and staging backup of such a release
+> uses the override below.
+
 Staging uses the existing MinIO `RELEASE.2025-02-28T09-55-16Z` and mc
 `RELEASE.2025-03-12T17-29-24Z`. Both original Docker Hub and later Quay images
 stopped serving these releases. The source binaries are still available from
