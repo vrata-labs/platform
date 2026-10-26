@@ -97,24 +97,32 @@ services:
       timeout: 5s
       retries: 10
 
+  # Bundled S3 storage: SeaweedFS (Apache-2.0); MinIO community is archived and unpatched. The service keeps
+  # the name `minio` and port 9000 so the API endpoint, plugin storage fingerprints and accepted releases stay.
   minio:
     restart: unless-stopped
-    image: quay.io/minio/minio:RELEASE.2025-02-28T09-55-16Z@sha256:a929054ae025fa7997857cd0e2a2e3029238e31ad89877326dc032f4c1a14259
-    command: server /data --console-address ":9001"
+    image: chrislusf/seaweedfs:4.51@sha256:f7a49e3f3972ebed5be2ed4befa4a0c68eb7bdddba6e692d42729ceb545134b8
+    entrypoint: ["/bin/sh", "/storage-server.sh"]
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     ports:
       - "127.0.0.1:${MINIO_API_PORT}:9000"
-      - "127.0.0.1:${MINIO_CONSOLE_PORT}:9001"
     volumes:
-      - minio-data:/data
+      - ./storage-server.sh:/storage-server.sh:ro
+      - storage-data:/data
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9000/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 36
 
   minio-bootstrap:
-    image: quay.io/minio/mc:RELEASE.2025-03-12T17-29-24Z@sha256:470f5546b596e16c7816b9c3fa7a78ce4076bb73c2c73f7faeec0c8043923123
+    image: cr.yandex/crp9cm29k6p76hqo8lti/vrata-mc@sha256:d535999f5c4eb01c9c06bd0c068d4bb8f7366a8469fe57e394907190f7feb550
     depends_on:
       minio:
-        condition: service_started
+        condition: service_healthy
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
@@ -228,6 +236,7 @@ services:
       VRATA_LIVEKIT_DOMAIN: ${VRATA_LIVEKIT_DOMAIN}
       VRATA_BROWSER_DOMAIN: ${VRATA_BROWSER_DOMAIN}
       VRATA_STORAGE_DOMAIN: ${VRATA_STORAGE_DOMAIN}
+      MINIO_BUCKET: ${MINIO_BUCKET}
       VRATA_IDENTITY_PROXY_TOKEN: ${VRATA_IDENTITY_PROXY_TOKEN:?VRATA_IDENTITY_PROXY_TOKEN is required}
       VRATA_STAGING_SCENE_ROOT: ${VRATA_STAGING_SCENE_ROOT:-/srv/runtime-public}
     volumes:
@@ -239,7 +248,7 @@ services:
 
 volumes:
   postgres-data:
-  minio-data:
+  storage-data:
   caddy-data:
   caddy-config:
 

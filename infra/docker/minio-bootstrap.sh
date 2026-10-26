@@ -25,7 +25,17 @@ done
 
 mc alias set vrata "${MINIO_ENDPOINT:-http://minio:9000}" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
 mc mb --ignore-existing "vrata/$ROOM_PLUGIN_BUCKET"
-mc anonymous set none "vrata/$ROOM_PLUGIN_BUCKET"
+# SeaweedFS rejects removing a policy that does not exist, so remove only one that is there; a failed read
+# (missing bucket, credentials, network) stops the bootstrap. The bucket must end up without any policy.
+private_policy=$(mc anonymous get-json "vrata/$ROOM_PLUGIN_BUCKET")
+if [ "$private_policy" != "{}" ]; then
+  mc anonymous set none "vrata/$ROOM_PLUGIN_BUCKET"
+  private_policy=$(mc anonymous get-json "vrata/$ROOM_PLUGIN_BUCKET")
+fi
+if [ "$private_policy" != "{}" ]; then
+  printf '%s\n' 'room plugin bucket still has an anonymous policy' >&2
+  exit 1
+fi
 mc mb --ignore-existing "vrata/$MINIO_BUCKET"
 mc anonymous set download "vrata/$MINIO_BUCKET"
 

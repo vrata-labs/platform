@@ -42,5 +42,20 @@ with tempfile.TemporaryDirectory() as directory:
     copies=list((base/"backups").iterdir());assert len(copies)==1
     assert not (copies[0]/"manifest.json").exists()
     assert (copies[0]/"manifest.incomplete.json").exists()
+    current=dict(record,foundationDigests=dict(record["foundationDigests"],minio="docker.io/storage@sha256:"+"1"*64))
+    state.manifest_path.write_text(json.dumps(current));state.legacy_path.write_text(a)
+    def config(server):
+        return json.dumps({"services":{"minio":{"image":server},"minio-bootstrap":{"image":m.minio.PINNED_MC}}})
+    with patch.object(m,"capture",side_effect=["container","registry.example/api:"+a,config("docker.io/storage@sha256:"+"2"*64)]):
+        rejects(lambda:m.backup(root,base/"mismatch"),"foundation_mismatch")
+    commands=[]
+    def export(command,**kwargs):
+        commands.append(command)
+        if command[2]=="backup":
+            output=Path(command[command.index("--backup-dir")+1]);output.mkdir();(output/"manifest.json").write_text("{}")
+        return type("Result",(),{"returncode":0})()
+    with patch.object(m,"capture",side_effect=["container","registry.example/api:"+a,config("docker.io/storage@sha256:"+"1"*64),"registry.example/api:"+a]),patch.object(m.subprocess,"run",side_effect=export):
+        assert m.backup(root,base/"current")["validated"]
+    assert commands[0][2]=="backup" and commands[0].count("--compose-file")==1,commands[0]
 `], { encoding: "utf8" });
 });

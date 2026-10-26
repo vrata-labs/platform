@@ -18,17 +18,12 @@ export const DEFAULT_PUBLIC_DEMO_LOCAL_ENV_PATH = "infra/docker/.env.demo-local.
 export const PUBLIC_DEMO_LOCAL_IMAGES = Object.freeze({
   postgres: "postgres:16@sha256:a3b7f434b2dc57ce85a67e171163eb8ab1a1ebcb39d27484661f26b1dfbe30d6",
   livekit: "livekit/livekit-server:v1.13.9@sha256:d0c04791bf63ca8dcea123571827d56ba9504bd57c8d5de60ee03b5408cc3154",
-  minio: "vrata-demo-minio:5cb1e6309f2bd70e7d0ca77f33782beac1745790deb4c1f94444f1e7dec5fcb6",
-  minioBootstrap: "vrata-demo-mc:a92b5f1af200ca25d54d78432ef6b0c47fd4340abf9759ce5d10275cd57e3318",
+  minio: "chrislusf/seaweedfs:4.51@sha256:f7a49e3f3972ebed5be2ed4befa4a0c68eb7bdddba6e692d42729ceb545134b8",
+  minioBootstrap: "vrata-mc:a92b5f1af200ca25d54d78432ef6b0c47fd4340abf9759ce5d10275cd57e3318",
   caddy: "caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b"
 });
 
 const PINNED_LOCAL_BUILDS = Object.freeze({
-  minio: {
-    dockerfile: "infra/docker/minio.demo-local.Dockerfile",
-    checksum: "5cb1e6309f2bd70e7d0ca77f33782beac1745790deb4c1f94444f1e7dec5fcb6",
-    releaseAsset: "minio.linux-amd64.RELEASE.2025-02-28T09-55-16Z"
-  },
   "minio-bootstrap": {
     dockerfile: "infra/docker/mc.demo-local.Dockerfile",
     checksum: "a92b5f1af200ca25d54d78432ef6b0c47fd4340abf9759ce5d10275cd57e3318",

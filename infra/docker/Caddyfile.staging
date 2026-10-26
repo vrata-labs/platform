@@ -54,7 +54,21 @@
 }
 
 {$VRATA_STORAGE_DOMAIN} {
-  reverse_proxy minio:9000
+  # Public scene and document objects only: GET/HEAD (and CORS preflight) of a non-empty key in the public
+  # bucket, without a query string. Writes, listings, the private plugin bucket and S3 subresources stay on
+  # the internal network; everything else is refused with 403, which the private storage probe expects.
+  @public_object {
+    method GET HEAD OPTIONS
+    path /{$MINIO_BUCKET}/*
+    not path /{$MINIO_BUCKET}/
+    expression `{query} == ""`
+    not expression `{uri}.matches("(?i)%2f|%5c|%00")`
+    not path_regexp (^|/)\.\.(/|$)
+  }
+  handle @public_object {
+    reverse_proxy minio:9000
+  }
+  respond 403
 }
 
 {$VRATA_BROWSER_DOMAIN} {

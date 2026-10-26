@@ -54,25 +54,6 @@ services:
 
   remote-browser: !reset null
 
-  minio:
-    image: vrata-demo-minio:5cb1e6309f2bd70e7d0ca77f33782beac1745790deb4c1f94444f1e7dec5fcb6
-    pull_policy: build
-    build:
-      context: ../..
-      dockerfile: infra/docker/minio.demo-local.Dockerfile
-    ports: !override
-      - target: 9000
-        published: "${MINIO_API_PORT}"
-        host_ip: 127.0.0.1
-        protocol: tcp
-
-  minio-bootstrap:
-    image: vrata-demo-mc:a92b5f1af200ca25d54d78432ef6b0c47fd4340abf9759ce5d10275cd57e3318
-    pull_policy: build
-    build:
-      context: ../..
-      dockerfile: infra/docker/mc.demo-local.Dockerfile
-
   api:
     networks: !override [default]
     depends_on: !override
