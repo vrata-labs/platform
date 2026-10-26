@@ -108,7 +108,7 @@ test("remote browser production service fails closed when disabled", async () =>
     const response = await fetch("http://127.0.0.1:4042/api/sessions", {
       method: "POST",
       headers: { "content-type": "application/json", "x-vrata-internal-token": "internal-test-token" },
-      body: JSON.stringify({ sessionId: "remote-browser:object-1", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId: "remote-browser:object-1", roomId: "room-1", objectId: "object-1", url: "https://example.com" })
+      body: JSON.stringify({ sessionId: "remote-browser:object-1", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId: "remote-browser:object-1:instance:generation-1", roomId: "room-1", objectId: "object-1", url: "https://example.com" })
     });
     assert.equal(response.status, 503);
     assert.equal(((await response.json()) as { error?: string }).error, "remote_browser_disabled");
@@ -134,7 +134,7 @@ test("remote browser production service requires auth and bound session identity
     const invalidBinding = await fetch("http://127.0.0.1:4043/api/sessions", {
       method: "POST",
       headers: { "content-type": "application/json", "x-vrata-internal-token": "internal-test-token" },
-      body: JSON.stringify({ sessionId: "remote-browser:other", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId: "remote-browser:object-1", roomId: "room-1", objectId: "object-1", url: "https://example.com" })
+      body: JSON.stringify({ sessionId: "remote-browser:other", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId: "remote-browser:object-1:instance:generation-1", roomId: "room-1", objectId: "object-1", url: "https://example.com" })
     });
     assert.equal(invalidBinding.status, 400);
     assert.equal(((await invalidBinding.json()) as { error?: string }).error, "invalid_session_binding");

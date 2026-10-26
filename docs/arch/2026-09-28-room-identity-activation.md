@@ -741,7 +741,7 @@ native RPC (two-second timeout), far shorter than creating a remote-browser
 object and starting its session; past the codec-3 boundary the recreated room has
 another native name and the window does not exist.
 
-Not covered here (S3b-3b): whether the connected executor instance is still the
+Not covered here (S3b-3b, below): whether the connected executor instance is still the
 object's current one. The executor identity is shared by every instance of an
 object, so a removal addressed to it could hit a newer instance, and a stale
 instance's JWT would displace the current one on rejoin. Room-state also answers
@@ -750,6 +750,63 @@ a stopped object and a different instance. A real instance lease needs a
 per-instance media identity across API, room-state and the executor, a
 three-state binding answer (authorized, denied, unknown) and the room generation
 in room-state.
+
+### Executor instance lease: T13a-S3b-3b
+
+Each accepted `open-url` already bound a fresh, server-owned executor instance
+(`remote-browser:<objectId>:instance:<revision>`); S3b-3b makes that instance the
+executor's media identity as well. Room-state sets `mediaParticipantId` to the
+instance on open, and room-state, remote-browser and the API token route refuse
+any other media identity, so the shared address `remote-browser:<objectId>` is no
+longer issued. A removal addressed to an old instance therefore can never reach
+the current one, and an old JWT that rejoins does not displace it. Object IDs are
+random UUIDs and revisions never repeat, so an instance is never reissued, even
+after a room-state restart.
+
+Room-state's binding check now classifies its answer: `authorized`, or why not —
+`superseded` (another instance is current), `stopped`, `object_missing`,
+`room_missing`, `inactive` (not on its surface), `failed`, `mismatch`. A stopped
+instance stays stopped: the reducer refuses `mark-publishing`, `mark-active` and
+`mark-failed` after a stop, and only a new `open-url` starts the next instance.
+An instance lives in its object and the object in its room; room-state keeps
+rooms only in memory and restores nothing after a restart. `superseded`,
+`stopped`, `object_missing` and `room_missing` are therefore final for that
+instance: after a room-state restart every old executor is an orphan.
+
+Reconciliation version 5 asks room-state about every executor instance in a room
+that is not terminal (terminal rooms are still handled by version 4 rules):
+
+- the shared legacy address is retired outright;
+- `authorized`, `inactive` and `failed` keep the executor: it is still the
+  object's current instance and can become active again;
+- a final reason retires it, but only if a second answer read immediately before
+  the removal is still final;
+- every other answer (`mismatch`, an unknown reason, an unreachable
+  room-state) is unknown: the executor stays and the room stays `pending`.
+
+The post-read acknowledges only executors confirmed current in the same pass and
+asks room-state about each of them once more: a legacy address, an instance that
+joined during the pass, one that outlived its removal or one that stopped before
+the post-read keeps the room `pending`. Final states are never left, so a keep
+after the observation time held at that time.
+
+This relies on one room-state process owning the rooms of a deployment and on
+the API asking that process (`ROOM_STATE_INTERNAL_URL`), the same check that
+issues the executor's media token; the room ID it asks about is the platform room
+ID parsed from the native room name, which is also room-state's key.
+
+A disabled room still does not retire its executor by itself (version 4 rule),
+but disabling disconnects the object's owner, room-state drops the owner's
+remote-browser object, and the instance is then retired as `object_missing`.
+The owned lifecycle e2e checks both sides: before disable the room is observed
+with the current instance kept, after disable or delete the executor is gone.
+
+Delivery consequences. The first deploy retires every running legacy executor
+once: open remote browsers stop and must be reopened, because the executor does
+not reconnect. A rollback to a version-4 image no longer recognizes instance
+identities as executors and leaves them alone, which is the behavior before
+S3b-3a. Room generation in room-state (a deleted and recreated room keeps its
+objects under the same room ID) stays in the backlog.
 
 ### Shared staging delivery (floor 1)
 

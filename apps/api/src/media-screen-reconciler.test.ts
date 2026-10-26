@@ -93,7 +93,7 @@ test("public removal evicts only its participant and never sends a competing sou
   await h.reconciler.runOnce();
   assert.equal(h.removals.length, 3); assert.equal(h.updates.length, 0);
   assert.deepEqual(h.rooms.get(mediaRoom)!.map(peer => peer.identity), [others.identity]);
-  assert.equal(h.status().enforcementVersion, 4); assert.equal(h.status().state, "observed");
+  assert.equal(h.status().enforcementVersion, 5); assert.equal(h.status().state, "observed");
 });
 
 test("failed removal, new-SID presence and lost successful removal ACK cannot falsely acknowledge eviction", async () => {
@@ -159,7 +159,7 @@ test("terminal eviction uses the existing fair per-peer budget", async () => {
 
 test("screen reconciliation lowers only unauthorized verified source classes and observes native post-state", async () => {
   const h = harness(), ms = await peer("former", "ms"), s = await peer("former", "s"), mic = await peer("former", "m"), current = await peer("current", "ms");
-  h.rooms.set(mediaRoom, [ms, s, mic, current, new ParticipantInfo({ identity: "remote-browser:executor" })]);
+  h.rooms.set(mediaRoom, [ms, s, mic, current, new ParticipantInfo({ identity: "remote-browser:executor:instance:1" })]);
   const microphoneSid = ms.tracks[0].sid;
   await h.reconciler.runOnce();
   assert.equal(h.updates.length, 2);
@@ -175,7 +175,7 @@ test("screen reconciliation lowers only unauthorized verified source classes and
 
 test("missing native room is observed only after an independent scan and a stable authority read", async () => {
   const h = harness(); assert.equal(h.status().state, "pending");
-  await h.reconciler.runOnce(); assert.deepEqual(h.status(), { enforcementVersion: 4, state: "observed", desiredVersion: { authorityRevision: 3, roomActive: true }, observedAtMs: 1000, nativeRoom: "absent" });
+  await h.reconciler.runOnce(); assert.deepEqual(h.status(), { enforcementVersion: 5, state: "observed", desiredVersion: { authorityRevision: 3, roomActive: true }, observedAtMs: 1000, nativeRoom: "absent" });
   h.setDesired({ tenantId: "tenant", authority: { revision: 4, roomActive: true, publisherParticipantIds: [] } });
   assert.equal(h.status().state, "pending");
 });
@@ -362,7 +362,7 @@ test("a recovery between the decision read and the RPC skips the obsolete evicti
 
 test("after the codec-3 boundary every codec-2 room is retired and blocks the room's observation until it is empty", async () => {
   const h = harness({ maxRooms: 1 }, 3);
-  h.rooms.set(mediaRoom, [await peer("current", "m"), await peer("current", "ms"), new ParticipantInfo({ identity: "remote-browser:executor" })]);
+  h.rooms.set(mediaRoom, [await peer("current", "m"), await peer("current", "ms"), new ParticipantInfo({ identity: "remote-browser:executor:instance:1" })]);
   h.rooms.set(v3Room, [await peer("current", "ms", v3Room, 1)]);
   h.setDesired({ tenantId: "tenant", authority: { revision: 3, roomActive: true, publisherParticipantIds: ["current"], mediaIncarnation: incarnation } });
   // Rooms are visited in name order; the codec-3 room first, while the codec-2 sibling still has users.
@@ -371,7 +371,7 @@ test("after the codec-3 boundary every codec-2 room is retired and blocks the ro
   assert.equal(h.status().state, "pending", "a retired generation is swept, not observed");
   await h.reconciler.runOnce(); assert.equal(h.status().state, "observed");
   assert.deepEqual(h.removals.map(value => value.room), [mediaRoom, mediaRoom, mediaRoom]);
-  assert.ok(h.removals.some(value => value.identity === "remote-browser:executor"));
+  assert.ok(h.removals.some(value => value.identity === "remote-browser:executor:instance:1"));
   assert.equal(h.rooms.get(v3Room)!.length, 1);
 });
 
@@ -415,9 +415,9 @@ test("a retired generation with a user beyond the selected portion invalidates t
   h.setDesired({ tenantId: "tenant", authority: { revision: 3, roomActive: true, publisherParticipantIds: [], mediaIncarnation: incarnation } });
   await h.reconciler.runOnce(); assert.equal(h.status().state, "observed");
   // The executor sorts first and fills the one-peer portion; the user is outside it.
-  h.rooms.set(mediaRoom, [new ParticipantInfo({ identity: "remote-browser:executor" }), await peer("current", "ms")]);
+  h.rooms.set(mediaRoom, [new ParticipantInfo({ identity: "remote-browser:executor:instance:1" }), await peer("current", "ms")]);
   await h.reconciler.runOnce();
-  assert.deepEqual(h.removals.map(value => value.identity), ["remote-browser:executor"], "only the selected portion is swept this pass");
+  assert.deepEqual(h.removals.map(value => value.identity), ["remote-browser:executor:instance:1"], "only the selected portion is swept this pass");
   assert.equal(h.status().state, "pending");
 });
 
@@ -458,7 +458,7 @@ test("a portal-managed room's previous access epoch is a retired generation; the
 });
 
 for (const state of ["deleted", "ended", "retired"] as const) test(`a remote-browser executor in a ${state} room is retired`, async () => {
-  const h = harness({}, state === "retired" ? 3 : 2), executor = new ParticipantInfo({ identity: "remote-browser:object-1" });
+  const h = harness({}, state === "retired" ? 3 : 2), executor = new ParticipantInfo({ identity: "remote-browser:object-1:instance:1" });
   h.rooms.set(mediaRoom, [executor]);
   h.setDesired(state === "deleted" ? { tenantId: null, authority: null }
     : { tenantId: "tenant", authority: { revision: 4, roomActive: state !== "ended", roomEnded: state === "ended", publisherParticipantIds: [],
@@ -469,7 +469,7 @@ for (const state of ["deleted", "ended", "retired"] as const) test(`a remote-bro
 });
 
 test("a disabled room and a current active room keep their executor", async () => {
-  const h = harness(), executor = new ParticipantInfo({ identity: "remote-browser:object-1" });
+  const h = harness(), executor = new ParticipantInfo({ identity: "remote-browser:object-1:instance:1" });
   h.rooms.set(mediaRoom, [executor, await peer("member", "m")]);
   h.setDesired({ tenantId: "tenant", authority: { revision: 4, roomActive: false, roomEnded: false, publisherParticipantIds: [] } });
   await h.reconciler.runOnce();
@@ -480,10 +480,96 @@ test("a disabled room and a current active room keep their executor", async () =
 });
 
 test("an ended room is not observed while its executor survives a failed removal", async () => {
-  const h = harness(), executor = new ParticipantInfo({ identity: "remote-browser:object-1" });
+  const h = harness(), executor = new ParticipantInfo({ identity: "remote-browser:object-1:instance:1" });
   h.rooms.set(mediaRoom, [executor]);
   h.setDesired({ tenantId: "tenant", authority: { revision: 4, roomActive: false, roomEnded: true, publisherParticipantIds: [] } });
   h.failRemoval(true); await h.reconciler.runOnce(); assert.equal(h.status().state, "pending");
   h.failRemoval(false); await h.reconciler.runOnce(); await h.reconciler.runOnce();
   assert.equal(h.removals.length, 1); assert.equal(h.status().state, "observed");
+});
+
+test("the shared legacy executor address is retired even in a current active room", async () => {
+  const h = harness(), legacy = new ParticipantInfo({ identity: "remote-browser:object-1" }), instance = new ParticipantInfo({ identity: "remote-browser:object-1:instance:2" });
+  h.rooms.set(mediaRoom, [legacy, instance, await peer("current", "ms")]);
+  await h.reconciler.runOnce();
+  assert.deepEqual(h.removals.map(value => value.identity), [legacy.identity]);
+  assert.equal(h.status().state, "observed");
+  // A legacy connection that outlives its removal is never acknowledged.
+  h.rooms.set(mediaRoom, [legacy, instance]); h.keepRemovedPeer(true);
+  await h.reconciler.runOnce(); assert.equal(h.status().state, "pending");
+});
+
+/** Executor authority answers queued per call; the last one repeats. */
+function executorAnswers(...answers: Array<{ reason: string } | null>) {
+  const asked: Array<{ roomId: string; objectId: string; instanceId: string }> = [];
+  return { asked, executorAuthority: async (roomId: string, executor: { objectId: string; instanceId: string }) => {
+    asked.push({ roomId, ...executor });
+    const answer = answers.length > 1 ? answers.shift()! : answers[0]!;
+    return answer && { reason: answer.reason };
+  } };
+}
+
+for (const reason of ["superseded", "stopped", "object_missing", "room_missing"]) test(`an executor instance room-state reports ${reason} is retired`, async () => {
+  const answers = executorAnswers({ reason }), h = harness({ executorAuthority: answers.executorAuthority });
+  const executor = new ParticipantInfo({ identity: "remote-browser:object-1:instance:3" });
+  h.rooms.set(mediaRoom, [executor]);
+  await h.reconciler.runOnce();
+  assert.deepEqual(answers.asked.slice(0, 2), [{ roomId, objectId: "object-1", instanceId: executor.identity }, { roomId, objectId: "object-1", instanceId: executor.identity }],
+    "a fresh answer is read again immediately before the removal");
+  assert.deepEqual(h.removals, [{ room: mediaRoom, identity: executor.identity }]);
+  await h.reconciler.runOnce(); assert.equal(h.status().state, "observed");
+});
+
+test("an executor revived between the decision and the RPC is kept", async () => {
+  const answers = executorAnswers({ reason: "stopped" }, { reason: "authorized" }), h = harness({ executorAuthority: answers.executorAuthority });
+  h.rooms.set(mediaRoom, [new ParticipantInfo({ identity: "remote-browser:object-1:instance:3" })]);
+  await h.reconciler.runOnce();
+  assert.equal(h.removals.length, 0);
+  assert.equal(h.status().state, "pending", "the first answer was not a keep, so the room is not acknowledged");
+  await h.reconciler.runOnce(); assert.equal(h.status().state, "observed");
+});
+
+for (const reason of ["inactive", "failed"]) test(`the current executor instance is kept while ${reason}`, async () => {
+  const h = harness({ executorAuthority: executorAnswers({ reason }).executorAuthority });
+  h.rooms.set(mediaRoom, [new ParticipantInfo({ identity: "remote-browser:object-1:instance:3" })]);
+  await h.reconciler.runOnce();
+  assert.equal(h.removals.length, 0); assert.equal(h.status().state, "observed");
+});
+
+for (const answer of [null, { reason: "mismatch" }, { reason: "future_reason" }])
+  test(`an executor instance with ${answer?.reason ?? "no"} room-state answer stays and keeps the room pending`, async () => {
+    const h = harness({ executorAuthority: executorAnswers(answer).executorAuthority });
+    h.rooms.set(mediaRoom, [new ParticipantInfo({ identity: "remote-browser:object-1:instance:3" })]);
+    await h.reconciler.runOnce(); await h.reconciler.runOnce();
+    assert.equal(h.removals.length, 0); assert.equal(h.status().state, "pending");
+  });
+
+test("an authorized executor is kept, and one that joins during the pass is not acknowledged unasked", async () => {
+  const answers = executorAnswers({ reason: "authorized" }), h = harness({ executorAuthority: answers.executorAuthority });
+  const current = new ParticipantInfo({ identity: "remote-browser:object-1:instance:3" });
+  h.rooms.set(mediaRoom, [current]);
+  let reads = 0;
+  // The second participant read of the room is the post-read: a new instance appears just before it.
+  h.onList(room => { if (room === mediaRoom && ++reads === 2) h.rooms.get(room)!.push(new ParticipantInfo({ identity: "remote-browser:object-1:instance:4" })); });
+  await h.reconciler.runOnce();
+  assert.equal(h.removals.length, 0); assert.equal(h.status().state, "pending");
+  await h.reconciler.runOnce(); assert.equal(h.status().state, "observed");
+  assert.equal(h.removals.length, 0);
+});
+
+test("a kept executor that stops before the post-read is not acknowledged", async () => {
+  const h = harness({ executorAuthority: executorAnswers({ reason: "failed" }, { reason: "stopped" }).executorAuthority });
+  h.rooms.set(mediaRoom, [new ParticipantInfo({ identity: "remote-browser:object-1:instance:3" })]);
+  await h.reconciler.runOnce();
+  assert.equal(h.removals.length, 0); assert.equal(h.status().state, "pending");
+  await h.reconciler.runOnce(); assert.equal(h.removals.length, 1);
+  await h.reconciler.runOnce(); assert.equal(h.status().state, "observed");
+});
+
+test("an executor instance that outlives a confirmed removal is not acknowledged", async () => {
+  const h = harness({ executorAuthority: executorAnswers({ reason: "superseded" }).executorAuthority });
+  h.rooms.set(mediaRoom, [new ParticipantInfo({ identity: "remote-browser:object-1:instance:3" })]);
+  h.keepRemovedPeer(true);
+  await h.reconciler.runOnce(); await h.reconciler.runOnce();
+  assert.equal(h.removals.length, 2); assert.equal(h.status().state, "pending");
 });

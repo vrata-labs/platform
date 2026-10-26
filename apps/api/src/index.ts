@@ -315,7 +315,8 @@ const { metrics, apiMetricsText } = createApiMetrics(activePresenceRooms,
   () => { cleanupAllPresence(); virtualPresence.cleanupAllPresence(); },
   () => activeParticipantCount() + virtualPresence.activeParticipantCount());
 const mediaScreenService = createMediaScreenService(storagePromise, {
-  event: outcome => incrementCounter(metrics.mediaScreenReconciliationTotal, outcome)
+  event: outcome => incrementCounter(metrics.mediaScreenReconciliationTotal, outcome),
+  internalHeaders: () => getInternalServiceHeaders()
 });
 const routeRoomNotesRequest = createRoomNotesRoutes({ metrics, resolveControlPlaneActor, getRequestId, logEvent, runGuardedRoomEffect,
   deniedEffectReason: error => error instanceof RoomEffectPermissionDenied ? "permission_denied"
@@ -400,7 +401,8 @@ export function isRemoteBrowserIdentityBinding(input: { objectId: string; execut
   return input.executorSessionId === expectedSessionId
     && input.executorInstanceId.startsWith(`${expectedSessionId}:instance:`)
     && input.executorInstanceId.length > `${expectedSessionId}:instance:`.length
-    && (input.mediaParticipantId === undefined || input.mediaParticipantId === expectedSessionId)
+    // The executor's media identity is its instance: a stale instance never shares an address with the current one.
+    && (input.mediaParticipantId === undefined || input.mediaParticipantId === input.executorInstanceId)
     && (input.frameStreamId === undefined || input.frameStreamId === `${expectedSessionId}:frames`);
 }
 

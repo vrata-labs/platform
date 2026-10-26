@@ -1157,14 +1157,16 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
       return null;
     }
     const executorSessionId = current.executorSessionId ?? `remote-browser:${objectId}`;
-    const mediaParticipantId = current.mediaParticipantId ?? executorSessionId;
+    // The media identity is the instance: an older instance's connection is a different address, so its removal
+    // never reaches the current one and its rejoin never displaces it.
+    const executorInstanceId = `${executorSessionId}:instance:${generation}`;
     return {
       ...current,
       status: "loading",
       controllerParticipantId: current.controllerParticipantId ?? participantId,
       executorSessionId,
-      executorInstanceId: `${executorSessionId}:instance:${generation}`,
-      mediaParticipantId,
+      executorInstanceId,
+      mediaParticipantId: executorInstanceId,
       mediaTrackSid: undefined,
       audioTrackSid: undefined,
       mediaSourceRect: undefined,
@@ -1181,7 +1183,8 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
     };
   }
   if (patch.type === "mark-publishing") {
-    if (!current.executorSessionId) {
+    // A stopped instance stays stopped; only open-url starts a new one. Its media identity is the instance.
+    if (!current.executorSessionId || current.status === "stopped" || patch.mediaParticipantId.trim() !== current.executorInstanceId) {
       return null;
     }
     return {
@@ -1199,7 +1202,7 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
     };
   }
   if (patch.type === "mark-active") {
-    if (!current.executorSessionId || current.mediaParticipantId !== patch.mediaParticipantId.trim()) {
+    if (!current.executorSessionId || current.status === "stopped" || current.mediaParticipantId !== patch.mediaParticipantId.trim()) {
       return null;
     }
     return {
@@ -1253,6 +1256,10 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
     };
   }
   if (patch.type === "mark-failed") {
+    // Failure is recoverable, stop is not: a stopped instance must not turn failed and then publish again.
+    if (current.status === "stopped") {
+      return null;
+    }
     return {
       ...current,
       status: "failed",

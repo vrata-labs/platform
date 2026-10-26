@@ -8,8 +8,13 @@ import type { MediaBoundary } from "./identity/protocol.js";
 import { mustEvictExecutorMedia, mustEvictUserMedia, screenSourceLowering, screenSourcesRetired, verifiedSourcePeer } from "./media-source-permissions.js";
 
 /** 3: eviction also checks the selected identity lineage (revocation, absence, codec-3 epoch) and the room generation.
- * 4: remote-browser executor connections are retired in missing, ended and retired-generation native rooms. */
-export const MEDIA_RECONCILIATION_VERSION = 4;
+ * 4: remote-browser executor connections are retired in missing, ended and retired-generation native rooms.
+ * 5: an executor instance is retired once room-state confirms it can never be current again; the shared legacy
+ *    executor address is retired outright. */
+export const MEDIA_RECONCILIATION_VERSION = 5;
+
+/** Room-state's answer for one executor instance; null when room-state cannot be asked. */
+export interface ExecutorAuthorityAnswer { readonly reason: string }
 
 export interface MediaScreenAuthority {
   readonly tenantId: string | null;
@@ -48,8 +53,19 @@ const lineage = (value: MediaScreenAuthority, participantIds: readonly string[])
   return [id, state ? [state.epoch, state.active] : null];
 }));
 const userPeer = (peer: Pick<ParticipantInfo, "identity">) => !peer.identity.startsWith("remote-browser:");
-/** The executor identity of one object; it carries no binding attribute and is never a user. */
-const executorPeer = (peer: Pick<ParticipantInfo, "identity">) => /^remote-browser:[^:]+$/.test(peer.identity);
+/** The one classifier for executor connections: the shared legacy object address, or one instance's own address. */
+type ExecutorAddress = { kind: "legacy"; objectId: string } | { kind: "instance"; objectId: string; instanceId: string };
+function executorAddress(identity: string): ExecutorAddress | null {
+  const legacy = /^remote-browser:([^:]+)$/.exec(identity);
+  if (legacy) return { kind: "legacy", objectId: legacy[1]! };
+  const instance = /^remote-browser:([^:]+):instance:[^:]+$/.exec(identity);
+  return instance ? { kind: "instance", objectId: instance[1]!, instanceId: identity } : null;
+}
+const executorPeer = (peer: Pick<ParticipantInfo, "identity">) => executorAddress(peer.identity) !== null;
+/** These reasons never become authorized again for the same instance: room-state restores no room or object. */
+const TERMINAL_EXECUTOR_REASONS = new Set(["superseded", "stopped", "object_missing", "room_missing"]);
+/** The object's current instance, even off its surface or failed: it can become active again. */
+const CURRENT_EXECUTOR_REASONS = new Set(["authorized", "inactive", "failed"]);
 
 /** Reconstruct desired state from durable authority, not a process-local transition queue.
  * Permission writes use the fixed class lowering; public removal, inactive rooms, retired
@@ -61,6 +77,8 @@ export function createMediaScreenReconciler(input: {
   context: () => Promise<Context | null>;
   /** Selected participants are read in one snapshot with the room authority; read errors throw. */
   authority: (roomId: string, participantIds?: readonly string[]) => Promise<MediaScreenAuthority>;
+  /** Whether one executor instance is still its object's current one; absent means instances are never retired. */
+  executorAuthority?: (roomId: string, executor: { objectId: string; instanceId: string }) => Promise<ExecutorAuthorityAnswer | null>;
   event?: (event: "observed" | "pending" | "unavailable" | "lowered" | "evicted") => void;
   now?: () => number;
   intervalMs?: number;
@@ -110,6 +128,18 @@ export function createMediaScreenReconciler(input: {
    * and a portal-managed room by any other access epoch (an unmanaged room has none). */
   const retired = (context: Context, room: OwnedMediaRoom, desired: MediaScreenAuthority) => (room.codec === 2
     ? context.codec >= 3 : desired.authority?.mediaIncarnation !== room.incarnation) || room.epoch !== (desired.accessEpoch ?? null);
+  /** "evict" only for a confirmed permanent loss of authority; anything uncertain keeps the executor. */
+  async function executorDecision(roomId: string, peer: ParticipantInfo): Promise<"keep" | "evict" | "unknown"> {
+    const address = executorAddress(peer.identity);
+    if (!address) return "unknown";
+    // The shared object address is no longer issued; such a connection predates per-instance media identities.
+    if (address.kind === "legacy") return "evict";
+    if (!input.executorAuthority) return "keep";
+    const answer = await input.executorAuthority(roomId, { objectId: address.objectId, instanceId: address.instanceId });
+    if (!answer) return "unknown";
+    if (CURRENT_EXECUTOR_REASONS.has(answer.reason)) return "keep";
+    return TERMINAL_EXECUTOR_REASONS.has(answer.reason) ? "evict" : "unknown";
+  }
   async function verify(room: OwnedMediaRoom, peer: ParticipantInfo): Promise<UserMediaBinding | null> {
     const binding = await verifiedSourcePeer(room.name, peer);
     // A room name fixes its codec; a binding of the other codec is unverified here.
@@ -152,12 +182,26 @@ export function createMediaScreenReconciler(input: {
       };
       let complete = peers.length <= maxPeers;
       let visited = 0;
+      /** Executors confirmed current in this pass; the post-read acknowledges no other executor connection. */
+      const keptExecutors = new Set<string>();
       for (const { info: peer, binding } of verified) {
         if (!alive(captured)) return;
         if (now() >= deadline) { complete = false; break; }
         peerCursors.set(room.name, start + ++visited);
         if (executorPeer(peer)) {
-          if (!mustEvictExecutorMedia(desired.authority, stale)) continue;
+          if (!mustEvictExecutorMedia(desired.authority, stale)) {
+            const decision = await executorDecision(roomId, peer);
+            if (!alive(captured)) return;
+            if (decision === "keep") keptExecutors.add(peer.identity);
+            if (decision === "unknown") complete = false;
+            // A fresh answer immediately before the RPC; the address is this instance's own, so it cannot hit another.
+            if (decision !== "evict" || await executorDecision(roomId, peer) !== "evict") continue;
+            if (!alive(captured)) return;
+            await context.native.removeParticipant(room.name, peer.identity);
+            if (!alive(captured)) return;
+            emit("evicted");
+            continue;
+          }
           if (!await recheck()) { complete = false; break; }
           if (!alive(captured)) return;
           await context.native.removeParticipant(room.name, peer.identity);
@@ -201,7 +245,14 @@ export function createMediaScreenReconciler(input: {
       let executorsPresent = false;
       for (const info of currentPeers.slice(0, maxPeers)) {
         if (!alive(captured)) return;
-        if (executorPeer(info)) { executorsPresent = true; continue; }
+        if (executorPeer(info)) {
+          executorsPresent = true;
+          // A legacy address, an instance not asked in this pass or one that outlived its removal is not acknowledged.
+          // A kept one is asked again: a final state is never left, so a keep after observedAtMs held at that time.
+          if (!keptExecutors.has(info.identity) || await executorDecision(roomId, info) !== "keep") complete = false;
+          if (!alive(captured)) return;
+          continue;
+        }
         if (!userPeer(info)) continue;
         const binding = await verify(room, info);
         if (!binding) complete = false;
