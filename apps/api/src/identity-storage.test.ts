@@ -137,7 +137,7 @@ for (const backend of ["memory", "postgres"] as const) {
     const initial = await f.ids.screenSourceAuthority(scope);
     assert.match(initial!.observationVersion!, backend === "postgres" ? /^pg:\d+$/ : /^mem:[a-f0-9-]{36}$/);
     assert.match(initial!.mediaIncarnation!, /^[a-f0-9]{32}$/);
-    assert.deepEqual(initial, { revision: 2, roomActive: true, publisherParticipantIds: [host.participantId, presenter.participantId].sort(),
+    assert.deepEqual(initial, { revision: 2, roomActive: true, roomEnded: false, publisherParticipantIds: [host.participantId, presenter.participantId].sort(),
       removedParticipantIds: [], observationVersion: initial!.observationVersion, mediaIncarnation: initial!.mediaIncarnation });
     assert.equal(Object.isFrozen(initial), true);
     for (let index = 0; index < 4; index++) {
@@ -157,12 +157,12 @@ for (const backend of ["memory", "postgres"] as const) {
     const current = (await f.ids.authority(scope))!;
     await f.ids.transition(scope, admin, current.revision, { type: "end" });
     const ended = await f.ids.screenSourceAuthority(scope);
-    assert.deepEqual(ended, { revision: current.revision + 1, roomActive: false, publisherParticipantIds: [],
+    assert.deepEqual(ended, { revision: current.revision + 1, roomActive: false, roomEnded: true, publisherParticipantIds: [],
       removedParticipantIds: [], observationVersion: ended!.observationVersion, mediaIncarnation: initial!.mediaIncarnation });
     const { scope: disabledScope } = await f.makeRoom(false, undefined, false);
     await f.storage.updateRoom(disabledScope.roomId, { status: "disabled" });
     const disabled = await f.ids.screenSourceAuthority(disabledScope);
-    assert.deepEqual(disabled, { revision: 0, roomActive: false, publisherParticipantIds: [],
+    assert.deepEqual(disabled, { revision: 0, roomActive: false, roomEnded: false, publisherParticipantIds: [],
       removedParticipantIds: [], observationVersion: disabled!.observationVersion, mediaIncarnation: disabled!.mediaIncarnation });
     assert.notEqual(disabled!.mediaIncarnation, initial!.mediaIncarnation, "each room record has its own generation");
     await f.storage.deleteRoom(scope.roomId);
