@@ -715,6 +715,12 @@ epoch). A disabled room keeps its executor, because disable is reversible and a
 removed executor would not come back. The same pre-write recheck as for users
 guards the removal; a still-present executor of an ended room keeps the status
 pending, and a sibling generation holding an executor blocks the observation.
+While the boundary is still codec 2, a deleted room recreated with the same ID
+reuses the native room name and the executor identity, so a removal already in
+flight could reach a new executor of the recreated room. The window is one
+native RPC (two-second timeout), far shorter than creating a remote-browser
+object and starting its session; past the codec-3 boundary the recreated room has
+another native name and the window does not exist.
 
 Not covered here (S3b-3b): whether the connected executor instance is still the
 object's current one. The executor identity is shared by every instance of an
