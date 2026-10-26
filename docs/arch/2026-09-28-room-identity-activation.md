@@ -699,6 +699,25 @@ accepted 81/81 plus 1/1 mandatory Rutube on attempt 2 (attempt 1 stopped on a me
 keyboard-navigation timeout and rolled back to the previous image on the migrated database).
 The media boundary stays at codec 2.
 
+### Media boundary raised on shared staging: T13a-S3b-2
+
+On 2026-10-26 the codec-3 media boundary was raised on the on-demand platform
+stand after explicit approval: [Staging40386741916](https://github.com/vrata-labs/platform/actions/runs/40386741916)
+deployed `eb1a694` with `activate_media_codec3=true`. The helper checked the running
+candidate and the accepted rollback target, raised the policy from codec 2 to 3,
+health then advertised `mediaIdentityCodec: 3`, and the 53-test gate passed on
+codec-3 grants. A direct probe received `vmi3.m.*` in
+`vrata-v3:<namespace>:<incarnation>:<roomId>` with binding epoch 1. Staging
+Extended passed 4/4 before the raise on codec 2 and 4/4 after it on codec 3
+([40391659396](https://github.com/vrata-labs/platform/actions/runs/40391659396)).
+
+The stand is created on demand with an empty database, so a raise lives only as
+long as the stand. The bootstrap deploy of `infra/staging/on-demand-hook.sh`
+therefore raises the media boundary right after the identity floor
+(`STAGE_MEDIA_CODEC3`, default true): a fresh stand starts on codec 3 and never
+issues a codec-2 grant. Production and self-host remain operator decisions with
+the same `activate-media-codec` command and rollback guards.
+
 ### Executor retirement in terminal rooms: T13a-S3b-3a
 
 The remote-browser executor joins LiveKit as `remote-browser:<objectId>` with no

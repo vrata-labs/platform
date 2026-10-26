@@ -2576,3 +2576,19 @@ Authoritative accepted-release.json до и после публичного read
 - Стенд по требованию 111.88.217.54, аренда b19d82ee. При создании hook потерял связь с api.github.com после успешного bootstrap 40325645978 (e309050); активация эталонного каталога выполнена вручную тем же шагом (Staging Template Catalog 40336698571, success). Фаза в реестре vrata-stage осталась failed.
 - Предыдущий кандидат 2a2b7ad (40340484411) трижды останавливался на «reference meeting synchronizes only declared surfaces»: ICE второго участника из раннера CI не устанавливался (по журналу LiveKit стенда), тот же сбой воспроизвёлся и на e309050 без S3b-3a. Тест перенесён в @staging-extended (#139), причина в клиенте записана в бэклог.
 - Readback: health ok, identityProtocolVersion 2, mediaIdentityCodec 2; demo-room, control-plane и /diagnostics — 200; сверка медиа активна (observed растёт, evicted 12 за прогон).
+
+## S3b-2 — медиа-граница кодека 3 поднята на staging, 2026-10-26
+
+### D-036 — 2026-10-26 — Подъём медиа-границы и кодек 3 по умолчанию для новых стендов
+- По явному подтверждению пользователя медиа-граница на staging платформы поднята до кодека 3. Это необратимо в пределах экземпляра стенда: v2-гранты больше не выдаются, v2-комнаты выводятся сверкой, откат возможен только на образ с mediaCodecBoundary не ниже 3.
+- Стенд создаётся по требованию с чистой базой, поэтому подъём живёт, только пока жив экземпляр. Чтобы новые стенды сразу совпадали с активированным, bootstrap-деплой в infra/staging/on-demand-hook.sh поднимает и identity floor, и медиа-границу (STAGE_MEDIA_CODEC3, по умолчанию true). vrata-stage берёт hook из main при создании стенда, так что правка действует после слияния и будет проверена первым же новым стендом.
+
+| Gate | Точный результат |
+|---|---|
+| До подъёма: [Staging Extended 40383839135](https://github.com/vrata-labs/platform/actions/runs/40383839135) | 4/4 на кодеке 2: два Presenter, публичное демо на четверых с реальным звуком, двухклиентский звук в эталонной встрече, нативный захват экрана |
+| [Staging40386741916](https://github.com/vrata-labs/platform/actions/runs/40386741916) | eb1a694, activate_media_codec3=true: preflight кандидата и цели отката eb1a694 прошёл; mediaCodec before 2, after 3, raised true; health объявляет mediaIdentityCodec 3; gate 53/53 уже на vmi3-грантах; опубликован eb1a694 |
+| Прямая проверка выдачи | Грант участника: identity vmi3.m.*, комната vrata-v3:<namespace>:<incarnation>:<roomId>, binding {v:3, scope m, epoch 1} |
+| После подъёма: [Staging Extended 40391659396](https://github.com/vrata-labs/platform/actions/runs/40391659396) | 4/4 на кодеке 3: те же четыре сценария с реальным медиа |
+
+- Стенд 111.88.217.54, аренда d380c869; реестр vrata-stage после создания на eb1a694 (#138) в фазе failed из-за сетевой ошибки hook, автодеплой выключен — шаги шли ручными dispatch по согласованию с сессией стенда.
+- Открытые до подъёма вкладки нужно перезагрузить: прежний рантайм не слышит участников vmi3.

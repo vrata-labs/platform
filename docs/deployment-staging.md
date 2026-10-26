@@ -59,7 +59,7 @@ vrata-stage release <lease>                                     # последн
    он совпадает с секретом `STAGING_ADMIN_TOKEN`.
 5. Восстанавливается том данных Caddy: сертификаты переживают сервер, и частые
    пересоздания не упираются в лимит Let's Encrypt (5 сертификатов на имя за 7 дней).
-6. Staging Deploy `bootstrap=true`, `activate_identity_v2=true` для последнего SHA `main`
+6. Staging Deploy `bootstrap=true`, `activate_identity_v2=true`, `activate_media_codec3=true` для последнего SHA `main`
    с успешным Docker Publish (или заданного `--sha`). Первый gate нового хоста на каталоге
    Wave 2 — только smoke (health, demo-room, control-plane, приватное хранилище плагинов);
    успешный gate записывает маркер Wave 2. Затем Staging Template Catalog `activate`
