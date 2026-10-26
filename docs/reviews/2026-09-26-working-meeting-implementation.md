@@ -2563,3 +2563,16 @@ Authoritative accepted-release.json до и после публичного read
 - Попутная находка вынесена в бэклог: room-state не сбрасывает состояние комнаты при её удалении, поэтому объекты удалённой встречи остаются в памяти под тем же roomId.
 - Независимая проверка реализации S3b-3a подтвердила минимум и указала одно окно при границе 2: после удаления и пересоздания комнаты имя native-комнаты и identity исполнителя совпадают, поэтому уже отправленное удаление может попасть в нового исполнителя. Окно ограничено одним RPC (таймаут 2 с) и короче создания объекта и старта сессии; при границе 3 его нет. Принято как остаточное и описано в архитектуре.
 - Локально: API 1821 passed, 5 skipped; tools 327 passed, 2 skipped; lint; e2e media-screen-reconciliation на LiveKit 1.13.9 — 4/4 (удаление выселяет исполнителя, отключение сохраняет). Редкий таймаут identity-boundary (personal owner) вынесен в бэклог.
+
+## S3b-3a — принято на staging floor 2, 2026-10-26
+
+| Gate | Точный результат |
+|---|---|
+| Исполняемый SHA | 0333604fa62a54917b657d6e5232b8bcd7a48c9a (S3b-3a поверх main 6548d44 с #139) |
+| [CI40358666950](https://github.com/vrata-labs/platform/actions/runs/40358666950) | Success, attempt 1 |
+| [Docker40358673273](https://github.com/vrata-labs/platform/actions/runs/40358673273) | Success |
+| [Staging40362984598](https://github.com/vrata-labs/platform/actions/runs/40362984598) | Success, attempt 1: 53 passed, опубликован 0333604 |
+
+- Стенд по требованию 111.88.217.54, аренда b19d82ee. При создании hook потерял связь с api.github.com после успешного bootstrap 40325645978 (e309050); активация эталонного каталога выполнена вручную тем же шагом (Staging Template Catalog 40336698571, success). Фаза в реестре vrata-stage осталась failed.
+- Предыдущий кандидат 2a2b7ad (40340484411) трижды останавливался на «reference meeting synchronizes only declared surfaces»: ICE второго участника из раннера CI не устанавливался (по журналу LiveKit стенда), тот же сбой воспроизвёлся и на e309050 без S3b-3a. Тест перенесён в @staging-extended (#139), причина в клиенте записана в бэклог.
+- Readback: health ok, identityProtocolVersion 2, mediaIdentityCodec 2; demo-room, control-plane и /diagnostics — 200; сверка медиа активна (observed растёт, evicted 12 за прогон).
