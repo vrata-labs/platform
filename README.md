@@ -19,7 +19,7 @@ For `0.1`, “platform” means a user can:
 
 - clone the repository or pull public Docker images after the first public release;
 - run the stack on a single host with Docker Compose;
-- configure domains, secrets, Postgres, LiveKit, and MinIO/S3-compatible storage;
+- configure domains, secrets, Postgres, LiveKit, and the bundled (SeaweedFS) or another S3-compatible storage;
 - add rooms/spaces through the documented API/control-plane path;
 - bind custom scene bundles to rooms;
 - update between SemVer releases with backup and rollback instructions.

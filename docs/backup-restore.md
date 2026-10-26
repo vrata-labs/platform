@@ -5,7 +5,7 @@ Vrata self-host and production compose profiles use named Docker volumes for per
 ## What Is Backed Up
 
 - Postgres: a `pg_dump --clean --if-exists --no-owner --no-privileges` SQL dump.
-- Compose MinIO public storage: mirrored MINIO_BUCKET objects, inventory and download policy metadata when available.
+- Compose public object storage (service `minio`, SeaweedFS): mirrored MINIO_BUCKET objects, inventory and download policy metadata when available.
 - Private room-plugin storage: a separate ROOM_PLUGIN_BUCKET export, inventory and mandatory anonymous-none policy capture. Every private file, including inventory and policy, participates in the manifest's size/SHA-256 checks.
 - Platform metadata: manifest schema version, created timestamp, Vrata package version, `IMAGE_TAG`, git commit, compose profile, compose/env file names, artifact sizes, and SHA-256 checksums.
 - Compose image snapshot: `docker compose images` output for operator diagnostics.
@@ -23,9 +23,11 @@ pnpm backup:compose -- --env-file infra/docker/.env.selfhost --compose-file infr
 
 For the production-safe profile, use `infra/docker/.env.production` and `infra/docker/compose.production.yml`.
 
-The command fails non-zero if Postgres dump, MinIO mirror, image snapshot, or manifest writing fails. Logs print paths and stable failure codes only; secret values from the env file are redacted from command stderr.
+The command fails non-zero if Postgres dump, object mirror, image snapshot, or manifest writing fails. Logs print paths and stable failure codes only; secret values from the env file are redacted from command stderr.
 
 Private storage configuration comes from the resolved Compose API environment, including forwarded defaults, rather than assuming that every env-file variable reaches the API. The supported private provider is minio-default, accessed by the compose minio-bootstrap client with matching API credentials. An external s3-compatible provider or local plugin filesystem is not captured by this tool. A configured unsupported private provider, or plugin rows without captured private storage, fails backup rather than producing a successful incomplete archive.
+
+The bundled storage is SeaweedFS behind the historical `minio` service name and the `mc` client of `minio-bootstrap`. SeaweedFS rejects removing an absent bucket policy, so restore reads the private policy first and removes only an existing one; a failed read stops the restore before any private byte is loaded.
 
 Stop package writes/deletions for a consistent recovery point. The tool examines room_plugin_packages COPY rows from the exact SQL dump and requires each non-deleted row's backend fingerprint to match the captured namespace. Each ready row must have byte-exact exported content matching its SQL hash and length. Reserved uploads and cleanup-pending deletions may legitimately have no object; their backend must still be covered. A missing bucket, incomplete/failed inventory, unsafe key or anonymous policy other than none also fails backup. Backup does not create missing buckets or repair their policies.
 
@@ -166,4 +168,4 @@ It validates checksums before deleting a copy and preserves at least two newer v
 
 - Point-in-time recovery and incremental object backups are out of scope for `0.1`.
 - Downgrading database schema is not guaranteed. Backups are mandatory before minor upgrades.
-- The scripts target the compose-managed Postgres and MinIO profiles, not arbitrary S3 providers. External managed databases or object stores need provider-specific snapshots; uncaptured room-plugin storage cannot be silently skipped.
+- The scripts target the compose-managed Postgres and bundled S3 storage (service `minio`), not arbitrary S3 providers. External managed databases or object stores need provider-specific snapshots; uncaptured room-plugin storage cannot be silently skipped.

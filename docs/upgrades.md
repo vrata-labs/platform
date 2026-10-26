@@ -6,9 +6,18 @@ This document describes the target upgrade policy for Vrata `0.1` self-host depl
 
 - Upgrade using explicit SemVer image tags, for example `0.1.1`.
 - Do not use `latest` as the upgrade target.
-- Back up Postgres and MinIO before every minor upgrade.
+- Back up Postgres and object storage before every minor upgrade.
 - Downgrading database schema is not guaranteed.
 - Rollback means returning to the previous app image tag without deleting volumes.
+
+## Moving From Bundled MinIO To SeaweedFS
+
+Current compose files run SeaweedFS in the `minio` service and keep objects in the new `storage-data` volume; the old `minio-data` volume is left untouched and no longer mounted. Endpoint, region and bucket names stay the same, so a backup taken before the upgrade restores into the new storage:
+
+1. On the old release, stop writes and run `pnpm backup:compose` and `pnpm backup:validate` as below. Its `minio-bootstrap` service must still have its `mc` image locally: the upstream MinIO images can no longer be pulled.
+2. Upgrade the checkout and env, then start the new stack. Bootstrap creates both buckets in the empty storage.
+3. Run `pnpm restore:compose` with that backup (see `docs/backup-restore.md`), then check rooms, scene bundles, documents and room plugins.
+4. Remove the `minio-data` volume only after the restored deployment is verified.
 
 ## Backup Before Upgrade
 

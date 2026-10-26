@@ -5,7 +5,7 @@ Vrata `0.1` is a public beta target for a self-hosted immersive room platform. I
 ## What “Platform” Means In `0.1`
 
 - A user can deploy Vrata on a single host with Docker Compose.
-- A user can configure public endpoints, secrets, Postgres, LiveKit, and MinIO/S3-compatible storage.
+- A user can configure public endpoints, secrets, Postgres, LiveKit, and the bundled (SeaweedFS) or another S3-compatible storage.
 - A user can create rooms/spaces through the documented API/control-plane path.
 - A user can bind a scene bundle to a room.
 - A user can update between releases using documented backup, smoke, and rollback steps.
