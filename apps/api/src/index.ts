@@ -2,6 +2,7 @@ import type { ControlPlaneActor } from "./control-plane-actor.js";
 import { createRoomNotesRoutes } from "./room-notes-routes.js";
 import { createIntegrationRoutes } from "./integration-routes.js";
 import { loadDemoPolicies } from "./demo-policies.js";
+import { loadReturnTargets } from "./return-targets.js";
 import { createManagedMediaControl } from "./managed-media.js";
 import { currentMediaRoomName } from "./managed-media-names.js";
 import { createManagedRoomEnforcer } from "./managed-room-enforcer.js";
@@ -433,6 +434,7 @@ export function validateProductionApiEnv(env: NodeJS.ProcessEnv = process.env): 
     throw new Error("invalid_portal_managed_config:integration_keys_required");
   }
   if (isPortalManagedDeployment(env)) loadDemoPolicies(env);
+  loadReturnTargets(env);
 }
 
 function logEvent(event: Record<string, unknown>): void {
@@ -4058,7 +4060,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   if (method === "POST" && url.pathname === "/api/room-grants/exchange") {
     const result = await exchangeRoomGrant({ storage, payload: await parseBody<unknown>(request), secret: getStateTokenSecret(), requestId,
-      reserveAdmission: () => storage.reserveIdentityAdmission({ originHash: identityAdmissionOriginHash(request), kind: "room" }) });
+      reserveAdmission: () => storage.reserveIdentityAdmission({ originHash: identityAdmissionOriginHash(request), kind: "room" }), returnTargets: loadReturnTargets() });
     if (result.retryAfterSeconds) response.setHeader("retry-after", String(result.retryAfterSeconds));
     return json(response, result.status, result.body);
   }

@@ -9,6 +9,7 @@ import { createRoomIdentityCodec } from "@vrata/shared-types/identity-credential
 import { createIntegrationRoutes } from "./integration-routes.js";
 import { completeGrantRevocation } from "./grant-revocation.js";
 import { exchangeRoomGrant } from "./room-grant-exchange.js";
+import { parseReturnTargets } from "./return-targets.js";
 import { MemoryStorage } from "./storage.js";
 import { createIntegrationTestKey, integrationKeysEnv, signIntegrationAssertion, type IntegrationTestKey } from "./testing/integration-assertions.js";
 
@@ -333,6 +334,36 @@ test("a grant exchange needs identity v2, a valid body and admission budget", as
   const limited = await exchangeRoomGrant({ ...base, reserveAdmission: async () => false, payload: { roomId: room.roomId, code } });
   assert.deepEqual([limited.status, limited.retryAfterSeconds, (limited.body.error as { code: string }).code], [429, 60, "rate_limited"]);
   assert.equal(((await exchangeRoomGrant({ ...base, payload: { roomId: room.roomId, code } })).body.error as { code: string }).code, "grant_invalid");
+});
+
+test("a grant exchange gives the way back that the portal allowlist makes of the grant's return context", async () => {
+  const h = await harness();
+  try {
+    await h.storage.identityProtocol.raise(2);
+    const demo = await h.room({ kind: "reference", visibility: "unlisted" });
+    const returnTargets = parseReturnTargets(JSON.stringify({
+      "catalog-entry": { ru: "https://ru.example.test/demos/{id}", en: "https://en.example.test/demos/{id}" },
+      fallback: { ru: "https://ru.example.test/", en: "https://en.example.test/" }
+    }));
+    const enter = async (returnContext?: unknown, targets = returnTargets) => {
+      const grant = await h.call("POST", `${demo.path}/grants`, { body: { role: "guest", purpose: "invite", maxUses: 1, ...(returnContext ? { returnContext } : {}) }, idempotencyKey: key() });
+      assert.equal(grant.status, 201, JSON.stringify(grant.body));
+      const code = new URL(grant.body!.entryUrl).hash.slice("#grant=".length);
+      const entry = await exchangeRoomGrant({ storage: h.storage, secret, requestId: "req_return", reserveAdmission: async () => true, returnTargets: targets,
+        payload: { roomId: demo.roomId, code } });
+      assert.equal(entry.status, 200, JSON.stringify(entry.body));
+      return entry.body;
+    };
+    const card = await enter({ kind: "catalog-entry", id: "meeting-room", locale: "ru" });
+    assert.deepEqual([card.returnContext, card.returnUrls], [{ kind: "catalog-entry", id: "meeting-room", locale: "ru" },
+      { ru: "https://ru.example.test/demos/meeting-room", en: "https://en.example.test/demos/meeting-room" }]);
+    assert.deepEqual((await enter({ kind: "order", id: "ord_1", locale: "en" })).returnUrls, { ru: "https://ru.example.test/", en: "https://en.example.test/" });
+    assert.deepEqual((await enter()).returnUrls, { ru: "https://ru.example.test/", en: "https://en.example.test/" });
+    assert.equal("returnUrls" in await enter({ kind: "catalog-entry", id: "meeting-room", locale: "ru" }, parseReturnTargets(undefined)), false,
+      "a platform without the portal allowlist shows no way back");
+  } finally {
+    await h.close();
+  }
 });
 
 test("finishing a revoke skips identities already revoked meanwhile and still asks for the new epoch", async () => {
