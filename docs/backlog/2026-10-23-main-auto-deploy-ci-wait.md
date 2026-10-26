@@ -3,7 +3,7 @@ name: main-auto-deploy-ci-wait
 date: 2026-10-23
 source: T01a, Staging Deploy 40005818492
 area: ci
-status: parked
+status: promoted
 jira: не заведена
 ---
 
@@ -44,3 +44,10 @@ staging только ручным запуском.
 
 - .github/workflows/staging-deploy.yml — шаг Wait for CI on exact SHA, timeout-minutes 150.
 - tools/staging-minio-rollout.test.mjs — проверка бюджетов staging-gate.
+
+## Сделано 2026-10-26
+
+Триггер и бюджеты не менялись: после шардирования CI (#135, #136) полный CI идёт около
+16 минут и укладывается в 30-минутное ожидание. Auto-deploy main проходит сам:
+Staging Deploy 40238386915 (3aef663), 40242139289 (f5293bd), 40246594895 (4fc7694).
+Если CI снова вырастет за 30 минут, вернуться к варианту с workflow_run на CI.
