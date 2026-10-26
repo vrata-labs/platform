@@ -52,12 +52,13 @@ export type LeaveSpaceStep = "end_xr" | "remove_presence" | "stop_session" | "na
 /**
  * Leaving the space, in order: out of XR first (the page cannot navigate from an immersive session), then the presence
  * goes while the session token is still valid, then media and room-state stop, and only then the page goes back.
+ * A session the room already stopped (paused, removed, ended) has nothing left to remove or stop.
  */
-export function planLeaveSpace(input: { xrPresenting: boolean; admitted: boolean; returnUrl: string | null }): LeaveSpaceStep[] {
+export function planLeaveSpace(input: { xrPresenting: boolean; sessionActive: boolean; admitted: boolean; returnUrl: string | null }): LeaveSpaceStep[] {
   return [
     ...(input.xrPresenting ? ["end_xr" as const] : []),
-    ...(input.admitted ? ["remove_presence" as const] : []),
-    "stop_session",
+    ...(input.sessionActive && input.admitted ? ["remove_presence" as const] : []),
+    ...(input.sessionActive ? ["stop_session" as const] : []),
     input.returnUrl ? "navigate" : "show_left"
   ];
 }

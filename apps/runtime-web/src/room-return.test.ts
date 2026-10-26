@@ -41,7 +41,9 @@ test("the tab keeps the way back of its room across a reload and ignores a broke
 });
 
 test("leaving ends XR first, removes presence while admitted, stops the session and then goes back or shows the left screen", () => {
-  assert.deepEqual(planLeaveSpace({ xrPresenting: true, admitted: true, returnUrl: urls.ru }), ["end_xr", "remove_presence", "stop_session", "navigate"]);
-  assert.deepEqual(planLeaveSpace({ xrPresenting: false, admitted: true, returnUrl: null }), ["remove_presence", "stop_session", "show_left"]);
-  assert.deepEqual(planLeaveSpace({ xrPresenting: false, admitted: false, returnUrl: urls.en }), ["stop_session", "navigate"]);
+  assert.deepEqual(planLeaveSpace({ xrPresenting: true, sessionActive: true, admitted: true, returnUrl: urls.ru }), ["end_xr", "remove_presence", "stop_session", "navigate"]);
+  assert.deepEqual(planLeaveSpace({ xrPresenting: false, sessionActive: true, admitted: true, returnUrl: null }), ["remove_presence", "stop_session", "show_left"]);
+  assert.deepEqual(planLeaveSpace({ xrPresenting: false, sessionActive: true, admitted: false, returnUrl: urls.en }), ["stop_session", "navigate"]);
+  assert.deepEqual(planLeaveSpace({ xrPresenting: false, sessionActive: false, admitted: true, returnUrl: urls.en }), ["navigate"],
+    "after the room paused or removed the participant, leaving only goes back");
 });

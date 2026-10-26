@@ -1841,8 +1841,9 @@ let roomEntered = false;
  * the portal page the grant came from; without one it shows that the space was left and can be entered again.
  */
 async function leaveSpace(): Promise<void> {
-  // Before the room is entered there is nothing to leave yet; after a session block the ended screen is shown instead.
-  if (spaceLeaving || !roomEntered || sessionControlBlocked) return;
+  // Before the room is entered there is nothing to leave yet. A room that paused or removed the participant can still
+  // be left: the way back works, there is just no session to stop.
+  if (spaceLeaving || !roomEntered) return;
   spaceLeaving = true;
   // No presence is published from here on, so nothing re-creates it after the DELETE.
   runtimeBootReady = false;
@@ -1852,13 +1853,14 @@ async function leaveSpace(): Promise<void> {
   const returnUrl = roomReturnTab.urlFor(currentLocale());
   const token = roomStateAccessToken;
   debugState.leave = { requested: true, returnUrl, steps: [] };
-  for (const step of planLeaveSpace({ xrPresenting: Boolean(currentXrSession), admitted: Boolean(token) && !sessionControlBlocked, returnUrl })) {
+  for (const step of planLeaveSpace({ xrPresenting: Boolean(currentXrSession), sessionActive: !sessionControlBlocked, admitted: Boolean(token), returnUrl })) {
     debugState.leave.steps.push(step);
     if (step === "end_xr") {
       await currentXrSession?.end().catch(() => undefined);
     } else if (step === "remove_presence") {
-      // An update already on its way lands first, then the DELETE, which outlives the page (keepalive). The waits are
-      // bounded: a slow API must not keep the participant on the page after they asked to leave.
+      // An update already on its way normally lands first, then the DELETE, which outlives the page (keepalive). The
+      // waits are bounded: a slow API must not keep the participant on the page. An update delayed past them can bring
+      // the presence back, but nothing renews it, so it lapses with the API presence TTL (15 s).
       const deadline = Date.now() + 4000;
       while (apiPresenceSyncInFlight && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25));
       await Promise.race([removePresence(apiBaseUrl, roomId, participantId, token).catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 1500))]);
@@ -7836,7 +7838,9 @@ renderer.setAnimationLoop(() => {
   updateMediaDiagnostics();
   updateLocalAvatar(delta, frameContext);
   remoteAvatarRuntime.update(delta, debugState);
-  if (!updateXrMenu(frameContext) && !updateRemoteBrowserXrInput(frameContext)) {
+  // The menu's frames, including the one where a button closes it, reach neither the remote browser nor the room ray.
+  const xrMenuOwnsRay = updateXrMenu(frameContext);
+  if (!xrMenuOwnsInput && !xrMenuOwnsRay && !updateRemoteBrowserXrInput(frameContext)) {
     updateInteractionRayState(getInteractionFrameInput(frameContext));
   }
   updateSeatMarkerVisuals(nowMs / 1000);

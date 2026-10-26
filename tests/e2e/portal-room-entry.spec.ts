@@ -37,7 +37,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await fixture?.close(); });
 
-async function integration(request: APIRequestContext, method: "PUT" | "POST", path: string, body: unknown) {
+async function integration(request: APIRequestContext, method: "PUT" | "POST" | "PATCH", path: string, body: unknown) {
   const response = await request.fetch(`${fixture.origin}${path}`, { method, data: body, headers: { authorization: `Bearer ${sign()}`, "idempotency-key": key() } });
   return { status: response.status(), body: await response.json() };
 }
@@ -55,7 +55,7 @@ async function demoEntry(request: APIRequestContext, returnContext?: unknown) {
   const grant = await integration(request, "POST", `/integration/v1/tenants/${tenantId}/rooms/${room.body.roomId}/grants`,
     { role: "guest", purpose: "invite", maxUses: 2, ...(returnContext ? { returnContext } : {}) });
   expect(grant.status, JSON.stringify(grant.body)).toBe(201);
-  return { roomId: room.body.roomId as string, entryUrl: grant.body.entryUrl as string };
+  return { roomId: room.body.roomId as string, entryUrl: grant.body.entryUrl as string, roomPath: `/integration/v1/tenants/${tenantId}/rooms/${room.body.roomId}` };
 }
 
 // The portal pages are not served here: the browser gets a stub for every portal.test address.
@@ -186,6 +186,24 @@ test("a tab without a way back leaves to the left screen, the boot does not ente
     await expect(page.locator("#space-left")).toBeVisible();
     await page.locator("#space-left-rejoin").click();
     await expect.poll(async () => (await debug(page)).connected, { timeout: 60_000 }).toBe(true);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a room paused by the portal can still be left back to the card", async ({ browser, request }) => {
+  test.setTimeout(180_000);
+  const { entryUrl, roomPath } = await demoEntry(request, { kind: "catalog-entry", id: "meeting-room", locale: "ru" });
+  const context = await portalContext(browser, "ru");
+  try {
+    const page = await context.newPage();
+    await enter(page, entryUrl, "Гость");
+    await expect(page.locator("#leave-space")).toBeEnabled({ timeout: 60_000 });
+    const paused = await integration(request, "PATCH", `${roomPath}/access`, { expectedRevision: 0, status: "paused" });
+    expect(paused.status, JSON.stringify(paused.body)).toBe(200);
+    await expect(page.locator("#status-line")).toHaveText("Комната на паузе", { timeout: 60_000 });
+    await page.locator("#leave-space").click();
+    await page.waitForURL("https://ru.portal.test/demos/meeting-room");
   } finally {
     await context.close();
   }
