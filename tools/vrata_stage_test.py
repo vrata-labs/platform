@@ -627,10 +627,108 @@ class HelperTests(Base):
             github.busy_runs("o/r", ["CI"])
 
     def test_gh_timeout_is_a_stage_error(self):
+        calls = []
+
         def runner(args, **kwargs):
+            calls.append(args)
             raise subprocess.TimeoutExpired(args, 120)
-        with self.assertRaisesRegex(vs.StageError, "gh_unavailable"):
-            vs.GitHub(runner=runner).set_variable("o/r", "X", "true")
+        sleeps = []
+        with self.assertRaisesRegex(vs.GitHubUnreachable, "gh_unavailable"):
+            vs.GitHub(runner=runner, sleep=sleeps.append).set_variable("o/r", "X", "true")
+        self.assertEqual((len(calls), sleeps), (5, [5, 10, 20, 40]))
+
+    @staticmethod
+    def gh_results(*results):
+        """A gh runner answering with (returncode, stdout, stderr) in turn; records every call."""
+        calls, queue = [], list(results)
+
+        def runner(args, **kwargs):
+            calls.append(args)
+            code, out, err = queue.pop(0)
+            return subprocess.CompletedProcess(args, code, out, err)
+        return runner, calls
+
+    def test_gh_repeats_network_and_server_failures_until_success(self):
+        runner, calls = self.gh_results(
+            (1, "", "error connecting to api.github.com\ncheck your internet connection"),
+            (1, "", "HTTP 502: Bad Gateway (https://api.github.com/graphql)"),
+            (0, '[{"headSha": "abc"}]', ""))
+        sleeps = []
+        self.assertEqual(vs.GitHub(runner=runner, sleep=sleeps.append).latest_success_sha("o/r", "CI"), "abc")
+        self.assertEqual((len(calls), sleeps), (3, [5, 10]))
+
+    def test_gh_does_not_repeat_refusals_or_a_missing_binary(self):
+        runner, calls = self.gh_results((1, "", "HTTP 404: Not Found (https://api.github.com/repos/o/r)"))
+        with self.assertRaisesRegex(vs.StageError, "gh_failed:run list --repo:HTTP 404") as caught:
+            vs.GitHub(runner=runner, sleep=lambda s: None).latest_success_sha("o/r", "CI")
+        self.assertNotIsInstance(caught.exception, vs.GitHubUnreachable)
+        self.assertEqual(len(calls), 1)
+
+        def missing(args, **kwargs):
+            raise FileNotFoundError("gh")
+        with self.assertRaisesRegex(vs.StageError, "gh_unavailable:.*FileNotFoundError") as caught:
+            vs.GitHub(runner=missing, sleep=lambda s: None).set_variable("o/r", "X", "true")
+        self.assertNotIsInstance(caught.exception, vs.GitHubUnreachable)
+
+    def test_gh_gives_up_after_five_attempts_and_never_repeats_an_unsafe_call(self):
+        runner, calls = self.gh_results(*[(1, "", "read: connection reset by peer")] * 5)
+        with self.assertRaisesRegex(vs.GitHubUnreachable, "connection reset"):
+            vs.GitHub(runner=runner, sleep=lambda s: None).set_variable("o/r", "X", "true")
+        self.assertEqual(len(calls), 5)
+        runner, calls = self.gh_results((1, "", "error connecting to api.github.com"))
+        with self.assertRaises(vs.GitHubUnreachable):
+            vs.GitHub(runner=runner, sleep=lambda s: None).gh("workflow", "run", "x.yml", retry=False)
+        self.assertEqual(len(calls), 1)
+
+    class DispatchGh:
+        """Fake GitHub for dispatch: answers polls from a script and records dispatches."""
+
+        def __init__(self, dispatch_errors, polls):
+            self.dispatch_errors, self.polls, self.requests, self.calls = list(dispatch_errors), list(polls), [], []
+
+        def gh(self, *args, input_text=None, retry=True):
+            self.calls.append((args[:2], retry))
+            if args[0] == "workflow":
+                self.requests.append(json.loads(input_text)["request"])
+                if self.dispatch_errors.pop(0):
+                    raise vs.GitHubUnreachable("gh_failed:workflow run x.yml:error connecting to api.github.com")
+                return ""
+            answer = self.polls.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return json.dumps(answer(self.requests[0]) if callable(answer) else answer)
+
+    def test_dispatch_after_a_lost_answer_follows_the_run_that_was_created(self):
+        mine = lambda request: [{"databaseId": 5, "displayTitle": f"Staging Deploy {request}", "status": "completed",
+                                 "conclusion": "success"}]
+        github = self.DispatchGh([True], [[], mine])
+        self.assertEqual(vs.dispatch("o/r", "x.yml", [], github=github, poll=0), {"run": 5, "conclusion": "success"})
+        self.assertEqual(len(github.requests), 1)
+        self.assertIn((("workflow", "run"), False), github.calls)
+
+    def test_dispatch_repeats_a_start_that_never_appeared_with_the_same_request(self):
+        mine = lambda request: [{"databaseId": 6, "displayTitle": f"Staging Deploy {request}", "status": "completed",
+                                 "conclusion": "success"}]
+        github = self.DispatchGh([True, False], [[], [], [], mine])
+        self.assertEqual(vs.dispatch("o/r", "x.yml", [], github=github, poll=0, confirm_polls=3)["run"], 6)
+        self.assertEqual(len(github.requests), 2)
+        self.assertEqual(github.requests[0], github.requests[1])
+        github = self.DispatchGh([True, True], [[], [], []])
+        with self.assertRaisesRegex(vs.StageError, "workflow_not_started:x.yml"):
+            vs.dispatch("o/r", "x.yml", [], github=github, poll=0, confirm_polls=1, dispatches=2)
+
+    def test_dispatch_skips_polls_that_fail_on_the_network(self):
+        running = lambda request: [{"databaseId": 7, "displayTitle": f"Staging Deploy {request}", "status": "in_progress",
+                                    "conclusion": ""}]
+        done = lambda request: [{"databaseId": 7, "displayTitle": f"Staging Deploy {request}", "status": "completed",
+                                 "conclusion": "success"}]
+        unreachable = vs.GitHubUnreachable("gh_failed:run list --repo:error connecting to api.github.com")
+        github = self.DispatchGh([False], [running, unreachable, unreachable, done])
+        self.assertEqual(vs.dispatch("o/r", "x.yml", [], github=github, poll=0)["run"], 7)
+        refusal = vs.StageError("gh_failed:run list --repo:HTTP 401: Bad credentials")
+        github = self.DispatchGh([False], [running, refusal])
+        with self.assertRaisesRegex(vs.StageError, "HTTP 401"):
+            vs.dispatch("o/r", "x.yml", [], github=github, poll=0)
 
     def test_durations(self):
         self.assertEqual([vs.parse_duration(x) for x in ("90", "90m", "2h", "1d", "30s")], [5400, 5400, 7200, 86400, 30])
@@ -643,7 +741,7 @@ class HelperTests(Base):
         class Gh:
             calls = 0
 
-            def gh(self, *args, input_text=None):
+            def gh(self, *args, input_text=None, retry=True):
                 if args[0] == "workflow":
                     seen.update(json.loads(input_text))
                     return ""

@@ -30,6 +30,11 @@ PURPOSE_TTL = {"deploy": 3 * 3600, "e2e": 2 * 3600, "debug": 2 * 3600, "manual":
 MAX_TTL = 24 * 3600
 AGENT_COMMANDS = {"claude", "opencode"}
 BUSY_STATUSES = {"requested", "pending", "waiting", "queued", "in_progress"}
+# How gh reports a broken link to api.github.com or a GitHub-side failure. Refusals (authentication, validation,
+# not found) do not match and are never repeated.
+GH_TRANSIENT = re.compile(r"error connecting to|connection (?:reset|refused)|timed? ?out|tls handshake|unexpected eof"
+                          r"|http 5\d\d|\b50[0234]\b|bad gateway|service unavailable|temporary failure|no such host"
+                          r"|network is unreachable|stream error", re.I)
 HOST_KEY_TYPES = ("ed25519", "ecdsa", "rsa")
 DEFAULT_CONFIG = Path.home() / "inprojects/vrata/.secrets/stage/stages.json"
 DEFAULT_STATE = Path.home() / ".local/state/vrata-stage"
@@ -38,6 +43,10 @@ SELF = Path(__file__).resolve()
 
 class StageError(Exception):
     pass
+
+
+class GitHubUnreachable(StageError):
+    """A gh call failed on the network or on GitHub's side; repeating it may succeed."""
 
 
 def utcnow():
@@ -278,17 +287,30 @@ class Selectel:
 
 
 class GitHub:
-    def __init__(self, runner=subprocess.run):
-        self.runner = runner
+    def __init__(self, runner=subprocess.run, sleep=time.sleep, attempts=5):
+        self.runner, self.sleep, self.attempts = runner, sleep, attempts
 
-    def gh(self, *args, input_text=None):
-        try:
-            result = self.runner(["gh", *args], input=input_text, text=True, capture_output=True, timeout=120)
-        except (subprocess.TimeoutExpired, OSError) as error:
-            raise StageError("gh_unavailable:" + " ".join(args[:3]) + ":" + type(error).__name__) from None
-        if result.returncode:
-            raise StageError("gh_failed:" + " ".join(args[:3]) + ":" + result.stderr.strip()[:300])
-        return result.stdout
+    def gh(self, *args, input_text=None, retry=True):
+        """Run gh. A network or GitHub-side failure is repeated with backoff (about 75 s in all) unless the call
+        is not safe to repeat (retry=False); what is still failing then raises GitHubUnreachable."""
+        label = " ".join(args[:3])
+        for attempt in range(1, (self.attempts if retry else 1) + 1):
+            try:
+                result = self.runner(["gh", *args], input=input_text, text=True, capture_output=True, timeout=120)
+            except FileNotFoundError:
+                raise StageError("gh_unavailable:" + label + ":FileNotFoundError") from None
+            except (subprocess.TimeoutExpired, OSError) as error:
+                failure = GitHubUnreachable("gh_unavailable:" + label + ":" + type(error).__name__)
+            else:
+                if not result.returncode:
+                    return result.stdout
+                detail = result.stderr.strip()[:300]
+                if not GH_TRANSIENT.search(detail):
+                    raise StageError("gh_failed:" + label + ":" + detail)
+                failure = GitHubUnreachable("gh_failed:" + label + ":" + detail)
+            if attempt < (self.attempts if retry else 1):
+                self.sleep(5 * 2 ** (attempt - 1))
+        raise failure
 
     def set_variable(self, repo, name, value):
         self.gh("variable", "set", name, "--repo", repo, "--body", value)
@@ -984,29 +1006,56 @@ def spawn_detached(args, log_path):
 
 # ---------------------------------------------------------------- GitHub workflow helper for hooks
 
-def dispatch(repo, workflow, fields, ref="main", github=None, poll=20, timeout=4 * 3600):
-    """Run a workflow and wait for that very run: its run-name carries a unique request id."""
+def dispatch(repo, workflow, fields, ref="main", github=None, poll=20, timeout=4 * 3600, confirm_polls=9,
+             dispatches=3):
+    """Run a workflow and wait for that very run: its run-name carries a unique request id.
+
+    Starting a run is not safe to repeat blindly: a dispatch whose answer was lost may still have created it.
+    After a network failure the run is looked up by its request id for confirm_polls polls first, and only a
+    run that never appeared is dispatched again, with the same id; should a late run still show up next to the
+    repeated one, the earliest is followed. Polls that fail on the network are skipped until the deadline: a
+    GitHub hiccup does not abandon a run that keeps going."""
     github = github or GitHub()
     request = secrets.token_hex(6)
     inputs = dict(field.split("=", 1) for field in fields)
     inputs["request"] = request
-    github.gh("workflow", "run", workflow, "--repo", repo, "--ref", ref, "--json", input_text=json.dumps(inputs))
+
+    def start():
+        try:
+            github.gh("workflow", "run", workflow, "--repo", repo, "--ref", ref, "--json",
+                      input_text=json.dumps(inputs), retry=False)
+            return True
+        except GitHubUnreachable as error:
+            print(f"{iso(utcnow())} dispatch of {workflow} unconfirmed ({request}): {error}", file=sys.stderr, flush=True)
+            return False
+
+    started, attempts, unseen = start(), 1, 0
     deadline = time.monotonic() + timeout
     run_id = None
     while time.monotonic() < deadline:
         time.sleep(poll)
-        runs = json.loads(github.gh("run", "list", "--repo", repo, "--workflow", workflow, "--event",
-                                    "workflow_dispatch", "--limit", "20", "--json",
-                                    "databaseId,displayTitle,status,conclusion"))
-        if run_id is None:
-            mine = [run for run in runs if request in run["displayTitle"].split()]
-            if not mine:
-                continue
-            run_id = mine[0]["databaseId"]
-            print(f"{iso(utcnow())} dispatched {workflow} run {run_id} ({request})", file=sys.stderr, flush=True)
-        run = next((run for run in runs if run["databaseId"] == run_id), None)
-        if run is None:
-            run = json.loads(github.gh("run", "view", str(run_id), "--repo", repo, "--json", "status,conclusion"))
+        try:
+            runs = json.loads(github.gh("run", "list", "--repo", repo, "--workflow", workflow, "--event",
+                                        "workflow_dispatch", "--limit", "20", "--json",
+                                        "databaseId,displayTitle,status,conclusion"))
+            if run_id is None:
+                mine = sorted((run for run in runs if request in run["displayTitle"].split()),
+                              key=lambda run: run["databaseId"])
+                if not mine:
+                    unseen += 1
+                    if not started and unseen >= confirm_polls:
+                        if attempts >= dispatches:
+                            raise StageError(f"workflow_not_started:{workflow}:{request}")
+                        started, attempts, unseen = start(), attempts + 1, 0
+                    continue
+                run_id = mine[0]["databaseId"]
+                print(f"{iso(utcnow())} dispatched {workflow} run {run_id} ({request})", file=sys.stderr, flush=True)
+            run = next((run for run in runs if run["databaseId"] == run_id), None)
+            if run is None:
+                run = json.loads(github.gh("run", "view", str(run_id), "--repo", repo, "--json", "status,conclusion"))
+        except GitHubUnreachable as error:
+            print(f"{iso(utcnow())} {workflow} poll skipped: {error}", file=sys.stderr, flush=True)
+            continue
         if run["status"] == "completed":
             if run["conclusion"] != "success":
                 raise StageError(f"workflow_failed:{workflow}:{run_id}:{run['conclusion']}")

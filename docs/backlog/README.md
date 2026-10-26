@@ -15,7 +15,7 @@
 - [Remote-browser callbacks не работают на поверхности, отличной от debug-main](2026-10-11-remote-browser-callback-surface.md) — parked — P2 — объект на другой поверхности остаётся loading из-за callback surface mismatch.
 - [Пример auto-seat показывает «не разрешена» после перезапуска экземпляра](2026-10-23-auto-seat-status-after-lease-restart.md) — parked — P2 — сообщение противоречит посадке и делает тест нестабильным.
 - [Room-state хранит состояние удалённой комнаты под тем же roomId](2026-10-26-room-state-recreated-room-isolation.md) — parked — P2 — пересозданная встреча видит прежние объекты и привязки исполнителя; нужен выбор: поколение комнаты в room-state или сброс при удалении.
-- [Создание стенда падает на временных сбоях Selectel без повтора](2026-10-25-vrata-stage-transient-provider-retry.md) — new — P2 — «Failed to allocate the network(s)» переводит стенд в failed, повтор только вручную.
+- [Создание стенда падает на временных сбоях Selectel без повтора](2026-10-25-vrata-stage-transient-provider-retry.md) — new — P2 — «Failed to allocate the network(s)» переводит стенд в failed, повтор только вручную; сбои связи с GitHub с 2026-10-26 повторяются.
 - [Забытый стенд удаляется, только пока работает машина разработки](2026-10-25-stage-watcher-needs-operator-machine.md) — new — P2 — нужно решение владельца о сервисной учётной записи Selectel.
 
 ## P3
