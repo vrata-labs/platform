@@ -76,6 +76,8 @@ export interface XrMenuView {
   buttons: readonly THREE.Object3D[];
   placeInFront(camera: THREE.Camera): void;
   setVisible(visible: boolean): void;
+  /** World centers of the buttons, for diagnostics and browser tests. */
+  buttonCenters(): Record<XrMenuAction, { x: number; y: number; z: number }>;
   render(input: { title: string; labels: Record<XrMenuAction, string>; hovered: XrMenuAction | null; armed: boolean; ray: THREE.Ray | null; hitDistance: number | null }): void;
   dispose(): void;
 }
@@ -131,6 +133,14 @@ export function createXrMenuView(): XrMenuView {
       group.rotation.set(0, placement.yaw, 0);
       group.updateMatrixWorld(true);
       if (pointerRoot.parent !== group.parent && group.parent) group.parent.add(pointerRoot);
+    },
+    buttonCenters() {
+      const centers = {} as Record<XrMenuAction, { x: number; y: number; z: number }>;
+      for (const [action, plane] of buttons) {
+        const center = plane.mesh.getWorldPosition(new THREE.Vector3());
+        centers[action] = { x: Number(center.x.toFixed(3)), y: Number(center.y.toFixed(3)), z: Number(center.z.toFixed(3)) };
+      }
+      return centers;
     },
     setVisible(visible) {
       group.visible = visible;

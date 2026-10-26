@@ -86,7 +86,11 @@ export function createRuntimeDebugState<FeatureFlags extends Record<string, bool
     localMicLevel: 0,
     speakerOutputLevel: 0,
     leave: { requested: false, returnUrl: null as string | null, steps: [] as string[] },
-    xrMenu: { open: false, hovered: null as string | null, leaveArmed: false, lastCommand: null as string | null },
+    xrMenu: {
+      open: false, hovered: null as string | null, leaveArmed: false, lastCommand: null as string | null,
+      head: null as { x: number; y: number; z: number } | null,
+      buttons: null as Record<string, { x: number; y: number; z: number }> | null
+    },
     media: {
       audioState: "not_joined" as "not_joined" | "joining" | "joined" | "muted" | "degraded" | "failed",
       audioJoined: false,

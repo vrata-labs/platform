@@ -1872,6 +1872,8 @@ async function leaveSpace(): Promise<void> {
 }
 
 leaveSpaceButton.addEventListener("click", () => { void leaveSpace(); });
+// Back after leaving may restore this page from the back/forward cache with its session stopped: enter again instead.
+window.addEventListener("pageshow", (event) => { if (event.persisted && spaceLeaving) window.location.reload(); });
 spaceLeftRejoinButton.addEventListener("click", () => { window.location.reload(); });
 vrReadyStayButton.addEventListener("click", () => { vrReadyEl.hidden = true; });
 vrReadyEnterButton.addEventListener("click", () => {
@@ -7910,6 +7912,9 @@ function updateXrMenu(frameContext: RuntimeFrameContext): boolean {
   if (step.opened) {
     xrMenuView.placeInFront(camera);
     clearInteractionVisuals();
+    const head = camera.getWorldPosition(new THREE.Vector3());
+    debugState.xrMenu.head = { x: Number(head.x.toFixed(3)), y: Number(head.y.toFixed(3)), z: Number(head.z.toFixed(3)) };
+    debugState.xrMenu.buttons = xrMenuView.buttonCenters();
   }
   xrMenuView.setVisible(xrMenuState.open);
   if (xrMenuState.open) {
