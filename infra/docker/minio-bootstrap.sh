@@ -30,14 +30,16 @@ retry() {
 
 retry mc alias set vrata "${MINIO_ENDPOINT:-http://minio:9000}" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
 retry mc mb --ignore-existing "vrata/$ROOM_PLUGIN_BUCKET"
-# SeaweedFS rejects removing a policy that does not exist, so remove only one that is there; a failed read
-# (missing bucket, credentials, network) stops the bootstrap. The bucket must end up without any policy.
-private_policy=$(retry mc anonymous get-json "vrata/$ROOM_PLUGIN_BUCKET")
-if [ "$private_policy" != "{}" ]; then
-  retry mc anonymous set none "vrata/$ROOM_PLUGIN_BUCKET"
-  private_policy=$(retry mc anonymous get-json "vrata/$ROOM_PLUGIN_BUCKET")
-fi
-if [ "$private_policy" != "{}" ]; then
+# SeaweedFS rejects removing a policy that does not exist, so each attempt reads the policy, removes only one
+# that is there and reads it again: a removal whose answer was lost is not repeated. A failed read (missing
+# bucket, credentials, network) counts as a failed attempt; the bucket must end up without any policy.
+private_policy_absent() {
+  policy=$(mc anonymous get-json "vrata/$ROOM_PLUGIN_BUCKET") || return 1
+  [ "$policy" = "{}" ] && return 0
+  mc anonymous set none "vrata/$ROOM_PLUGIN_BUCKET" || return 1
+  [ "$(mc anonymous get-json "vrata/$ROOM_PLUGIN_BUCKET")" = "{}" ]
+}
+if ! retry private_policy_absent; then
   printf '%s\n' 'room plugin bucket still has an anonymous policy' >&2
   exit 1
 fi

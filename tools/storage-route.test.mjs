@@ -15,9 +15,9 @@ function storageBlock(caddyfile) {
   return caddyfile.slice(start, caddyfile.indexOf("\n}\n", start) + 3);
 }
 
-function caddyImage() {
-  const match = read("compose.staging.yml").match(/\n  caddy:\n(?:    .*\n)*?    image: (\S+)\n/);
-  assert.ok(match, "staging caddy image");
+function caddyImage(file = "compose.staging.yml") {
+  const match = read(file).match(/\n  caddy:\n(?:    .*\n)*?    image: (\S+)\n/);
+  assert.ok(match, `${file} caddy image`);
   return match[1];
 }
 
@@ -44,8 +44,10 @@ test("every compose storage service pins the hash of its mounted start script", 
   }
 });
 
-test("staging and production publish the same storage route", () => {
+test("staging and production publish the same storage route on the same pinned Caddy", () => {
   assert.equal(storageBlock(read("Caddyfile.production")), storageBlock(read("Caddyfile.staging")));
+  assert.match(caddyImage(), /@sha256:[0-9a-f]{64}$/);
+  assert.equal(caddyImage("compose.production.yml"), caddyImage());
 });
 
 test("storage route proxies only public object reads and refuses the rest before the storage", { skip: !dockerAvailable, timeout: 180_000 }, async t => {

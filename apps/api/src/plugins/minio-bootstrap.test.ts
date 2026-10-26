@@ -23,7 +23,7 @@ if(a[0]==='anonymous'){const bucket=a.at(-1);
 if(process.env.TEST_DENY_PRIVATE_POLICY==='1'&&bucket==='vrata/private-plugins')fail();
 if(!s.buckets.includes(bucket))fail();
 if(a[1]==='get-json')process.stdout.write(s.policies[bucket]?JSON.stringify({Statement:[s.policies[bucket]]})+'\\n':'{}\\n');
-if(a[1]==='set'&&a[2]==='none'){if(!s.policies[bucket])fail();delete s.policies[bucket]}
+if(a[1]==='set'&&a[2]==='none'){if(!s.policies[bucket])fail();delete s.policies[bucket];if(process.env.TEST_LOSE_REMOVAL_ANSWER==='1'&&!s.lost){s.lost=true;fail()}}
 else if(a[1]==='set')s.policies[bucket]=a[2]}
 save();\n`);
   await chmod(mc, 0o755);
@@ -63,6 +63,14 @@ test("bootstrap removes an anonymous policy found on the private bucket", async 
   const state = await f.state();
   assert.equal(state.policies["vrata/private-plugins"], undefined);
   assert.ok(joined(state.calls, "anonymous set none vrata/private-plugins") < joined(state.calls, "anonymous set download vrata/public-assets"));
+});
+test("a lost answer to the policy removal is not repeated as a failing removal", async t => {
+  const f = await fixture(t, { "vrata/public-assets": "download", "vrata/private-plugins": "download" });
+  await execute("sh", [bootstrap], { env: { ...f.env, TEST_LOSE_REMOVAL_ANSWER: "1" } });
+  const state = await f.state();
+  assert.equal(state.policies["vrata/private-plugins"], undefined);
+  assert.equal(state.calls.filter(args => args.join(" ") === "anonymous set none vrata/private-plugins").length, 1);
+  assert.equal(state.policies["vrata/public-assets"], "download");
 });
 test("bootstrap refuses public/private collision or missing private namespace before any policy mutation", async t => {
   for (const bucket of ["public-assets", "public-assets/", "", "private/path"]) {
