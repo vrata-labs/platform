@@ -1,9 +1,10 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type APIRequestContext } from "@playwright/test";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createHmac, randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { PDFDocument } from "pdf-lib";
 import { startReferenceTemplateFixture } from "./reference-template-fixture";
 import { identityProtocolAt } from "./staging-identity";
 import { signRoomSessionToken } from "../../packages/shared-types/src/session-token.js";
@@ -11,6 +12,15 @@ import { signRoomSessionToken } from "../../packages/shared-types/src/session-to
 // Raising the floor is irreversible. This case owns an isolated schema and is
 // intentionally never tagged for the shared staging database.
 test.use({ trace: "off", screenshot: "off", video: "off", viewport: { width: 390, height: 844 } });
+
+/** A real identity-v1 body (client-chosen participant ID and role, no bearer) is refused before any credential is issued. */
+async function expectIdentityV1AdmissionRefused(request: APIRequestContext, origin: string, roomId: string) {
+  const response = await request.post(`${origin}/api/tokens/state`, { data: {
+    roomId, participantId: `identity-v1-${randomUUID()}`, requestedRole: "host", displayName: "Identity v1 client" } });
+  expect(response.status()).toBe(426);
+  // Exact body: no token, participant ID or identity credential.
+  expect(await response.json()).toEqual({ error: "identity_required", reason: "identity_upgrade_required" });
+}
 
 for (const staging of [false, true]) test(`${staging ? "@staging " : ""}obsolete development-key credentials trigger a real upgrade denial`, async ({ page, request }) => {
   test.skip(!staging && !process.env.VRATA_TEST_POSTGRES_URL, "Requires isolated PostgreSQL");
@@ -36,6 +46,7 @@ for (const staging of [false, true]) test(`${staging ? "@staging " : ""}obsolete
     await expect(page.locator("#session-upgrade-dialog")).toBeVisible();
     await expect(page.locator("#session-upgrade-title")).toHaveText("Update required to rejoin this room");
     expect(await page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected)).toBe(false);
+    if (floor === 2) await expectIdentityV1AdmissionRefused(request, origin, roomId);
     if (fixture) {
       const policy = await request.get(`${origin}/api/internal/identity-policy`, { headers: { "x-vrata-internal-token": "test-internal-token" } });
       expect((await policy.json()).minimumProtocolVersion).toBe(1);
@@ -62,12 +73,22 @@ test("real protocol activation stops a legacy client while a fresh tab joins wit
     expect(owner.rows[0].nspname).toBe(fixture.schema);
     const { PostgresStorage } = await import(pathToFileURL(resolve("apps/api/dist/storage.js")).href);
     const storage = new PostgresStorage(pool);
+    const legacyAdmission = page.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state" && response.status() === 200);
+    void legacyAdmission.catch(() => undefined);
     await page.goto(`${fixture.origin}/rooms/demo-room?role=host&onboard=0`);
     await expect(page.locator("#notes-editor")).toBeEnabled({ timeout: 30_000 });
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected)).toBe(true);
     const legacyHostId = await page.evaluate(() => (window as any).__VRATA_DEBUG__?.participantId) as string;
     const legacyRoom = await storage.getRoom("demo-room");
     await storage.updateRoom("demo-room", { sessionControl: { ...legacyRoom!.sessionControl, hostParticipantId: legacyHostId } });
+    // A room material created before activation through the ordinary document upload with the legacy host session.
+    const legacySession = await (await legacyAdmission).json() as { token: string };
+    const pdf = await PDFDocument.create(); pdf.addPage([320, 180]);
+    const uploaded = await request.post(`${fixture.origin}/api/rooms/demo-room/documents`, { headers: { authorization: `Bearer ${legacySession.token}` },
+      multipart: { document: { name: "kept-across-identity-activation.pdf", mimeType: "application/pdf", buffer: Buffer.from(await pdf.save()) } } });
+    expect(uploaded.status()).toBe(201);
+    const keptDocument = (await uploaded.json() as { document: { documentId: string; uploadedBy: string } }).document;
+    expect(keptDocument.uploadedBy).toBe(legacyHostId);
     const before = await page.locator("#notes-editor").inputValue();
     const scope = await page.locator("#notes-scope-select").inputValue();
     let sent!: () => void;
@@ -90,7 +111,21 @@ test("real protocol activation stops a legacy client while a fresh tab joins wit
     expect(persisted.status()).toBe(200);
     expect((await persisted.json()).note.content).toBe(before);
     await fixture.restartApi();
+    await expectIdentityV1AdmissionRefused(request, fixture.origin, "demo-room");
     const untrustedId = `tab-${randomUUID()}`;
+    // Everything the fresh tab sends, from before navigation until after its reload: URLs, headers, bodies and socket frames.
+    const outgoing: string[] = [], roomStateParticipants: string[] = [], presenceParticipants: string[] = [];
+    fresh.on("request", item => {
+      outgoing.push(item.url(), JSON.stringify(item.headers()), item.postDataBuffer()?.toString("latin1") ?? "");
+      const presence = /^\/api\/rooms\/[^/]+\/presence\/([^/]+)$/.exec(new URL(item.url()).pathname);
+      if (presence) presenceParticipants.push(decodeURIComponent(presence[1]));
+    });
+    fresh.on("websocket", socket => {
+      outgoing.push(socket.url());
+      const participant = new URL(socket.url()).searchParams.get("participantId");
+      if (participant !== null) roomStateParticipants.push(participant);
+      socket.on("framesent", frame => outgoing.push(typeof frame.payload === "string" ? frame.payload : frame.payload.toString("latin1")));
+    });
     await fresh.addInitScript(id => sessionStorage.setItem("vrata.participantId", id), untrustedId);
     const admission = fresh.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state");
     await fresh.goto(`${fixture.origin}/rooms/demo-room?onboard=0`, { waitUntil: "domcontentloaded", timeout: 20_000 });
@@ -108,6 +143,10 @@ test("real protocol activation stops a legacy client while a fresh tab joins wit
     expect((await rejoin).status()).toBe(200);
     expect((await (await rejoin).json() as { participantId: string }).participantId).toBe(joined.participantId);
     await expect.poll(() => fresh.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected)).toBe(true);
+    // The planted local ID never leaves the tab; room-state and presence carry only the issued one.
+    expect(outgoing.filter(entry => entry.includes(untrustedId))).toEqual([]);
+    expect(roomStateParticipants.length).toBeGreaterThanOrEqual(2);
+    expect([...new Set([...roomStateParticipants, ...presenceParticipants])]).toEqual([joined.participantId]);
     expect(await storage.identityProtocol.minimum()).toBe(2);
     const recovery = await request.post(`${fixture.origin}/api/rooms/demo-room/identity-recovery`, {
       headers: { "x-vrata-admin-token": fixture.adminToken }, data: { participantId: legacyHostId, role: "host" }
@@ -117,11 +156,23 @@ test("real protocol activation stops a legacy client while a fresh tab joins wit
     await expect(page.locator("#room-recovery-panel")).toBeVisible();
     await page.locator("#room-recovery-panel summary").click();
     await page.locator("#room-recovery-credential").fill(proof);
+    // Recovery reloads the page, which discards response bodies; keep the sessions the real server issues from here on.
+    const recoveredSessions: string[] = [];
+    await page.route("**/api/tokens/state", async route => {
+      const response = await route.fetch();
+      if (response.status() === 200) recoveredSessions.push((await response.json() as { token: string }).token);
+      await route.fulfill({ response });
+    });
     const recovered = page.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state" && response.status() === 200);
     await page.locator("#room-recovery-submit").click();
     await recovered;
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.participantId).catch(() => null)).toBe(legacyHostId);
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.access?.role).catch(() => null)).toBe("host");
+    // Room materials survive activation: the recovered host still lists the document uploaded before the raise.
+    expect(recoveredSessions.length).toBeGreaterThan(0);
+    const library = await request.get(`${fixture.origin}/api/rooms/demo-room/documents`, { headers: { authorization: `Bearer ${recoveredSessions.at(-1)}` } });
+    expect(library.status()).toBe(200);
+    expect((await library.json() as { items: Array<{ documentId: string }> }).items.map(item => item.documentId)).toContain(keptDocument.documentId);
   } finally {
     releaseWrite?.();
     await Promise.allSettled([page.goto("about:blank"), fresh.close()]);
