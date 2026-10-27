@@ -30,8 +30,9 @@ export function resolveRemoteBrowserServicePolicy(env: NodeJS.ProcessEnv = proce
 
 export function validateRemoteBrowserSessionIdentity(input: { sessionId: string; executorInstanceId: string; mediaParticipantId: string; objectId: string; frameStreamId?: string }): boolean {
   const expectedSessionId = `remote-browser:${input.objectId}`;
+  // The media identity is the instance itself, never the shared session name.
   return input.sessionId === expectedSessionId
-    && input.mediaParticipantId === expectedSessionId
+    && input.mediaParticipantId === input.executorInstanceId
     && input.executorInstanceId.startsWith(`${expectedSessionId}:instance:`)
     && input.executorInstanceId.length > `${expectedSessionId}:instance:`.length
     && (!input.frameStreamId || input.frameStreamId === `${expectedSessionId}:frames`);

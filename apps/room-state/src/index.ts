@@ -932,19 +932,32 @@ function remoteBrowserFrameStreamId(state: RemoteBrowserObjectState): string | u
   return state.frameStreamId ?? (state.executorSessionId ? `${state.executorSessionId}:frames` : undefined);
 }
 
-export function verifyRemoteBrowserBinding(server: RoomStateServer, input: Required<Pick<RemoteBrowserBindingRequest, "roomId" | "objectId" | "executorSessionId" | "executorInstanceId">> & Pick<RemoteBrowserBindingRequest, "mediaParticipantId" | "frameStreamId">): boolean {
+/** Why an executor instance is or is not the object's current one. An instance lives in its object and the object in
+ * its room, and rooms live only in this process with nothing restored: superseded, stopped, object_missing and
+ * room_missing never become authorized again for that instance. inactive and failed still name the current one. */
+export type RemoteBrowserBindingReason = "authorized" | "superseded" | "stopped" | "object_missing" | "room_missing"
+  | "inactive" | "failed" | "mismatch";
+
+export function classifyRemoteBrowserBinding(server: RoomStateServer, input: Required<Pick<RemoteBrowserBindingRequest, "roomId" | "objectId" | "executorSessionId" | "executorInstanceId">> & Pick<RemoteBrowserBindingRequest, "mediaParticipantId" | "frameStreamId">): RemoteBrowserBindingReason {
   const room = server.rooms.get(input.roomId);
-  const object = room?.mediaObjects.objects[input.objectId];
-  if (!room || object?.type !== REMOTE_BROWSER_OBJECT_TYPE) return false;
+  if (!room) return "room_missing";
+  const object = room.mediaObjects.objects[input.objectId];
+  if (!object) return "object_missing";
+  if (object.type !== REMOTE_BROWSER_OBJECT_TYPE) return "mismatch";
   const state = object.state as RemoteBrowserObjectState;
-  return Boolean(state
-    && room.mediaObjects.surfaces[object.surfaceId]?.activeObjectId === object.objectId
-    && state.status !== "failed"
-    && state.status !== "stopped"
-    && state.executorSessionId === input.executorSessionId
-    && state.executorInstanceId === input.executorInstanceId
-    && (input.mediaParticipantId === undefined || state.mediaParticipantId === input.mediaParticipantId)
-    && (input.frameStreamId === undefined || remoteBrowserFrameStreamId(state) === input.frameStreamId));
+  if (!state || state.executorSessionId !== input.executorSessionId) return "mismatch";
+  // Instances are object revisions and never repeat; a different current one has replaced this one for good.
+  if (state.executorInstanceId !== input.executorInstanceId) return state.executorInstanceId ? "superseded" : "mismatch";
+  if (state.status === "stopped") return "stopped";
+  if (state.status === "failed") return "failed";
+  if (room.mediaObjects.surfaces[object.surfaceId]?.activeObjectId !== object.objectId) return "inactive";
+  if (input.mediaParticipantId !== undefined && state.mediaParticipantId !== input.mediaParticipantId) return "mismatch";
+  if (input.frameStreamId !== undefined && remoteBrowserFrameStreamId(state) !== input.frameStreamId) return "mismatch";
+  return "authorized";
+}
+
+export function verifyRemoteBrowserBinding(server: RoomStateServer, input: Parameters<typeof classifyRemoteBrowserBinding>[1]): boolean {
+  return classifyRemoteBrowserBinding(server, input) === "authorized";
 }
 
 function forwardRemoteBrowserPatch(server: RoomStateServer, roomId: string, objectId: string | null | undefined, patch: unknown): void {
@@ -1117,7 +1130,7 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
           json(response, 400, { error: "invalid_remote_browser_binding" });
           return;
         }
-        const authorized = verifyRemoteBrowserBinding(authority, {
+        const reason = classifyRemoteBrowserBinding(authority, {
           roomId: payload.roomId,
           objectId: payload.objectId,
           executorSessionId: payload.executorSessionId,
@@ -1125,7 +1138,7 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
           mediaParticipantId: payload.mediaParticipantId,
           frameStreamId: payload.frameStreamId
         });
-        json(response, authorized ? 200 : 409, { authorized });
+        json(response, reason === "authorized" ? 200 : 409, { authorized: reason === "authorized", reason });
         return;
       }
       if (request.method === "POST" && remoteBrowserSessionMatch) {

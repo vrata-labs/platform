@@ -1122,7 +1122,7 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
   assert.equal(openedState?.executorSessionId, "remote-browser:browser-1");
   assert.equal(openedState?.executorInstanceId, "remote-browser:browser-1:instance:1");
   assert.equal(openedState?.frameStreamId, undefined);
-  assert.equal(openedState?.mediaParticipantId, "remote-browser:browser-1");
+  assert.equal(openedState?.mediaParticipantId, "remote-browser:browser-1:instance:1");
   assert.equal(openedState?.mediaTrackSid, undefined);
   assert.equal(openedState?.audioTrackSid, undefined);
   assert.equal(openedState?.currentUrl, "https://example.com/remote-browser-demo.html");
@@ -1147,7 +1147,7 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
     executorInstanceId: "remote-browser:browser-1:instance:1",
     patch: {
       type: "mark-publishing",
-      mediaParticipantId: "remote-browser:browser-1",
+      mediaParticipantId: "remote-browser:browser-1:instance:1",
       inputEventId: "executor:publishing:1"
     },
     nowMs: 3
@@ -1164,7 +1164,7 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
     executorInstanceId: "remote-browser:browser-1:instance:1",
     patch: {
       type: "mark-active",
-      mediaParticipantId: "remote-browser:browser-1",
+      mediaParticipantId: "remote-browser:browser-1:instance:1",
       mediaTrackSid: "TR_VP",
       audioTrackSid: "TR_AUDIO",
       mediaSourceRect: { x: 12.345, y: 34.567, width: 640.111, height: 360.222, viewportWidth: 1280, viewportHeight: 720 },
@@ -1360,7 +1360,7 @@ test("remote-browser open-url binds the committed revision as a fresh executor i
     objectId,
     executorSessionId: sessionId,
     executorInstanceId: executorInstanceId ?? "",
-    patch: { type: "mark-publishing", mediaParticipantId: sessionId, inputEventId },
+    patch: { type: "mark-publishing", mediaParticipantId: executorInstanceId ?? "", inputEventId },
     nowMs
   });
 
@@ -1416,6 +1416,52 @@ test("remote-browser open-url binds the committed revision as a fresh executor i
   assert.equal(overflowed.result.accepted, false);
   assert.equal(overflowed.result.blockedReason, "invalid-patch");
   assert.equal(instanceOf(overflowed.room), undefined);
+});
+
+test("a stopped remote-browser instance never publishes again; only a new open starts the next one", () => {
+  type Room = ReturnType<typeof createRoomState>;
+  const objectId = "browser-stop";
+  const sessionId = `remote-browser:${objectId}`;
+  const created = createMediaObject(joinRoom(createRoomState("demo"), "host", { role: "host" }), "host", {
+    commandId: "cmd-create-browser-stop", surfaceId: "debug-main", objectType: "remote-browser", objectId, nowMs: 1
+  }).room;
+  const open = (room: Room, nowMs: number) => patchMediaObjectState(room, "host", {
+    commandId: `cmd-open-stop-${nowMs}`, surfaceId: "debug-main", objectId,
+    expectedRevision: room.mediaObjects.objects[objectId]?.revision ?? -1,
+    patch: { type: "open-url", url: "https://example.com/remote-browser-demo.html", inputEventId: `host:open:${nowMs}` }, nowMs
+  });
+  const executor = (room: Room, instanceId: string, patch: Parameters<typeof patchRemoteBrowserExecutorState>[1]["patch"], nowMs: number) =>
+    patchRemoteBrowserExecutorState(room, {
+      commandId: `cmd-executor-stop-${nowMs}`, surfaceId: "debug-main", objectId, executorSessionId: sessionId, executorInstanceId: instanceId, patch, nowMs
+    });
+  const statusOf = (room: Room) => (room.mediaObjects.objects[objectId]?.state as { status?: string } | undefined)?.status;
+  const first = `${sessionId}:instance:1`;
+
+  const opened = open(created, 2);
+  // The media identity is the instance; the shared session address no longer publishes.
+  assert.equal(executor(opened.room, first, { type: "mark-publishing", mediaParticipantId: sessionId, inputEventId: "executor:legacy:1" }, 3).result.accepted, false);
+  const publishing = executor(opened.room, first, { type: "mark-publishing", mediaParticipantId: first, inputEventId: "executor:publishing:1" }, 3);
+  assert.equal(publishing.result.accepted, true);
+  const stopped = executor(publishing.room, first, { type: "mark-stopped", inputEventId: "executor:stopped:1" }, 4);
+  assert.equal(stopped.result.accepted, true);
+  assert.equal(statusOf(stopped.room), "stopped");
+
+  for (const [nowMs, patch] of [
+    [5, { type: "mark-publishing", mediaParticipantId: first, inputEventId: "executor:revive:1" }],
+    [6, { type: "mark-active", mediaParticipantId: first, mediaTrackSid: "TR_VP", inputEventId: "executor:revive:2" }],
+    [7, { type: "mark-failed", errorCode: "executor_crashed", inputEventId: "executor:revive:3" }]
+  ] as const) {
+    const refused = executor(stopped.room, first, patch, nowMs);
+    assert.equal(refused.result.accepted, false, patch.type);
+    assert.equal(statusOf(refused.room), "stopped", patch.type);
+  }
+
+  const reopened = open(stopped.room, 8);
+  assert.equal(reopened.result.accepted, true);
+  const second = `${sessionId}:instance:${reopened.result.revision}`;
+  assert.notEqual(second, first);
+  assert.equal(executor(reopened.room, first, { type: "mark-publishing", mediaParticipantId: first, inputEventId: "executor:old:1" }, 9).result.accepted, false);
+  assert.equal(executor(reopened.room, second, { type: "mark-publishing", mediaParticipantId: second, inputEventId: "executor:new:1" }, 9).result.accepted, true);
 });
 
 test("leaveRoom clears owned active screen-share object", () => {

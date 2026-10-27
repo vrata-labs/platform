@@ -25,13 +25,17 @@ test("remote browser service policy clamps resource limits", () => {
 });
 
 test("remote browser session identity is bound to its object", () => {
-  assert.equal(validateRemoteBrowserSessionIdentity({ sessionId: "remote-browser:object-1", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId: "remote-browser:object-1", objectId: "object-1" }), true);
-  assert.equal(validateRemoteBrowserSessionIdentity({ sessionId: "remote-browser:object-2", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId: "remote-browser:object-1", objectId: "object-1" }), false);
-  assert.equal(validateRemoteBrowserSessionIdentity({ sessionId: "remote-browser:object-1", executorInstanceId: "remote-browser:other:instance:generation-1", mediaParticipantId: "remote-browser:object-1", objectId: "object-1" }), false);
+  assert.equal(validateRemoteBrowserSessionIdentity({ sessionId: "remote-browser:object-1", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId: "remote-browser:object-1:instance:generation-1", objectId: "object-1" }), true);
+  assert.equal(validateRemoteBrowserSessionIdentity({ sessionId: "remote-browser:object-2", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId: "remote-browser:object-1:instance:generation-1", objectId: "object-1" }), false);
+  assert.equal(validateRemoteBrowserSessionIdentity({ sessionId: "remote-browser:object-1", executorInstanceId: "remote-browser:other:instance:generation-1", mediaParticipantId: "remote-browser:object-1:instance:generation-1", objectId: "object-1" }), false);
+  // The media identity is the instance itself: the shared session address or another instance is refused.
+  for (const mediaParticipantId of ["remote-browser:object-1", "remote-browser:object-1:instance:generation-0"]) {
+    assert.equal(validateRemoteBrowserSessionIdentity({ sessionId: "remote-browser:object-1", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId, objectId: "object-1" }), false);
+  }
 });
 
 test("remote browser session holds the frame stream derived from its validated session", () => {
-  const identity = { sessionId: "remote-browser:object-1", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId: "remote-browser:object-1", objectId: "object-1" };
+  const identity = { sessionId: "remote-browser:object-1", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId: "remote-browser:object-1:instance:generation-1", objectId: "object-1" };
   for (const frameStreamId of [undefined, "", "remote-browser:object-1:frames"]) {
     assert.equal(validateRemoteBrowserSessionIdentity({ ...identity, frameStreamId }), true);
     assert.equal(resolveRemoteBrowserFrameStreamId({ ...identity, frameStreamId }), "remote-browser:object-1:frames");

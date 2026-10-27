@@ -10,6 +10,7 @@ import {
   applyMediaObjectCreateCommand,
   applyMediaObjectPatchCommand,
   applyRemoteBrowserExecutorPatchCommand,
+  classifyRemoteBrowserBinding,
   applyMediaObjectStopCommand,
   applyDocumentMediaObjectsCleanup,
   applyPdfPresentationDocumentCleanup,
@@ -662,7 +663,7 @@ test("remote browser executor callback activates LiveKit media tracks", () => {
     objectId,
     executorSessionId: `remote-browser:${objectId}`,
     executorInstanceId,
-    mediaParticipantId: `remote-browser:${objectId}`
+    mediaParticipantId: executorInstanceId
   }), true);
   assert.equal(verifyRemoteBrowserBinding(server, {
     roomId: "demo-room",
@@ -696,7 +697,7 @@ test("remote browser executor callback activates LiveKit media tracks", () => {
     executorInstanceId,
     patch: {
       type: "mark-active",
-      mediaParticipantId: `remote-browser:${objectId}`,
+      mediaParticipantId: executorInstanceId,
       mediaTrackSid: "TR_VP",
       audioTrackSid: "TR_AUDIO",
       inputEventId: "executor:active:1"
@@ -712,6 +713,49 @@ test("remote browser executor callback activates LiveKit media tracks", () => {
   assert.equal(payload.type, "room_state");
   assert.equal(payload.room.mediaObjects.objects[objectId].state.mediaTrackSid, "TR_VP");
   assert.equal("frameStreamId" in payload.room.mediaObjects.objects[objectId].state, false);
+});
+
+test("remote browser binding names why an instance is not current, and only lasting reasons are final", () => {
+  const server = createRoomStateServer();
+  connectParticipant(server, "demo-room", "host", createSocket() as never, { role: "host" });
+  const objectId = applyMediaObjectCreateCommand(server, "demo-room", "host", {
+    commandId: "cmd-create-browser", surfaceId: "debug-main", objectType: "remote-browser"
+  }).objectId ?? "";
+  const sessionId = `remote-browser:${objectId}`;
+  const open = (expectedRevision: number, inputEventId: string) => applyMediaObjectPatchCommand(server, "demo-room", "host", {
+    commandId: `cmd-open-${inputEventId}`, surfaceId: "debug-main", objectId, expectedRevision,
+    patch: { type: "open-url", url: "https://example.com", inputEventId }
+  });
+  const reason = (instanceId: string, overrides: Partial<Parameters<typeof classifyRemoteBrowserBinding>[1]> = {}) => classifyRemoteBrowserBinding(server, {
+    roomId: "demo-room", objectId, executorSessionId: sessionId, executorInstanceId: instanceId, mediaParticipantId: instanceId, ...overrides
+  });
+
+  assert.equal(open(0, "host:open:1").accepted, true);
+  const first = `${sessionId}:instance:1`;
+  assert.equal(reason(first), "authorized");
+  assert.equal(reason(first, { mediaParticipantId: sessionId }), "mismatch");
+  assert.equal(reason(first, { executorSessionId: "remote-browser:other" }), "mismatch");
+  assert.equal(reason(first, { objectId: "missing-object" }), "object_missing");
+  assert.equal(reason(first, { roomId: "never-loaded-room" }), "room_missing");
+  // The binding check reads; it never creates the room it was asked about.
+  assert.equal(server.rooms.has("never-loaded-room"), false);
+
+  const reopened = open(1, "host:open:2");
+  assert.equal(reopened.accepted, true);
+  const second = `${sessionId}:instance:${reopened.revision}`;
+  assert.equal(reason(first), "superseded");
+  assert.equal(reason(second), "authorized");
+
+  assert.equal(applyRemoteBrowserExecutorPatchCommand(server, {
+    roomId: "demo-room", surfaceId: "debug-main", objectId, executorSessionId: sessionId, executorInstanceId: second,
+    patch: { type: "mark-stopped", inputEventId: "executor:stopped:1" }
+  }).accepted, true);
+  assert.equal(reason(second), "stopped");
+  assert.equal(applyRemoteBrowserExecutorPatchCommand(server, {
+    roomId: "demo-room", surfaceId: "debug-main", objectId, executorSessionId: sessionId, executorInstanceId: second,
+    patch: { type: "mark-publishing", mediaParticipantId: second, inputEventId: "executor:revive:1" }
+  }).accepted, false);
+  assert.equal(reason(second), "stopped");
 });
 
 test("remote browser open-url forwards the derived frame stream without storing it", () => {
