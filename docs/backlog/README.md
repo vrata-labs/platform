@@ -12,7 +12,7 @@
 ## P2
 
 - [Вход в голос сдаётся после неудачного ICE и не пробует другой путь](2026-10-26-voice-join-gives-up-after-ice-failure.md) — new — P2 — через ~17 с клиент возвращает «Join Audio» без повтора через TCP или relay; из-за этого тест двухстороннего звука ушёл из gate.
-- [Remote-browser callbacks не работают на поверхности, отличной от debug-main](2026-10-11-remote-browser-callback-surface.md) — parked — P2 — объект на другой поверхности остаётся loading из-за callback surface mismatch.
+- [Remote-browser callbacks не работают на поверхности, отличной от debug-main](2026-10-11-remote-browser-callback-surface.md) — promoted — сделано 2026-10-27: room-state передаёт исполнителю поверхность объекта, callbacks её несут; осталось проверить с настоящим publisher на стенде.
 - [Пример auto-seat показывает «не разрешена» после перезапуска экземпляра](2026-10-23-auto-seat-status-after-lease-restart.md) — parked — P2 — сообщение противоречит посадке и делает тест нестабильным. Повторился 2026-10-27 в CI чужого PR.
 - [Room-state хранит состояние удалённой комнаты под тем же roomId](2026-10-26-room-state-recreated-room-isolation.md) — parked — P2 — пересозданная встреча видит прежние объекты и привязки исполнителя; нужен выбор: поколение комнаты в room-state или сброс при удалении.
 - [Создание стенда падает на временных сбоях Selectel без повтора](2026-10-25-vrata-stage-transient-provider-retry.md) — promoted — сделано 2026-10-26: сервер с временной ошибкой сборки Nova собирается заново (до трёх раз), сбои связи с GitHub повторяются.

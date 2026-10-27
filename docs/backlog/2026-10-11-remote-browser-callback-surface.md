@@ -3,7 +3,7 @@ name: remote-browser-callback-surface
 date: 2026-10-11
 source: T01a-S2b-AD
 area: backend
-status: parked
+status: promoted
 priority: P2
 jira: не заведена
 ---
@@ -44,10 +44,29 @@ lease. Callback routing и запуск LiveKit publisher требуют отд�
 
 ## Ссылки
 
-- apps/remote-browser/src/index.ts:724 — executor callback.
+- apps/remote-browser/src/index.ts — remoteBrowserExecutorCallbackBody и patchRemoteBrowserExecutorState
+  (executor callback), resolveRemoteBrowserSessionSurfaceId (surfaceId из запроса запуска).
 - apps/room-state/src/index.ts — forwardRemoteBrowserPatch и callback route.
 - apps/room-state/src/state.ts — patchRemoteBrowserExecutorState.
 - docs/arch/09_phase_m1_8_multi_surface_layouts.md — несколько поверхностей.
 
 ## Актуальность 2026-10-26
 Литерал `surfaceId: "debug-main"` остаётся в `apps/remote-browser/src/index.ts:731`.
+
+## Сделано 2026-10-27
+
+- Room-state передаёт исполнителю поверхность объекта при каждом запуске сессии:
+  первый open-url, повтор после mark-failed и замена URL.
+- Remote-browser хранит `surfaceId` в сессии и подставляет его во все callbacks вместо
+  литерала `debug-main`. Запрос без `surfaceId` (старый room-state) по-прежнему
+  получает `debug-main`, некорректное значение отклоняется как `invalid_session_payload`.
+- Проверка `object.surfaceId` в `patchRemoteBrowserExecutorState` не ослаблена. Тест room-state
+  на `laptop-screen` и `whiteboard-wall`: mark-publishing, mark-active и mark-failed с
+  поверхностью объекта принимаются, с чужой поверхностью отклоняются с
+  `object-surface-mismatch` и не меняют состояние объекта.
+
+## Осталось
+
+Сценарий с настоящим publisher: open-url → mark-publishing → mark-active на `laptop-screen`
+и `whiteboard-wall`, видео на выбранной поверхности и отказ callback с чужой поверхности.
+Нужен стенд и LiveKit, в unit-тестах это не проверить.

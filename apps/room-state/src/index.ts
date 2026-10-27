@@ -15,6 +15,7 @@ import {
   parseRoomRole,
   registerSceneMediaSurfaces,
   type MediaObjectCommandResult,
+  type MediaObjectInstance,
   type RemoteBrowserObjectState,
   type RemoteBrowserPatch,
   type RoomPermission,
@@ -693,7 +694,7 @@ export function applyMediaObjectStopCommand(server: RoomStateServer, roomId: str
 }): MediaObjectCommandResultPayload {
   const room = ensureRoom(server, roomId);
   const objectId = input.objectId?.trim() || "";
-  const remoteBrowserSessionId = getRemoteBrowserObjectState(server, roomId, objectId)?.executorSessionId ?? null;
+  const remoteBrowserSessionId = getRemoteBrowserObject(server, roomId, objectId)?.state.executorSessionId ?? null;
   const result = stopMediaObject(room, participantId, {
     commandId: input.commandId?.trim() || randomUUID(),
     surfaceId: input.surfaceId?.trim() || "debug-main",
@@ -916,7 +917,7 @@ function getRemoteBrowserInternalUrl(env: NodeJS.ProcessEnv = process.env): stri
   return url && /^https?:\/\//.test(url) ? url.replace(/\/$/, "") : null;
 }
 
-function getRemoteBrowserObjectState(server: RoomStateServer, roomId: string, objectId?: string | null): RemoteBrowserObjectState | null {
+function getRemoteBrowserObject(server: RoomStateServer, roomId: string, objectId?: string | null): MediaObjectInstance<RemoteBrowserObjectState> | null {
   if (!objectId) {
     return null;
   }
@@ -924,7 +925,7 @@ function getRemoteBrowserObjectState(server: RoomStateServer, roomId: string, ob
   if (object?.type !== REMOTE_BROWSER_OBJECT_TYPE) {
     return null;
   }
-  return object.state as RemoteBrowserObjectState;
+  return object as MediaObjectInstance<RemoteBrowserObjectState>;
 }
 
 // Open-url leaves frameStreamId unset, so the executor and frame credentials bind the one stream derived from the session.
@@ -965,8 +966,9 @@ function forwardRemoteBrowserPatch(server: RoomStateServer, roomId: string, obje
   if (!baseUrl || !patch || typeof patch !== "object") {
     return;
   }
-  const state = getRemoteBrowserObjectState(server, roomId, objectId);
-  if (!state?.executorSessionId || !state.executorInstanceId || !state.mediaParticipantId) {
+  const object = getRemoteBrowserObject(server, roomId, objectId);
+  const state = object?.state;
+  if (!object || !state?.executorSessionId || !state.executorInstanceId || !state.mediaParticipantId) {
     return;
   }
   const remotePatch = patch as RemoteBrowserPatch;
@@ -980,6 +982,8 @@ function forwardRemoteBrowserPatch(server: RoomStateServer, roomId: string, obje
         frameStreamId: remoteBrowserFrameStreamId(state),
         mediaParticipantId: state.mediaParticipantId,
         roomId,
+        // Executor callbacks must name the object's surface: room-state rejects any other one.
+        surfaceId: object.surfaceId,
         objectId,
         url: remotePatch.url
       })
