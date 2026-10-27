@@ -55,6 +55,8 @@ curl -fsS "$VRATA_APP_BASE_URL/rooms/demo-room"
 curl -fsS "$VRATA_APP_BASE_URL/control-plane"
 ```
 
+An upgrade never raises the room identity floor. Activating identity v2 (and the optional media boundaries) is a separate irreversible step that also restricts later rollback targets; see [Room Identity v2 Activation](self-hosting.md#room-identity-v2-activation).
+
 ## Rollback
 
 If smoke fails, set `IMAGE_TAG` back to the previous known-good tag and restart:

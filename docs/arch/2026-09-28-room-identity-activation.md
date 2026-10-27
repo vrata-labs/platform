@@ -1803,3 +1803,53 @@ The shared storage suite covers concurrency, epoch/revision and migration. The
 client suite covers ID adoption before first publish, tab/room isolation, late
 responses and drafts. Activation requires final local E2E, CI/image publication,
 exact-SHA staging verification and recorded rollback behavior.
+
+### Compatibility matrix verification
+
+Where each row of the client/API compatibility matrix is proven. "CI" means the
+unit job or the local E2E shards with an isolated PostgreSQL (the same commands
+run locally); "staging gate" means `@staging` cases of `pnpm test:e2e:staging`
+against the deployed floor.
+
+- **R1, new client / new API** (server-issued ID everywhere):
+  `apps/runtime-web/src/index.test.ts` (boot refuses admission when `/health` is
+  not OK instead of falling back to the legacy body; floor 2 sends the v2 body
+  without `participantId`), CI. `tests/e2e/identity-boundary.spec.ts`, "real
+  protocol activation stops a legacy client while a fresh tab joins…": the
+  planted local ID never appears in any request URL, header, body, WebSocket URL
+  or frame of the fresh tab, and room-state and presence carry only the issued
+  ID across a reload, CI. `tests/e2e/media-source-grants.spec.ts`: the LiveKit
+  media binding names the issued participant ID, CI.
+  `tests/e2e/normal-product.spec.ts` `@staging`: seat occupancy relayed under the
+  admitted ID on the deployed floor, staging gate.
+- **R2, new client / old API** (no v2 or plugin claims): `index.test.ts` (no
+  `identityProtocolVersion` in `/health` keeps the legacy body),
+  `apps/runtime-web/src/plugins/http.test.ts`, `plugins/controller.test.ts` and
+  `plugins/author-http.test.ts` (an old API or inactive identity becomes
+  `unsupported`; a legacy session creates no plugin traffic), CI.
+  `tests/e2e/room-plugin-runtime.spec.ts`, "room without plugin bindings never
+  downloads Worker or VM; floor one skips discovery": floor-1 fixture in CI, its
+  `@staging` twin reads the deployed floor. `apps/api/src/plugins/rollback-compat.postgres.test.ts`:
+  the pinned pre-plugin API serves ordinary legacy rooms on the new schema, CI.
+- **R3, old identity-v1 client / new API** (refusal before issuance):
+  `apps/api/src/identity-boundary.postgres.test.ts`, CI.
+  `identity-boundary.spec.ts`: the obsolete development-key case, CI and staging
+  gate; on a floor-2 host it also sends a real identity-v1 body and expects 426
+  `identity_upgrade_required` without a token. The live raise case sends the same
+  body after activation, CI.
+- **R4, tab open before update**: the live raise case keeps the open legacy tab's
+  note draft in the "Update required" dialog, leaves the server note and a
+  document uploaded before the raise intact, and recovers the legacy Host with an
+  administrator code, CI. `tests/e2e/session-upgrade.spec.ts` (transport-injected
+  denials: reload-loop guard, drafts, recovery close), CI only.
+- **R5, identity-v2 client without plugin support**:
+  `tests/e2e/room-plugin-auto-seat.spec.ts`, "isolated v2 member whose browser
+  cannot host plugins…": without `Worker` the member is admitted through v2,
+  connects to room-state, reports the host failure, creates no Worker, stays
+  standing past the arrival window and seats manually, CI.
+  `tests/e2e/room-plugin-seating.spec.ts`: a tab-stored opt-out keeps the person
+  standing and a manual stand-up is final, CI.
+- **Update and recovery UI**: `apps/runtime-web/src/session-upgrade.test.ts`,
+  `session-upgrade-ui.test.ts` and `identity-recovery.test.ts`, CI.
+  `identity-boundary.spec.ts`, "legacy private owner recovers through an
+  administrator-issued single-use code" and the live raise case, CI.

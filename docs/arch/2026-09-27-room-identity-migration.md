@@ -24,6 +24,7 @@ or:
 - Recommended server mapping: 426 for an incompatible client protocol, 401 for an obsolete authenticated session/epoch, 409 for identity requiring administrator recovery.
 - Both the literal `error` and an allowlisted `reason` are required. Arbitrary server text is never rendered in the dialog. Ordinary access denial and revision conflicts retain existing behavior.
 - Room-state accepts the WebSocket and then closes with 4406 for upgrade or 4409 for recovery. The optional close reason is either empty or exactly the matching reason literal. A rejected handshake is an opaque browser 1006 and cannot carry this contract.
+- The current room-state emits only 4406, also when the API answers its authority check with 409. Recovery is signalled on REST (409 `identity_recovery_required`); the client still handles 4409 defensively.
 - Old connection generations cannot block a newer connection. A current connection's identity close is handled before generic reconnect handling.
 
 ## Client behavior
@@ -55,6 +56,8 @@ S1 deliberately retains legacy participant IDs, personal-owner IDs, display name
 
 ## Verification scope
 
-`tests/e2e/session-upgrade.spec.ts` runs the same three cases locally and on published staging: boot rejection/reload loop, rejection during live note editing with a delayed session-control response, and recovery close without reconnect. Future REST/WS denials are injected at the browser transport boundary because S1 does not yet enable a v2 server. These tests prove the published client behavior, **not** server identity enforcement or recovery completion.
+`tests/e2e/session-upgrade.spec.ts` runs three client cases locally (and in CI) only: boot rejection/reload loop, rejection during live note editing with a delayed session-control response, and recovery close without reconnect. The REST/WS denials are injected at the browser transport boundary, so a staging run would exercise no deployment. These tests prove client behavior, **not** server identity enforcement or recovery completion.
+
+Real server denials are covered by `tests/e2e/identity-boundary.spec.ts`. Its obsolete development-key case also runs in the staging gate (`@staging`, including a real identity-v1 admission body on a floor-2 host); the live floor raise, administrator recovery and fresh v2 entry run locally and in CI against an isolated database. The full mapping is in [Compatibility matrix verification](2026-09-28-room-identity-activation.md#compatibility-matrix-verification).
 
 Unit coverage includes wire allowlists, monotonic escalation, late responses, tab/room draft isolation, storage failure, failing teardown, and note cancellation/scope ownership. Existing room, notes, media, seat, avatar and scene suites remain part of the normal local/staging gate.
