@@ -14,7 +14,7 @@ const additiveBlocks = [
   /^# HELP vrata_api_legacy_state_release_completion_failures_total[^\n]*\n# TYPE vrata_api_legacy_state_release_completion_failures_total counter\nvrata_api_legacy_state_release_completion_failures_total [0-9]+\n/gm,
   /^# HELP vrata_api_frame_credential_release_completion_failures_total[^\n]*\n# TYPE vrata_api_frame_credential_release_completion_failures_total counter\nvrata_api_frame_credential_release_completion_failures_total [0-9]+\n/gm,
   /^# HELP vrata_api_media_credential_release_completion_failures_total[^\n]*\n# TYPE vrata_api_media_credential_release_completion_failures_total counter\nvrata_api_media_credential_release_completion_failures_total [0-9]+\n/gm,
-  /^# HELP vrata_api_media_screen_reconciliation_total[^\n]*\n# TYPE vrata_api_media_screen_reconciliation_total counter\n(?:vrata_api_media_screen_reconciliation_total\{outcome="(?:observed|pending|unavailable|lowered|evicted)"\} [0-9]+\n){5}/gm
+  /^# HELP vrata_api_media_screen_reconciliation_total[^\n]*\n# TYPE vrata_api_media_screen_reconciliation_total counter\n(?:vrata_api_media_screen_reconciliation_total\{outcome="(?:observed|pending|unavailable|lowered|evicted|retired)"\} [0-9]+\n){6}/gm
 ];
 function legacyReport(text: string): string {
   // Additive counters are pinned separately; retain the original golden
@@ -154,12 +154,12 @@ test("media credential release completion failures render as one unlabelled coun
   assert.equal(Object.keys(reporter.metrics).at(-1), "mediaScreenReconciliationTotal");
 });
 
-test("media outcomes render only five fixed labels without exposing unknown values", async () => {
+test("media outcomes render only six fixed labels without exposing unknown values", async () => {
   const reporter = create();
-  for (const [index, outcome] of ["observed", "pending", "unavailable", "lowered", "evicted"].entries()) reporter.metrics.mediaScreenReconciliationTotal.set(outcome, index + 1);
+  for (const [index, outcome] of ["observed", "pending", "unavailable", "lowered", "evicted", "retired"].entries()) reporter.metrics.mediaScreenReconciliationTotal.set(outcome, index + 1);
   reporter.metrics.mediaScreenReconciliationTotal.set("private-room:secret", 99);
   const output = await reporter.apiMetricsText(emptyStorage);
-  for (const [index, outcome] of ["observed", "pending", "unavailable", "lowered", "evicted"].entries()) {
+  for (const [index, outcome] of ["observed", "pending", "unavailable", "lowered", "evicted", "retired"].entries()) {
     assert.ok(output.includes(`vrata_api_media_screen_reconciliation_total{outcome="${outcome}"} ${index + 1}\n`));
   }
   assert.equal(output.includes("private-room:secret"), false);

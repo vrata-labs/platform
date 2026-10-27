@@ -70,6 +70,7 @@ import type { Storage, RoomIdentityEffectStorage, VirtualRoomEffectStorage, Lega
 import { createRoomEffectFacade } from "./identity/effect-facade.js";
 import { assertParticipantViewDeadline, readParticipantSessionViewV2 } from "./identity/participant-view-v2.js";
 import { identityFenceUnavailable, uncertainRoomCommit } from "./identity/fence-transaction.js";
+import { createFencedAudit, type FencedAudit, type FencedAuditResult } from "./fenced-audit.js";
 import { identityAdmissionOriginHash as hashAdmissionOrigin } from "./identity/admission-origin.js";
 import { adminCurrentOwnerParticipantId, currentRoomOwner } from "./identity/admin-room-projection.js";
 import {
@@ -319,9 +320,10 @@ const mediaScreenService = createMediaScreenService(storagePromise, {
   event: outcome => incrementCounter(metrics.mediaScreenReconciliationTotal, outcome),
   internalHeaders: () => getInternalServiceHeaders()
 });
+const deniedEffectReason = (error: unknown) => error instanceof RoomEffectPermissionDenied ? "permission_denied"
+  : error instanceof IdentityBoundaryError ? error.reason : null;
 const routeRoomNotesRequest = createRoomNotesRoutes({ metrics, resolveControlPlaneActor, getRequestId, logEvent, runGuardedRoomEffect,
-  deniedEffectReason: error => error instanceof RoomEffectPermissionDenied ? "permission_denied"
-    : error instanceof IdentityBoundaryError ? error.reason : null });
+  deniedEffectReason });
 let managedMediaControl: ReturnType<typeof createManagedMediaControl> | undefined;
 const managedMedia = () => managedMediaControl === undefined ? (managedMediaControl = createManagedMediaControl()) : managedMediaControl;
 const managedRoomEnforcer = createManagedRoomEnforcer({ storage: storagePromise, media: managedMedia,
@@ -1338,7 +1340,8 @@ async function releaseLegacyPersonalRoom(request: IncomingMessage, response: Ser
 }
 
 async function releaseDocumentBytes(storage: Storage, actor: ControlPlaneActor, room: RoomRecord,
-  document: RoomDocumentRecord, permission: RoomPermission, activeSurfaceRequired: boolean, send: () => void): Promise<boolean> {
+  document: RoomDocumentRecord, permission: RoomPermission, activeSurfaceRequired: boolean, audit: FencedAudit,
+  send: () => void): Promise<boolean> {
   return runGuardedRoomEffect(storage, actor, room, permission, async scoped => {
     if (actor.identityProtocolVersion === 2) {
       const current = await scoped.getRoomDocument(room.roomId, document.documentId);
@@ -1346,9 +1349,9 @@ async function releaseDocumentBytes(storage: Storage, actor: ControlPlaneActor, 
         || activeSurfaceRequired && (!current.linkedSurfaceId || current.linkedSurfaceId !== document.linkedSurfaceId
           || current.metadata?.kind !== document.metadata?.kind)) return false;
     }
-    scoped.releaseResponse(send);
+    scoped.releaseResponse(() => { send(); audit.released(); });
     return true;
-  });
+  }).catch(error => { audit.refused(error); throw error; });
 }
 
 function isPrivateRoom(room: RoomRecord): boolean {
@@ -1391,7 +1394,7 @@ function writeRoomDocumentsAudit(input: {
   action: "documents.list" | "documents.upload" | "documents.download" | "documents.presentation" | "documents.delete" | "documents.select-surface";
   roomId: string;
   documentId?: string;
-  result: "allowed" | "denied";
+  result: FencedAuditResult;
   reason?: string;
   actor?: ControlPlaneActor;
 }): void {
@@ -1452,8 +1455,20 @@ function resolveRoomDocumentsActor(
     return deny("permission_denied");
   }
 
-  writeRoomDocumentsAudit({ request, action: input.action, roomId: input.room.roomId, documentId: input.documentId, result: "allowed", actor });
+  // A v2 action is audited by its fenced outcome (documentAudit), not at entry.
+  if (actor.identityProtocolVersion !== 2) {
+    writeRoomDocumentsAudit({ request, action: input.action, roomId: input.room.roomId, documentId: input.documentId, result: "allowed", actor });
+  }
   return actor;
+}
+
+/** One audit record per v2 document request by its fenced outcome (createFencedAudit); the route settles it when it
+ * has finished. Other actors are audited at entry. */
+function documentAudit(request: IncomingMessage, actor: ControlPlaneActor,
+  action: Parameters<typeof writeRoomDocumentsAudit>[0]["action"], roomId: string, documentId?: string): FencedAudit {
+  return createFencedAudit((result, reason) => {
+    if (actor.identityProtocolVersion === 2) writeRoomDocumentsAudit({ request, action, roomId, documentId, result, reason, actor });
+  }, deniedEffectReason);
 }
 
 async function inspectPdfDocument(data: Buffer, maxPages: number): Promise<RoomDocumentMetadata> {
@@ -3026,115 +3041,120 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const permission = method === "GET" ? "document.view" : "document.upload";
     const actor = resolveRoomDocumentsActor(request, response, { room, permission, action: method === "GET" ? "documents.list" : "documents.upload" });
     if (!actor) return;
-
-    let uploadPolicy: ReturnType<typeof getDocumentUploadPolicy> | undefined;
-    try { uploadPolicy = getDocumentUploadPolicy(); }
-    catch { if (method === "POST") return json(response, 503, { error: "document_upload_limits_unavailable" }); }
-    if (method === "GET") {
-      const documents = await storage.listRoomDocuments(roomId);
-      const items = documents.map((document) => serializeRoomDocument(request, document));
-      await runGuardedRoomEffect(storage, actor, room, permission, async scoped => { scoped.releaseResponse(() => { json(response, 200, { items, uploadPolicy }); }); });
-      return;
-    }
-
-    if (!uploadPolicy) return json(response, 503, { error: "document_upload_limits_unavailable" });
-    const maxBytes = uploadPolicy.maxFileBytes;
-    const boundary = parseMultipartBoundary(request.headers["content-type"]);
-    if (!boundary) {
-      incrementCounter(metrics.documentsUploadedTotal, "unknown:rejected");
-      return json(response, 415, { error: "expected_multipart_document_upload" });
-    }
-    const contentLength = request.headers["content-length"];
-    if (contentLength !== undefined && Number(contentLength) > maxBytes + DOCUMENT_MULTIPART_OVERHEAD_BYTES) {
-      response.setHeader("connection", "close");
-      return json(response, 413, { error: "document_too_large" });
-    }
-    const body = await readRequestBuffer(request, maxBytes + DOCUMENT_MULTIPART_OVERHEAD_BYTES);
-    const parts = parseMultipartFormData(body, boundary);
-    const documentFile = filePart(parts, "document") ?? filePart(parts, "file");
-    const filename = normalizeDocumentFilename(documentFile?.filename);
-    if (!documentFile || !filename) {
-      incrementCounter(metrics.documentsUploadedTotal, "unknown:rejected");
-      return json(response, 400, { error: "invalid_document_filename" });
-    }
-    const contentType = normalizeDocumentContentType(documentFile, filename);
-    if (!contentType) {
-      incrementCounter(metrics.documentsUploadedTotal, "unsupported:rejected");
-      return json(response, 400, { error: "unsupported_document_mime" });
-    }
-    if (documentFile.data.byteLength > maxBytes) {
-      incrementCounter(metrics.documentsUploadedTotal, `${contentType}:rejected`);
-      return json(response, 413, { error: "document_too_large" });
-    }
-
-    let documentMetadata: RoomDocumentMetadata = {};
-    if (contentType === "application/pdf") {
-      try {
-        documentMetadata = await inspectPdfDocument(documentFile.data, uploadPolicy.maxPdfPages);
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : "corrupt_pdf";
-        incrementCounter(metrics.pdfValidationFailuresTotal, reason);
-        incrementCounter(metrics.documentsUploadedTotal, `${contentType}:rejected`);
-        return json(response, 422, { error: reason, requestId });
-      }
-    } else if (contentType.startsWith("image/") || contentType.startsWith("video/")) {
-      const kind = contentType.startsWith("image/") ? "image" : "video";
-      try {
-        documentMetadata = kind === "image"
-          ? inspectImageDocument(documentFile.data, contentType)
-          : inspectVideoDocument(documentFile.data, contentType, parts);
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : `invalid_${kind}`;
-        incrementCounter(metrics.documentMediaValidationFailuresTotal, `${kind}:${reason}`);
-        incrementCounter(metrics.documentsUploadedTotal, `${contentType}:rejected`);
-        return json(response, 422, { error: reason, requestId });
-      }
-    }
-
-    let uploadedStorage: ReturnType<typeof getDocumentUploadStorage> | null = null;
-    let uploadedKey: string | null = null;
-    let documentPersisted = false;
+    const audit = documentAudit(request, actor, method === "GET" ? "documents.list" : "documents.upload", roomId);
     try {
-      const documentId = randomUUID();
-      const uploadStorage = getDocumentUploadStorage(request);
-      const storageKey = documentStorageKey(room.tenantId, roomId, documentId, filename);
-      await writeDocumentObject(uploadStorage, storageKey, documentFile.data, contentType);
-      uploadedStorage = uploadStorage;
-      uploadedKey = storageKey;
-      const document = await runGuardedRoomEffect(storage, actor, room, permission, scoped => scoped.createRoomDocument({
-        documentId,
-        roomId,
-        tenantId: room.tenantId,
-        filename,
-        contentType,
-        sizeBytes: documentFile.data.byteLength,
-        storageKey,
-        checksum: `sha256:${sha256Hex(documentFile.data)}`,
-        uploadedBy: actor.actorId,
-        metadata: documentMetadata
-      }));
-      documentPersisted = true;
-      incrementCounter(metrics.documentsUploadedTotal, `${contentType}:success`);
-      incrementCounter(metrics.documentStorageBytesTotal, room.tenantId, document.sizeBytes);
-      json(response, 201, { document: serializeRoomDocument(request, document) });
-    } catch (error) {
-      // A lost COMMIT acknowledgement is not evidence that publication failed.
-      // Retain the blob for reconciliation rather than breaking a committed row.
-      if (uploadedKey && uploadedStorage && !documentPersisted && !uncertainRoomCommit(error)) {
-        await deleteDocumentObject(uploadedStorage, uploadedKey).catch(() => {
-          incrementCounter(metrics.documentBlobDeletesTotal, "failed");
-        });
+
+      let uploadPolicy: ReturnType<typeof getDocumentUploadPolicy> | undefined;
+      try { uploadPolicy = getDocumentUploadPolicy(); }
+      catch { if (method === "POST") return json(response, 503, { error: "document_upload_limits_unavailable" }); }
+      if (method === "GET") {
+        const documents = await storage.listRoomDocuments(roomId);
+        const items = documents.map((document) => serializeRoomDocument(request, document));
+        await runGuardedRoomEffect(storage, actor, room, permission, async scoped => {
+          scoped.releaseResponse(() => { json(response, 200, { items, uploadPolicy }); audit.released(); });
+        }).catch(error => { audit.refused(error); throw error; });
+        return;
       }
-      if (uncertainRoomCommit(error)) {
-        incrementCounter(metrics.documentsUploadedTotal, `${contentType}:uncertain`);
-        throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
+
+      if (!uploadPolicy) return json(response, 503, { error: "document_upload_limits_unavailable" });
+      const maxBytes = uploadPolicy.maxFileBytes;
+      const boundary = parseMultipartBoundary(request.headers["content-type"]);
+      if (!boundary) {
+        incrementCounter(metrics.documentsUploadedTotal, "unknown:rejected");
+        return json(response, 415, { error: "expected_multipart_document_upload" });
       }
-      if (error instanceof RoomEffectPermissionDenied || error instanceof IdentityBoundaryError) throw error;
-      incrementCounter(metrics.documentsUploadedTotal, `${contentType}:failed`);
-      const storageFailure = uploadedKey === null;
-      json(response, storageFailure ? 503 : 500, { error: storageFailure ? "document_storage_unavailable" : "document_upload_failed", requestId });
-    }
-    return;
+      const contentLength = request.headers["content-length"];
+      if (contentLength !== undefined && Number(contentLength) > maxBytes + DOCUMENT_MULTIPART_OVERHEAD_BYTES) {
+        response.setHeader("connection", "close");
+        return json(response, 413, { error: "document_too_large" });
+      }
+      const body = await readRequestBuffer(request, maxBytes + DOCUMENT_MULTIPART_OVERHEAD_BYTES);
+      const parts = parseMultipartFormData(body, boundary);
+      const documentFile = filePart(parts, "document") ?? filePart(parts, "file");
+      const filename = normalizeDocumentFilename(documentFile?.filename);
+      if (!documentFile || !filename) {
+        incrementCounter(metrics.documentsUploadedTotal, "unknown:rejected");
+        return json(response, 400, { error: "invalid_document_filename" });
+      }
+      const contentType = normalizeDocumentContentType(documentFile, filename);
+      if (!contentType) {
+        incrementCounter(metrics.documentsUploadedTotal, "unsupported:rejected");
+        return json(response, 400, { error: "unsupported_document_mime" });
+      }
+      if (documentFile.data.byteLength > maxBytes) {
+        incrementCounter(metrics.documentsUploadedTotal, `${contentType}:rejected`);
+        return json(response, 413, { error: "document_too_large" });
+      }
+
+      let documentMetadata: RoomDocumentMetadata = {};
+      if (contentType === "application/pdf") {
+        try {
+          documentMetadata = await inspectPdfDocument(documentFile.data, uploadPolicy.maxPdfPages);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : "corrupt_pdf";
+          incrementCounter(metrics.pdfValidationFailuresTotal, reason);
+          incrementCounter(metrics.documentsUploadedTotal, `${contentType}:rejected`);
+          return json(response, 422, { error: reason, requestId });
+        }
+      } else if (contentType.startsWith("image/") || contentType.startsWith("video/")) {
+        const kind = contentType.startsWith("image/") ? "image" : "video";
+        try {
+          documentMetadata = kind === "image"
+            ? inspectImageDocument(documentFile.data, contentType)
+            : inspectVideoDocument(documentFile.data, contentType, parts);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : `invalid_${kind}`;
+          incrementCounter(metrics.documentMediaValidationFailuresTotal, `${kind}:${reason}`);
+          incrementCounter(metrics.documentsUploadedTotal, `${contentType}:rejected`);
+          return json(response, 422, { error: reason, requestId });
+        }
+      }
+
+      let uploadedStorage: ReturnType<typeof getDocumentUploadStorage> | null = null;
+      let uploadedKey: string | null = null;
+      let documentPersisted = false;
+      try {
+        const documentId = randomUUID();
+        const uploadStorage = getDocumentUploadStorage(request);
+        const storageKey = documentStorageKey(room.tenantId, roomId, documentId, filename);
+        await writeDocumentObject(uploadStorage, storageKey, documentFile.data, contentType);
+        uploadedStorage = uploadStorage;
+        uploadedKey = storageKey;
+        const document = await audit.effect(() => runGuardedRoomEffect(storage, actor, room, permission, scoped => scoped.createRoomDocument({
+          documentId,
+          roomId,
+          tenantId: room.tenantId,
+          filename,
+          contentType,
+          sizeBytes: documentFile.data.byteLength,
+          storageKey,
+          checksum: `sha256:${sha256Hex(documentFile.data)}`,
+          uploadedBy: actor.actorId,
+          metadata: documentMetadata
+        })));
+        documentPersisted = true;
+        incrementCounter(metrics.documentsUploadedTotal, `${contentType}:success`);
+        incrementCounter(metrics.documentStorageBytesTotal, room.tenantId, document.sizeBytes);
+        json(response, 201, { document: serializeRoomDocument(request, document) });
+      } catch (error) {
+        // A lost COMMIT acknowledgement is not evidence that publication failed.
+        // Retain the blob for reconciliation rather than breaking a committed row.
+        if (uploadedKey && uploadedStorage && !documentPersisted && !uncertainRoomCommit(error)) {
+          await deleteDocumentObject(uploadedStorage, uploadedKey).catch(() => {
+            incrementCounter(metrics.documentBlobDeletesTotal, "failed");
+          });
+        }
+        if (uncertainRoomCommit(error)) {
+          incrementCounter(metrics.documentsUploadedTotal, `${contentType}:uncertain`);
+          throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
+        }
+        if (error instanceof RoomEffectPermissionDenied || error instanceof IdentityBoundaryError) throw error;
+        incrementCounter(metrics.documentsUploadedTotal, `${contentType}:failed`);
+        const storageFailure = uploadedKey === null;
+        json(response, storageFailure ? 503 : 500, { error: storageFailure ? "document_storage_unavailable" : "document_upload_failed", requestId });
+      }
+      return;
+    } finally { audit.settle(response); }
   }
 
   const roomDocumentItemMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/documents\/([^/]+)(?:\/(download|presentation|content|surface))?$/);
@@ -3149,137 +3169,140 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const action = actionPath === "download" ? "documents.download" : actionPath === "presentation" || actionPath === "content" ? "documents.presentation" : method === "DELETE" ? "documents.delete" : "documents.select-surface";
     const actor = resolveRoomDocumentsActor(request, response, { room, permission, action, documentId });
     if (!actor) return;
-    const document = await storage.getRoomDocument(roomId, documentId);
-    const deleteItem = method === "DELETE" && actionPath === "item";
-    if (!document || (document.deletedAt && !deleteItem)) return json(response, 404, { error: "document_not_found" });
+    const audit = documentAudit(request, actor, action, roomId, documentId);
+    try {
+      const document = await storage.getRoomDocument(roomId, documentId);
+      const deleteItem = method === "DELETE" && actionPath === "item";
+      if (!document || (document.deletedAt && !deleteItem)) return json(response, 404, { error: "document_not_found" });
 
-    if (method === "GET" && actionPath === "download") {
-      let bytes: Buffer;
-      try {
-        bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
-      } catch (error) {
-        json(response, 503, { error: "document_storage_unavailable", requestId });
+      if (method === "GET" && actionPath === "download") {
+        let bytes: Buffer;
+        try {
+          bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+        } catch (error) {
+          json(response, 503, { error: "document_storage_unavailable", requestId });
+          return;
+        }
+        const released = await releaseDocumentBytes(storage, actor, room, document, permission, false, audit, () => {
+          metrics.documentDownloadsTotal += 1;
+          response.writeHead(200, {
+            "content-type": document.contentType,
+            "content-length": String(bytes.byteLength),
+            "content-disposition": `attachment; filename="${safeHeaderFilename(document.filename)}"`,
+            "cache-control": "private, no-store",
+            "x-request-id": requestId
+          });
+          response.end(bytes);
+        });
+        if (!released) json(response, 404, { error: "document_not_found" });
         return;
       }
-      const released = await releaseDocumentBytes(storage, actor, room, document, permission, false, () => {
-        metrics.documentDownloadsTotal += 1;
-        response.writeHead(200, {
-          "content-type": document.contentType,
-          "content-length": String(bytes.byteLength),
-          "content-disposition": `attachment; filename="${safeHeaderFilename(document.filename)}"`,
-          "cache-control": "private, no-store",
-          "x-request-id": requestId
-        });
-        response.end(bytes);
-      });
-      if (!released) json(response, 404, { error: "document_not_found" });
-      return;
-    }
 
-    if (method === "GET" && actionPath === "presentation") {
-      if (document.metadata?.kind !== "pdf" || !document.linkedSurfaceId) {
-        incrementCounter(metrics.documentPresentationContentTotal, "not_active");
-        return json(response, 404, { error: "presentation_not_active" });
-      }
-      let bytes: Buffer;
-      try {
-        bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
-      } catch (error) {
-        incrementCounter(metrics.documentPresentationContentTotal, "failed");
-        json(response, 503, { error: "document_storage_unavailable", requestId });
+      if (method === "GET" && actionPath === "presentation") {
+        if (document.metadata?.kind !== "pdf" || !document.linkedSurfaceId) {
+          incrementCounter(metrics.documentPresentationContentTotal, "not_active");
+          return json(response, 404, { error: "presentation_not_active" });
+        }
+        let bytes: Buffer;
+        try {
+          bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+        } catch (error) {
+          incrementCounter(metrics.documentPresentationContentTotal, "failed");
+          json(response, 503, { error: "document_storage_unavailable", requestId });
+          return;
+        }
+        const released = await releaseDocumentBytes(storage, actor, room, document, permission, true, audit, () => {
+          incrementCounter(metrics.documentPresentationContentTotal, "success");
+          response.writeHead(200, {
+            "content-type": "application/pdf",
+            "content-length": String(bytes.byteLength),
+            "content-disposition": `inline; filename="${safeHeaderFilename(document.filename)}"`,
+            "cache-control": "private, no-store",
+            "x-request-id": requestId
+          });
+          response.end(bytes);
+        });
+        if (!released) json(response, 404, { error: "presentation_not_active" });
         return;
       }
-      const released = await releaseDocumentBytes(storage, actor, room, document, permission, true, () => {
-        incrementCounter(metrics.documentPresentationContentTotal, "success");
-        response.writeHead(200, {
-          "content-type": "application/pdf",
-          "content-length": String(bytes.byteLength),
-          "content-disposition": `inline; filename="${safeHeaderFilename(document.filename)}"`,
-          "cache-control": "private, no-store",
-          "x-request-id": requestId
-        });
-        response.end(bytes);
-      });
-      if (!released) json(response, 404, { error: "presentation_not_active" });
-      return;
-    }
 
-    if (method === "GET" && actionPath === "content") {
-      const kind = document.metadata?.kind;
-      if ((kind !== "image" && kind !== "video") || !document.linkedSurfaceId) {
-        incrementCounter(metrics.documentMediaContentTotal, `${kind === "video" ? "video" : "image"}:not_active`);
-        return json(response, 404, { error: "media_content_not_active" });
-      }
-      let bytes: Buffer;
-      try {
-        bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
-      } catch (error) {
-        incrementCounter(metrics.documentMediaContentTotal, `${kind}:failed`);
-        json(response, 503, { error: "document_storage_unavailable", requestId });
+      if (method === "GET" && actionPath === "content") {
+        const kind = document.metadata?.kind;
+        if ((kind !== "image" && kind !== "video") || !document.linkedSurfaceId) {
+          incrementCounter(metrics.documentMediaContentTotal, `${kind === "video" ? "video" : "image"}:not_active`);
+          return json(response, 404, { error: "media_content_not_active" });
+        }
+        let bytes: Buffer;
+        try {
+          bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+        } catch (error) {
+          incrementCounter(metrics.documentMediaContentTotal, `${kind}:failed`);
+          json(response, 503, { error: "document_storage_unavailable", requestId });
+          return;
+        }
+        const released = await releaseDocumentBytes(storage, actor, room, document, permission, true, audit, () => {
+          incrementCounter(metrics.documentMediaContentTotal, `${kind}:success`);
+          response.writeHead(200, {
+            "content-type": document.contentType,
+            "content-length": String(bytes.byteLength),
+            "content-disposition": `inline; filename="${safeHeaderFilename(document.filename)}"`,
+            "cache-control": "private, no-store",
+            "x-content-type-options": "nosniff",
+            "x-request-id": requestId
+          });
+          response.end(bytes);
+        });
+        if (!released) json(response, 404, { error: "media_content_not_active" });
         return;
       }
-      const released = await releaseDocumentBytes(storage, actor, room, document, permission, true, () => {
-        incrementCounter(metrics.documentMediaContentTotal, `${kind}:success`);
-        response.writeHead(200, {
-          "content-type": document.contentType,
-          "content-length": String(bytes.byteLength),
-          "content-disposition": `inline; filename="${safeHeaderFilename(document.filename)}"`,
-          "cache-control": "private, no-store",
-          "x-content-type-options": "nosniff",
-          "x-request-id": requestId
-        });
-        response.end(bytes);
-      });
-      if (!released) json(response, 404, { error: "media_content_not_active" });
-      return;
-    }
 
-    if (method === "DELETE" && actionPath === "item") {
-      // A confirmed tombstone is the deletion intent for every protocol.
-      // Retry decisions are read under the fence, not from the pre-fence hint.
-      const result = await runGuardedRoomEffect(storage, actor, room, permission, async scoped => {
-        const marked = await scoped.markRoomDocumentDeleted(roomId, documentId, new Date().toISOString(), actor.actorId);
-        if (marked) return { document: marked, transitioned: true };
-        const current = await scoped.getRoomDocument(roomId, documentId);
-        return current?.deletedAt ? { document: current, transitioned: false } : null;
-      });
-      if (!result) return json(response, 404, { error: "document_not_found" });
-      if (result.transitioned) metrics.documentDeletesTotal += 1;
-      try {
-        await cleanupDocumentMediaObjects(roomId, documentId);
-      } catch (error) {
-        return json(response, 503, { error: "document_cleanup_unavailable", requestId });
+      if (method === "DELETE" && actionPath === "item") {
+        // A confirmed tombstone is the deletion intent for every protocol.
+        // Retry decisions are read under the fence, not from the pre-fence hint.
+        const result = await audit.effect(() => runGuardedRoomEffect(storage, actor, room, permission, async scoped => {
+          const marked = await scoped.markRoomDocumentDeleted(roomId, documentId, new Date().toISOString(), actor.actorId);
+          if (marked) return { document: marked, transitioned: true };
+          const current = await scoped.getRoomDocument(roomId, documentId);
+          return current?.deletedAt ? { document: current, transitioned: false } : null;
+        }));
+        if (!result) return json(response, 404, { error: "document_not_found" });
+        if (result.transitioned) metrics.documentDeletesTotal += 1;
+        try {
+          await cleanupDocumentMediaObjects(roomId, documentId);
+        } catch (error) {
+          return json(response, 503, { error: "document_cleanup_unavailable", requestId });
+        }
+        try {
+          await deleteDocumentObject(getDocumentUploadStorage(request), result.document.storageKey);
+          incrementCounter(metrics.documentBlobDeletesTotal, "success");
+        } catch (error) {
+          incrementCounter(metrics.documentBlobDeletesTotal, "failed");
+          return json(response, 503, { error: "document_cleanup_unavailable", requestId });
+        }
+        json(response, 200, { document: serializeRoomDocument(request, result.document) });
+        return;
       }
-      try {
-        await deleteDocumentObject(getDocumentUploadStorage(request), result.document.storageKey);
-        incrementCounter(metrics.documentBlobDeletesTotal, "success");
-      } catch (error) {
-        incrementCounter(metrics.documentBlobDeletesTotal, "failed");
-        return json(response, 503, { error: "document_cleanup_unavailable", requestId });
-      }
-      json(response, 200, { document: serializeRoomDocument(request, result.document) });
-      return;
-    }
 
-    if (method === "POST" && actionPath === "surface") {
-      if (!document.metadata?.kind || !["pdf", "image", "video"].includes(document.metadata.kind)
-        || (document.metadata.kind === "pdf" && !document.metadata.pageCount)
-        || ((document.metadata.kind === "image" || document.metadata.kind === "video") && (!document.metadata.widthPx || !document.metadata.heightPx))) {
-        return json(response, 422, { error: "document_not_presentable" });
+      if (method === "POST" && actionPath === "surface") {
+        if (!document.metadata?.kind || !["pdf", "image", "video"].includes(document.metadata.kind)
+          || (document.metadata.kind === "pdf" && !document.metadata.pageCount)
+          || ((document.metadata.kind === "image" || document.metadata.kind === "video") && (!document.metadata.widthPx || !document.metadata.heightPx))) {
+          return json(response, 422, { error: "document_not_presentable" });
+        }
+        const payload = (await parseBody<{ surfaceId?: unknown }>(request)) ?? {};
+        const surfaceId = normalizeDocumentSurfaceId(payload.surfaceId);
+        if (surfaceId === undefined) return json(response, 400, { error: "invalid_document_surface_id" });
+        const updated = await audit.effect(() => runGuardedRoomEffect(storage, actor, room, permission,
+          scoped => scoped.updateRoomDocumentSurface(roomId, documentId, surfaceId)));
+        if (!updated) return json(response, 404, { error: "document_not_found" });
+        metrics.documentSurfaceSelectionsTotal += 1;
+        json(response, 200, { document: serializeRoomDocument(request, updated) });
+        return;
       }
-      const payload = (await parseBody<{ surfaceId?: unknown }>(request)) ?? {};
-      const surfaceId = normalizeDocumentSurfaceId(payload.surfaceId);
-      if (surfaceId === undefined) return json(response, 400, { error: "invalid_document_surface_id" });
-      const updated = await runGuardedRoomEffect(storage, actor, room, permission,
-        scoped => scoped.updateRoomDocumentSurface(roomId, documentId, surfaceId));
-      if (!updated) return json(response, 404, { error: "document_not_found" });
-      metrics.documentSurfaceSelectionsTotal += 1;
-      json(response, 200, { document: serializeRoomDocument(request, updated) });
-      return;
-    }
 
-    json(response, 405, { error: "unsupported_document_action" });
-    return;
+      json(response, 405, { error: "unsupported_document_action" });
+      return;
+    } finally { audit.settle(response); }
   }
 
   const roomNotesResponse = routeRoomNotesRequest(request, response, method, url, storage);
@@ -3837,15 +3860,27 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!room) return json(response, 404, { error: "room_not_found" });
     if (room.managed) return writeManagedResourceDenied(request, response, "room", roomId);
     let deleted: boolean;
+    const documentStorageKeys: string[] = [];
     try {
       deleted = await deleteRoomWithPluginCleanup(storage, { tenantId: room.tenantId, roomId },
-        () => configuredRoomPluginBlobStorage(runtimePublicRoot, request, publicBaseUrlFromRequest));
+        () => configuredRoomPluginBlobStorage(runtimePublicRoot, request, publicBaseUrlFromRequest), documentStorageKeys);
     } catch (error) {
       const failure = roomPluginDeletionFailure(error);
       if (failure) return json(response, failure.status, { error: failure.code });
       throw error;
     }
     if (!deleted) return json(response, 404, { error: "room_not_found" });
+    // The rows are gone with the room; their objects follow. Best effort: a failed object is counted and stays
+    // orphaned, the room is deleted either way.
+    for (const storageKey of documentStorageKeys) {
+      try {
+        await deleteDocumentObject(getDocumentUploadStorage(request), storageKey);
+        incrementCounter(metrics.documentBlobDeletesTotal, "success");
+      } catch {
+        incrementCounter(metrics.documentBlobDeletesTotal, "failed");
+        logEvent({ service: "api", event: "room_document_object_delete_failed", alert: true, roomId, requestId });
+      }
+    }
     json(response, 200, { ok: true, roomId });
     return;
   }

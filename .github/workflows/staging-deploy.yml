@@ -35,6 +35,11 @@ on:
         required: false
         default: false
         type: boolean
+      rotate_media_namespace:
+        description: "IRREVERSIBLE: replace the media namespace after rollout and retire the previous one (floor 2 only); open media connections end"
+        required: false
+        default: false
+        type: boolean
       request:
         description: Identifier of an automated dispatch, shown in the run name
         required: false
@@ -292,6 +297,18 @@ jobs:
           done
           echo media_codec3_not_advertised >&2
           exit 1
+      - name: Rotate media namespace
+        id: media_rotation
+        # A new namespace for every grant; the reconciler deletes the native rooms of the retired one. The helper
+        # refuses unless floor 2 is active and both the running candidate and the accepted rollback target issue in it.
+        if: steps.rollout.outcome == 'success' && github.event_name == 'workflow_dispatch' && inputs.rotate_media_namespace
+        timeout-minutes: 5
+        env:
+          SHA: ${{ steps.deploy.outputs.deploy_sha }}
+        run: |
+          set -o pipefail
+          # shellcheck disable=SC2029
+          ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo python3 -B '$REMOTE_HELPERS/staging-remote-release.py' rotate-media-namespace --root '$STAGING_APP_DIR' --image-sha '$SHA'" | tee "$RUNNER_TEMP/media-rotation.json"
       - name: Install Playwright browser
         if: steps.rollout.outcome == 'success'
         timeout-minutes: 5

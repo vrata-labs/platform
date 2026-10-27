@@ -115,6 +115,21 @@ The real legacy regression accepts VRATA_TEST_BACKUP_LEGACY_FIXTURE_JSON with fi
 
 The same regression inserts a real unsettled package reservation after the read-only empty preflight but before restore locks. The locked DO recheck must reject it with the row and private policy unchanged. Only the fixture creator settles/deletes that owned reservation, knowing it never started PUT. The test then restores successfully, verifies current API create/read and private package storage, and proves a nonempty target is rejected without metadata/policy changes. Proof booleans are retained in sql-parser-proof.json. Only the test's own temporary failure archive is removed; the fixture owner tears down the disposable projects.
 
+## Media Namespace After Restore Or Clone
+
+Every LiveKit room name carries the database's media namespace. A restore does not touch LiveKit, so rooms and connections created after the backup stay on the server while the restored database judges them by older state. A copy of the database started next to the original on the same LiveKit server would reconcile the original's rooms as its own. Both cases need the irreversible namespace rotation of identity floor 2 (see `docs/arch/2026-09-28-room-identity-activation.md`, T13a-S3b-4):
+
+```bash
+docker compose ... run --rm api node apps/api/dist/identity/rotate-media-namespace.js --previous=retire --dry-run
+docker compose ... run --rm api node apps/api/dist/identity/rotate-media-namespace.js --previous=retire --confirm-irreversible [--retire=<namespace>]
+```
+
+- Restore onto the same LiveKit server: stop the API, restore, run the rotation with `--previous=retire`, then start the API. The command applies this image's schema migrations itself, so a backup taken by an older image works without starting the API first. If this deployment rotated its namespace after the backup was taken, the restored database does not know that namespace: pass it with `--retire`. Every rotation prints the new namespace (`after`); keep it with the backup records. The dry run lists namespaces it finds on LiveKit under the deployment's room prefix that the database does not know, but only those with a live room: a media JWT of an unknown namespace that has not been used yet is not visible anywhere and stays valid until it expires (at most the session lifetime). Rotating the LiveKit API key voids every media JWT at once. Never pass a namespace of another deployment that shares the server.
+- Clone onto a LiveKit server the original still uses: run the rotation with `--previous=disown` before the clone's API starts for the first time.
+- The rotation ends every media connection once: open tabs join audio again and remote browsers must be reopened. It does not revoke media JWTs: new grants go to a fresh namespace and the API keeps deleting the rooms of retired ones, so an old JWT that rejoins is removed again by a later reconciliation pass, until it expires. Rotating the LiveKit API key revokes every media JWT at once. Room sessions and identity credentials issued after the backup, and revocations the backup does not contain, are not undone by any of this; rotating the state-token secret voids all of them, after which owners and hosts use administrator recovery.
+- The command prints the namespace before and after (namespaces are not secret: every media grant names its room). If its reply is lost, compare a dry run's `before` with the recorded one before running it again.
+- After a rotation only API images labelled `io.vrata.media-namespace-rotation` are valid rollback targets; the rollback guard refuses older ones.
+
 ## Rollback Image Tag
 
 Rollback is config/image-only. It validates the target tag and smoke URL before editing the env file, updates `IMAGE_TAG`, pulls app service images, and runs `docker compose up -d --no-build`. It does not run `docker compose down -v`, and it does not delete Postgres or MinIO volumes.

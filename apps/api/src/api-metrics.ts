@@ -99,7 +99,7 @@ export function createApiMetrics(
       formatMetricLine("vrata_api_media_credential_release_completion_failures_total", metrics.mediaCredentialReleaseCompletionFailuresTotal),
       "# HELP vrata_api_media_screen_reconciliation_total Native user-media reconciliation outcomes; observations are not token revocation.",
       "# TYPE vrata_api_media_screen_reconciliation_total counter",
-      ...["observed", "pending", "unavailable", "lowered", "evicted"].map(outcome =>
+      ...["observed", "pending", "unavailable", "lowered", "evicted", "retired"].map(outcome =>
         formatMetricLine("vrata_api_media_screen_reconciliation_total", metrics.mediaScreenReconciliationTotal.get(outcome) ?? 0, { outcome })),
       "# HELP vrata_rooms_total Rooms known to the API storage backend.",
       "# TYPE vrata_rooms_total gauge",

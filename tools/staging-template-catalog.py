@@ -84,8 +84,15 @@ def supports_media_codec_boundary(contract, media_codec):
             and contract["mediaCodecBoundary"] >= media_codec)
 
 
+def supports_media_namespace_rotation(contract):
+    # The image issues grants in the rotated namespace and deletes the native rooms of retired ones.
+    return (isinstance(contract, dict) and contract.get("schemaVersion") == 1
+            and type(contract.get("mediaNamespaceRotation")) is int
+            and contract["mediaNamespaceRotation"] >= 1)
+
+
 def assert_target_allowed(marker, status, target_contract, target_sha, minimum_identity_protocol=1, identity_bound=False,
-                          ownerless_reference_personal=False, media_codec=2):
+                          ownerless_reference_personal=False, media_codec=2, namespace_rotated=False):
     sha(target_sha)
     if type(minimum_identity_protocol) is not int or minimum_identity_protocol < 1:
         raise ValueError("identity_rollout_invalid_protocol_floor")
@@ -93,6 +100,8 @@ def assert_target_allowed(marker, status, target_contract, target_sha, minimum_i
         raise ValueError("media_rollout_invalid_codec_boundary")
     if type(identity_bound) is not bool:
         raise ValueError("identity_rollout_invalid_binding_state")
+    if type(namespace_rotated) is not bool or (namespace_rotated and minimum_identity_protocol < 2):
+        raise ValueError("media_rollout_invalid_namespace_rotation")
     if type(ownerless_reference_personal) is not bool:
         raise ValueError("room_record_rollout_invalid_reference_state")
     if minimum_identity_protocol >= 2 or identity_bound:
@@ -117,6 +126,9 @@ def assert_target_allowed(marker, status, target_contract, target_sha, minimum_i
     # The media boundary is never lowered: an image that would issue codec-2 grants again is refused.
     if media_codec > 2 and not supports_media_codec_boundary(target_contract, media_codec):
         raise ValueError("media_rollback_below_codec_boundary_forbidden")
+    # After a rotation an older image would issue grants in the activation namespace and never retire anything.
+    if namespace_rotated and not supports_media_namespace_rotation(target_contract):
+        raise ValueError("media_rollback_without_namespace_rotation_forbidden")
     if marker:
         sha(marker)
         if not supports_references(target_contract):
@@ -316,15 +328,16 @@ class CatalogHost:
         identity_bound = self.identity_bound()
         ownerless = self.ownerless_reference_personal()
         media_codec = self.media_codec()
+        namespace_rotated = self.media_namespace_rotated()
         assert_target_allowed(marker, status, contract, target, minimum_identity_protocol, identity_bound,
-                              ownerless_reference_personal=ownerless, media_codec=media_codec)
+                              ownerless_reference_personal=ownerless, media_codec=media_codec, namespace_rotated=namespace_rotated)
         if supports_identity_boundary(contract):
             self.validate_identity_configuration()
         # Preparation never silently changes availability. A deliberate return to
         # Wave 2 uses rollback first; compatible routine deploys preserve catalog.
         return {"targetSha": target, "wave2Marker": marker, "state": status["state"],
                 "minimumIdentityProtocol": minimum_identity_protocol, "identityAuthorityBound": identity_bound,
-                "ownerlessReferencePersonal": ownerless, "mediaCodec": media_codec}
+                "ownerlessReferencePersonal": ownerless, "mediaCodec": media_codec, "mediaNamespaceRotated": namespace_rotated}
 
     def catalog_state(self):
         """Catalog of the accepted database before a rollout. A host without a database yet starts on Wave 2;
@@ -439,6 +452,21 @@ class CatalogHost:
         if value not in ("2", "3"):
             raise ValueError("media_rollout_invalid_codec_boundary")
         return int(value)
+
+    def media_namespace_rotated(self):
+        # A database before the rotation migration was never rotated. An unreadable value never licenses a rollback.
+        command = self.compose + ["exec", "-T", "postgres", "sh", "-c",
+                                  'psql -XAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"', "sh"]
+        exists = self.run(command + ["select exists(select 1 from pg_attribute where attrelid=to_regclass('room_identity_protocol_policy')"
+                                     " and attname='rotated_media_namespace' and not attisdropped)"])
+        if exists == "f":
+            return False
+        if exists != "t":
+            raise ValueError("media_rollout_invalid_namespace_rotation")
+        value = self.run(command + ["select rotated_media_namespace is not null from room_identity_protocol_policy where singleton=true"])
+        if value not in ("t", "f"):
+            raise ValueError("media_rollout_invalid_namespace_rotation")
+        return value == "t"
 
     def mutate(self, command, expected):
         marker = self.marker()

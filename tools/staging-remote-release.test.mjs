@@ -177,6 +177,71 @@ print("media activation assertions passed")
   assert.match(output, /media activation assertions passed/);
 });
 
+test("media namespace rotation retires the previous namespace only with a candidate and rollback target that issue in the rotated one", () => {
+  const file = fileURLToPath(new URL("./staging-remote-release.py", import.meta.url));
+  const output = execFileSync("python3", ["-B", "-c", `
+import importlib.util,tempfile,json
+from pathlib import Path
+spec=importlib.util.spec_from_file_location("remote",${JSON.stringify(file)})
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+def rejects(fn,code):
+    try:fn()
+    except (ValueError,RuntimeError,OSError) as e:assert code in str(e),str(e)
+    else:raise AssertionError("expected "+code)
+a,b,x="a"*40,"b"*40,"c"*40
+full={"schemaVersion":1,"identityProtocolFloorGuard":1,"roomRecordReader":2,"frameTokenCodec":2,"mediaIdentityCodec":2,"mediaScreenReconciler":2,
+      "mediaCodecBoundary":3,"mediaNamespaceRotation":1}
+record={"schemaVersion":1,"imageSha":a,"assetSha":x,"snapshotId":a+"-"+x,
+        "foundationDigests":{n:"example/"+n+"@sha256:"+"d"*64 for n in m.accepted.FOUNDATIONS},"runId":"1","runAttempt":1}
+done={"ok":True,"previous":"retire","before":"1"*12,"after":"2"*12,"retired":1,"rotated":True,"dryRun":False}
+with tempfile.TemporaryDirectory() as directory:
+    root=Path(directory)/"checkout";(root/"infra/docker").mkdir(parents=True)
+    (root/"infra/docker/.env.staging").write_text("API_IMAGE_REPO=reg/api\\nROOM_STATE_IMAGE_REPO=reg/rs\\nREMOTE_BROWSER_IMAGE_REPO=reg/rb\\n")
+    host=m.ReleaseHost(root); calls=[]; contracts={a:dict(full),b:dict(full)}
+    state={"image":b,"cli":dict(done),"floor":2,"codec":3,"rotated":True}
+    def run(args,quiet=False):
+        calls.append(args)
+        if args[-2:]==["-q","api"] or args[-2:]==["-q","room-state"] or args[-2:]==["-q","remote-browser"]: return args[-1]+"-container"
+        if args[:2]==["docker","inspect"]:
+            repo={"api-container":"reg/api","room-state-container":"reg/rs","remote-browser-container":"reg/rb"}[args[-1]]
+            return repo+":"+state["image"]
+        if "rotate-media-namespace.js" in " ".join(args): return json.dumps(state["cli"])
+        raise AssertionError(args)
+    host.run=run
+    host.catalog.contract=lambda sha:contracts[sha]
+    host.catalog.validate_identity_database=lambda:calls.append(["db"])
+    host.catalog.validate_identity_configuration=lambda:calls.append(["secrets"])
+    host.catalog.minimum_identity_protocol=lambda:state["floor"]
+    host.catalog.media_codec=lambda:state["codec"]
+    host.catalog.media_namespace_rotated=lambda:state["rotated"]
+    host.state.directory.mkdir(parents=True,exist_ok=True); (host.state.directory/".state.lock").write_text("")
+    (host.state.directory/"accepted-release.json").write_text(json.dumps(record))
+    result=host.rotate_media_namespace(b)
+    assert result=={"mediaNamespace":{"before":"1"*12,"after":"2"*12,"retired":1},"rollbackTarget":a},result
+    cli=[args for args in calls if "rotate-media-namespace.js" in " ".join(args)]
+    assert len(cli)==1 and cli[0][-2:]==["--previous=retire","--confirm-irreversible"] and ["db"] in calls and ["secrets"] in calls
+    def never_rotated(code):
+        calls.clear(); rejects(lambda:host.rotate_media_namespace(b),code)
+        assert not any("rotate-media-namespace.js" in " ".join(args) for args in calls),code
+    state["image"]=a; never_rotated("runtime_image_mismatch"); state["image"]=b
+    state["floor"]=1; never_rotated("staging_media_rotation_requires_identity_v2"); state["floor"]=2
+    contracts[b]={k:v for k,v in full.items() if k!="mediaNamespaceRotation"}
+    never_rotated("candidate_incompatible:media_rollback_without_namespace_rotation_forbidden")
+    contracts[b]=dict(full); contracts[a]={k:v for k,v in full.items() if k!="mediaNamespaceRotation"}
+    never_rotated("rollback_target_incompatible:media_rollback_without_namespace_rotation_forbidden")
+    contracts[a]=dict(full,mediaCodecBoundary=2)
+    never_rotated("rollback_target_incompatible:media_rollback_below_codec_boundary_forbidden")
+    contracts[a]=dict(full)
+    for reply in ({"ok":False,"error":"media_namespace_requires_identity_v2"},dict(done,rotated=False),dict(done,retired=0),
+                  dict(done,after=done["before"]),dict(done,previous="disown")):
+        state["cli"]=reply; rejects(lambda:host.rotate_media_namespace(b),"staging_media_rotation_unconfirmed")
+    state["cli"]=dict(done); state["rotated"]=False
+    rejects(lambda:host.rotate_media_namespace(b),"staging_media_rotation_unconfirmed")
+print("media rotation assertions passed")
+`], { encoding: "utf8" });
+  assert.match(output, /media rotation assertions passed/);
+});
+
 test("identity activation requires the running candidate and its rollback target to carry every floor-2 capability", () => {
   const file = fileURLToPath(new URL("./staging-remote-release.py", import.meta.url));
   const output = execFileSync("python3", ["-B", "-c", `

@@ -8,6 +8,7 @@ import { isRoomDisabled } from "./room-session-control.js";
 import type { RoomNoteRecord, RoomNoteScope, RoomRecord, Storage } from "./storage.js";
 import type { RoomIdentityEffectStorage } from "./storage-contracts.js";
 import { releaseFencedResponse } from "./identity/response-release.js";
+import { createFencedAudit, type FencedAudit, type FencedAuditResult } from "./fenced-audit.js";
 
 export interface RoomNotesAccessContext {
   metrics: Pick<ReturnType<typeof createApiMetrics>["metrics"],
@@ -26,6 +27,8 @@ export interface RoomNotesAccessContext {
 
 export function createRoomNotesAccess(context: RoomNotesAccessContext) {
   const { metrics, resolveControlPlaneActor, getRequestId, logEvent } = context;
+  /** The one audit record of each authorized v2 request, settled by its fenced outcome or its response. */
+  const audits = new WeakMap<IncomingMessage, FencedAudit>();
 
   function roomNoteId(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null): string {
     return scope === "shared" ? `${roomId}:shared` : `${roomId}:private:${ownerParticipantId ?? ""}`;
@@ -50,7 +53,7 @@ export function createRoomNotesAccess(context: RoomNotesAccessContext) {
     action: "notes.read" | "notes.save" | "notes.versions" | "notes.restore" | "notes.delete" | "notes.export";
     roomId: string;
     scope: RoomNoteScope;
-    result: "allowed" | "denied";
+    result: FencedAuditResult;
     reason?: string;
     actor?: ControlPlaneActor;
   }): void {
@@ -121,10 +124,27 @@ export function createRoomNotesAccess(context: RoomNotesAccessContext) {
       return deny("permission_denied");
     }
 
-    if (actor.identityProtocolVersion !== 2 || !["notes.read", "notes.versions", "notes.export"].includes(input.action)) {
+    // A v2 request is audited once by its fenced outcome (releaseRoomNotes, auditedRoomNoteWrite) or, when it ends
+    // earlier, by its response; entry-time authorization is not an outcome.
+    if (actor.identityProtocolVersion === 2) {
+      audits.set(request, createFencedAudit((result, reason) => writeRoomNotesAudit({ request, action: input.action,
+        roomId: input.room.roomId, scope: input.scope, result, reason, actor }), context.deniedEffectReason));
+    } else {
       writeRoomNotesAudit({ request, action: input.action, roomId: input.room.roomId, scope: input.scope, result: "allowed", actor });
     }
     return actor;
+  }
+
+  /** A v2 note write is allowed once its fenced effect committed, denied when the fence refused it and uncertain
+   * when the COMMIT outcome is unknown. */
+  async function auditedRoomNoteWrite<T>(request: IncomingMessage, run: () => Promise<T>): Promise<T> {
+    const audit = audits.get(request);
+    return audit ? audit.effect(run) : run();
+  }
+
+  /** Once a notes handler has finished: a v2 request without a fenced outcome is recorded by its response. */
+  function settleRoomNotesAudit(request: IncomingMessage, response: ServerResponse): void {
+    audits.get(request)?.settle(response);
   }
 
   function resolveAuthorizedRoomNoteOwner(request: IncomingMessage, response: ServerResponse, input: { roomId: string; scope: RoomNoteScope; actor: ControlPlaneActor; url: URL; permission: "notes.view" | "notes.edit"; action: Parameters<typeof writeRoomNotesAudit>[0]["action"] }): string | null | undefined {
@@ -132,7 +152,9 @@ export function createRoomNotesAccess(context: RoomNotesAccessContext) {
     if (input.scope === "private" && input.actor.actorType === "room-session" && requestedOwnerParticipantId && requestedOwnerParticipantId !== input.actor.participantId) {
       metrics.notesPermissionDeniedTotal += 1;
       if (input.action === "notes.export") metrics.notesExportDeniedTotal += 1;
-      writeRoomNotesAudit({ request, action: input.action, roomId: input.roomId, scope: input.scope, result: "denied", reason: "note_owner_mismatch", actor: input.actor });
+      const audit = audits.get(request);
+      if (audit) audit.denied("note_owner_mismatch");
+      else writeRoomNotesAudit({ request, action: input.action, roomId: input.roomId, scope: input.scope, result: "denied", reason: "note_owner_mismatch", actor: input.actor });
       json(response, 403, { error: "forbidden", reason: "note_owner_mismatch", permission: input.permission, requestId: getRequestId(request) });
       return undefined;
     }
@@ -152,23 +174,17 @@ export function createRoomNotesAccess(context: RoomNotesAccessContext) {
   }
 
   async function releaseRoomNotes(request: IncomingMessage, storage: Storage, actor: ControlPlaneActor, room: RoomRecord,
-    scope: RoomNoteScope, action: "notes.read" | "notes.versions" | "notes.export", send: () => void): Promise<void> {
+    send: () => void): Promise<void> {
+    const audit = audits.get(request);
     await releaseFencedResponse({ send,
       run: release => context.runGuardedRoomEffect(storage, actor, room, "notes.view", async scoped => { scoped.releaseResponse(release); }),
-      onReleased: () => {
-        if (actor.identityProtocolVersion === 2) writeRoomNotesAudit({ request, action, roomId: room.roomId, scope, result: "allowed", actor });
-      },
-      onDenied: error => {
-        const reason = context.deniedEffectReason(error);
-        if (actor.identityProtocolVersion === 2 && reason) {
-          writeRoomNotesAudit({ request, action, roomId: room.roomId, scope, result: "denied", reason, actor });
-        }
-      }
+      onReleased: () => { audit?.released(); },
+      onDenied: error => { audit?.refused(error); }
     });
   }
 
   return {
     emptyRoomNote, writeRoomNotesAudit, noteWritePermission, resolveRoomNotesActor,
-    resolveAuthorizedRoomNoteOwner, roomNoteVisibleToActor, releaseRoomNotes
+    resolveAuthorizedRoomNoteOwner, roomNoteVisibleToActor, releaseRoomNotes, auditedRoomNoteWrite, settleRoomNotesAudit
   };
 }

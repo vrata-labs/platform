@@ -56,6 +56,7 @@ with tempfile.TemporaryDirectory() as directory:
     host.contract = lambda target: contract
     host.minimum_identity_protocol = lambda: 1
     host.media_codec = lambda: 2
+    host.media_namespace_rotated = lambda: False
     host.identity_bound = lambda: False
     host.ownerless_reference_personal = lambda: False
     host.validate_identity_database = lambda: None
@@ -248,6 +249,7 @@ with tempfile.TemporaryDirectory() as root:
     host.validate_identity_configuration = lambda: None
     host.minimum_identity_protocol = lambda: 1
     host.media_codec = lambda: 2
+    host.media_namespace_rotated = lambda: False
     host.identity_bound = lambda: False
     passed, original = [], m.assert_target_allowed
     def spy(*args, **kwargs):
@@ -300,6 +302,14 @@ for invalid in (None, True, 2, "3", 3.0, [3]):
 for invalid in (None, True, 1, 4, "3", 3.0):
     rejects(lambda: m.assert_target_allowed(None, None, boundary, current, 2, True, media_codec=invalid), "media_rollout_invalid_codec_boundary")
 rejects(lambda: m.assert_target_allowed(None, None, boundary, current, 1, True, media_codec=3), "media_rollout_invalid_codec_boundary")
+rotation = dict(boundary, mediaNamespaceRotation=1)
+m.assert_target_allowed(None, None, rotation, current, 2, True, media_codec=3, namespace_rotated=True)
+rejects(lambda: m.assert_target_allowed(None, None, boundary, current, 2, True, media_codec=3, namespace_rotated=True), "media_rollback_without_namespace_rotation_forbidden")
+for invalid in (0, True, "1", None):
+    rejects(lambda: m.assert_target_allowed(None, None, dict(boundary, mediaNamespaceRotation=invalid), current, 2, True, media_codec=3, namespace_rotated=True), "media_rollback_without_namespace_rotation_forbidden")
+for invalid in (1, None, "t"):
+    rejects(lambda: m.assert_target_allowed(None, None, rotation, current, 2, True, media_codec=3, namespace_rotated=invalid), "media_rollout_invalid_namespace_rotation")
+rejects(lambda: m.assert_target_allowed(None, None, rotation, current, 1, False, namespace_rotated=True), "media_rollout_invalid_namespace_rotation")
 # A preparatory image is a valid target before the raise, and still requires every floor-two capability.
 rejects(lambda: m.assert_target_allowed(None, None, dict(boundary, mediaIdentityCodec=3), current, 2, True, media_codec=3), "media_rollback_requires_identity_codec2")
 # Boundary and reader failures keep their own codes.
@@ -319,6 +329,7 @@ with tempfile.TemporaryDirectory() as root:
     host.validate_identity_configuration = lambda: None
     host.minimum_identity_protocol = lambda: 1
     host.media_codec = lambda: 2
+    host.media_namespace_rotated = lambda: False
     host.ownerless_reference_personal = lambda: False
     host.identity_bound = lambda: True
     host.contract = lambda target: legacy
@@ -331,10 +342,17 @@ with tempfile.TemporaryDirectory() as root:
     host.minimum_identity_protocol = lambda: 2
     host.read_only_compose_environment = lambda: {}
     host.media_codec = lambda: 3
+    host.media_namespace_rotated = lambda: False
     host.contract = lambda target: codec
     rejects(lambda: host.prepare(current), "media_rollback_below_codec_boundary_forbidden")
     host.contract = lambda target: dict(codec, mediaCodecBoundary=3)
     assert host.prepare(current)["mediaCodec"] == 3
+    # After a namespace rotation only an image that issues in the rotated namespace and retires the old one may run.
+    host.media_namespace_rotated = lambda: True
+    rejects(lambda: host.prepare(current), "media_rollback_without_namespace_rotation_forbidden")
+    host.contract = lambda target: dict(codec, mediaCodecBoundary=3, mediaNamespaceRotation=1)
+    assert host.prepare(current)["mediaNamespaceRotated"] is True
+    host.media_namespace_rotated = lambda: False
     # The probe: a database before the migration is codec 2, unreadable or foreign values fail closed.
     answers = []
     host.run = lambda args: answers.pop(0)
@@ -345,6 +363,13 @@ with tempfile.TemporaryDirectory() as root:
     for replies in (["x"], ["t", ""], ["t", "1"], ["t", "4"], ["t", "3\\n3"]):
         answers[:] = replies
         rejects(host.media_codec, "media_rollout_invalid_codec_boundary")
+    del host.media_namespace_rotated
+    for replies, expected in ((["f"], False), (["t", "f"], False), (["t", "t"], True)):
+        answers[:] = replies
+        assert host.media_namespace_rotated() is expected, replies
+    for replies in (["x"], ["t", ""], ["t", "1"], ["t", "t\\nt"]):
+        answers[:] = replies
+        rejects(host.media_namespace_rotated, "media_rollout_invalid_namespace_rotation")
 `], { encoding: "utf8" });
 });
 
@@ -379,6 +404,7 @@ with tempfile.TemporaryDirectory() as root:
     host.run = lambda args: '{"state":"wave2","referenceRoomCount":0}'
     host.minimum_identity_protocol = lambda: 2
     host.media_codec = lambda: 2
+    host.media_namespace_rotated = lambda: False
     host.identity_bound = lambda: False
     with patch.dict(os.environ, {"VRATA_INTERNAL_SERVICE_TOKEN": ""}):
         try: host.prepare("a"*40)

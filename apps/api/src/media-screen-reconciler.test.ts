@@ -3,6 +3,7 @@ import test from "node:test";
 import { ParticipantInfo, ParticipantPermission, Room, TrackInfo, TrackSource } from "livekit-server-sdk";
 import { createUserMediaIdentity } from "@vrata/shared-types";
 import { roomMediaGrantName } from "./identity/media-room.js";
+import { managedMediaRoomName } from "./managed-media-names.js";
 import { createMediaScreenReconciler, type MediaScreenAuthority } from "./media-screen-reconciler.js";
 import { screenSourceLowering } from "./media-source-permissions.js";
 
@@ -33,7 +34,9 @@ function harness(options: Partial<Parameters<typeof createMediaScreenReconciler>
   let beforeUpdate: (() => void | Promise<void>) | undefined, beforeRemove: (() => void | Promise<void>) | undefined;
   let afterRead: (() => void) | undefined, onList: ((room: string) => void | Promise<void>) | undefined;
   let listingFailed = false, writeFailed = false, preserveTracks = false, lists = 0;
-  let removalFailed = false, keepRemovedPeer = false, loseRemovalAck = false;
+  let removalFailed = false, keepRemovedPeer = false, loseRemovalAck = false, deletionFailed = false;
+  let retired: string[] = [], current = namespace;
+  const deletions: string[] = [];
   const native = {
     async listRooms(names?: string[]) { lists++; if (listingFailed) throw new Error("secret-url-must-not-escape");
       return [...rooms.keys()].filter(name => !names?.length || names.includes(name)).map(name => new Room({ name })); },
@@ -53,15 +56,23 @@ function harness(options: Partial<Parameters<typeof createMediaScreenReconciler>
       removals.push({ room, identity });
       if (!keepRemovedPeer) rooms.set(room, (rooms.get(room) ?? []).filter(peer => peer.identity !== identity));
       if (loseRemovalAck) { loseRemovalAck = false; throw new Error("private-removal-ack-loss"); }
+    },
+    async deleteRoom(room: string) {
+      if (deletionFailed) throw new Error("private-deletion-failure");
+      deletions.push(room); rooms.delete(room);
     }
   };
   const reconciler = createMediaScreenReconciler({
-    now: () => time, context: async () => contextEnabled ? { namespace, codec, prefix, native } : null,
+    now: () => time, context: async () => contextEnabled ? { namespace: current, codec, prefix, native, retired: [...retired] } : null,
     authority: async (_roomId, participantIds) => { const value = withLineage(desired, participantIds); afterRead?.(); return value; },
     event: event => events.push(event), ...options
   });
-  return { reconciler, rooms, updates, removals, events, native,
-    status: (current: { namespace: string; codec: 2 | 3 } | null = { namespace, codec }) => reconciler.status(roomId, desired, current),
+  return { reconciler, rooms, updates, removals, deletions, events, native,
+    status: (boundary: { namespace: string; codec: 2 | 3; retired?: string[] } | null = { namespace: current, codec, retired }) =>
+      reconciler.status(roomId, desired, boundary && { retired: [], ...boundary }),
+    /** Replaces the current namespace; "retire" keeps the previous one owned. */
+    rotate: (next: string, previous: "retire" | "disown") => { if (previous === "retire") retired.push(current); current = next; },
+    failDeletion: (value: boolean) => { deletionFailed = value; },
     setDesired: (value: MediaScreenAuthority) => { desired = value; },
     disable: () => { contextEnabled = false; }, advance: (ms: number) => { time += ms; },
     beforeUpdate: (callback: typeof beforeUpdate) => { beforeUpdate = callback; },
@@ -93,7 +104,7 @@ test("public removal evicts only its participant and never sends a competing sou
   await h.reconciler.runOnce();
   assert.equal(h.removals.length, 3); assert.equal(h.updates.length, 0);
   assert.deepEqual(h.rooms.get(mediaRoom)!.map(peer => peer.identity), [others.identity]);
-  assert.equal(h.status().enforcementVersion, 5); assert.equal(h.status().state, "observed");
+  assert.equal(h.status().enforcementVersion, 6); assert.equal(h.status().state, "observed");
 });
 
 test("failed removal, new-SID presence and lost successful removal ACK cannot falsely acknowledge eviction", async () => {
@@ -175,7 +186,7 @@ test("screen reconciliation lowers only unauthorized verified source classes and
 
 test("missing native room is observed only after an independent scan and a stable authority read", async () => {
   const h = harness(); assert.equal(h.status().state, "pending");
-  await h.reconciler.runOnce(); assert.deepEqual(h.status(), { enforcementVersion: 5, state: "observed", desiredVersion: { authorityRevision: 3, roomActive: true }, observedAtMs: 1000, nativeRoom: "absent" });
+  await h.reconciler.runOnce(); assert.deepEqual(h.status(), { enforcementVersion: 6, state: "observed", desiredVersion: { authorityRevision: 3, roomActive: true }, observedAtMs: 1000, nativeRoom: "absent" });
   h.setDesired({ tenantId: "tenant", authority: { revision: 4, roomActive: true, publisherParticipantIds: [] } });
   assert.equal(h.status().state, "pending");
 });
@@ -183,7 +194,7 @@ test("missing native room is observed only after an independent scan and a stabl
 test("frequent readers cannot starve an absent-room observation, and idle interests do not poll forever", async () => {
   const h = harness({ maxRooms: 1 });
   const desired: MediaScreenAuthority = { tenantId: "tenant", authority: { revision: 3, roomActive: true, publisherParticipantIds: ["current"] } };
-  h.status(); h.reconciler.status("cold", desired, { namespace, codec: 2 }); h.status();
+  h.status(); h.reconciler.status("cold", desired, { namespace, codec: 2, retired: [] }); h.status();
   await h.reconciler.runOnce(); assert.equal(h.status().state, "observed", "the repeated request did not move the hot room behind the cold room");
   await h.reconciler.runOnce();
   const lists = h.listCount();
@@ -572,4 +583,110 @@ test("an executor instance that outlives a confirmed removal is not acknowledged
   h.keepRemovedPeer(true);
   await h.reconciler.runOnce(); await h.reconciler.runOnce();
   assert.equal(h.removals.length, 2); assert.equal(h.status().state, "pending");
+});
+
+test("a retired namespace loses every native room, both codecs and managed epochs included; foreign names stay", async () => {
+  const h = harness(), next = "d".repeat(32), foreign = "c".repeat(32), epoch = "0f1e2d3c-4b5a-4968-8776-655443322110";
+  const current = roomMediaGrantName(roomId, prefix, next), oldManaged = managedMediaRoomName("managed", epoch, prefix, namespace);
+  const oldV3 = roomMediaGrantName("other", prefix, namespace, incarnation), foreignRoom = roomMediaGrantName(roomId, prefix, foreign);
+  h.rooms.set(mediaRoom, [await peer("current", "ms"), new ParticipantInfo({ identity: "remote-browser:object:instance:1" }),
+    new ParticipantInfo({ identity: "unverified-intruder" })]);
+  h.rooms.set(oldV3, [await peer("other", "m", oldV3, 1)]);
+  h.rooms.set(oldManaged, [await peer("guest", "m", oldManaged)]);
+  h.rooms.set(foreignRoom, [await peer("theirs", "ms", foreignRoom)]);
+  h.rooms.set(current, [await peer("current", "ms", current)]);
+  h.rotate(next, "retire");
+  await h.reconciler.runOnce();
+  assert.deepEqual([...h.deletions].sort(), [mediaRoom, oldManaged, oldV3].sort());
+  assert.equal(h.events.filter(event => event === "retired").length, 3);
+  assert.equal(h.removals.length, 0, "a retired namespace is deleted whole, not swept participant by participant");
+  assert.equal(h.rooms.get(foreignRoom)!.length, 1, "another deployment's namespace is never touched");
+  assert.equal(h.status().state, "observed");
+  assert.equal(h.status({ namespace, codec: 2 }).state, "pending", "the previous namespace cannot reuse the observation");
+});
+
+test("a disowned namespace becomes foreign: its rooms are left to the deployment that still uses it", async () => {
+  const h = harness(), next = "d".repeat(32);
+  h.rooms.set(mediaRoom, [await peer("theirs", "ms")]);
+  h.rotate(next, "disown");
+  h.status(); await h.reconciler.runOnce();
+  assert.deepEqual(h.deletions, []); assert.equal(h.removals.length, 0);
+  assert.equal(h.rooms.get(mediaRoom)!.length, 1);
+  assert.equal(h.status().state, "observed");
+  assert.equal(h.status().nativeRoom, "absent", "the room of the current namespace is absent");
+});
+
+test("a retired-namespace room of the same room ID keeps the current room pending until it is deleted", async () => {
+  const h = harness(), next = "d".repeat(32), current = roomMediaGrantName(roomId, prefix, next);
+  h.rooms.set(mediaRoom, [new ParticipantInfo({ identity: "remote-browser:malformed:identity" })]);
+  h.rooms.set(current, [await peer("current", "m", current)]);
+  h.rotate(next, "retire"); h.failDeletion(true);
+  await h.reconciler.runOnce();
+  assert.equal(h.status().state, "pending", "an old JWT still connected in the retired namespace is not acknowledged");
+  assert.ok(h.events.includes("pending"));
+  h.failDeletion(false); h.advance(1000);
+  // Current rooms go first on this pass, so the deletion lands after them and the next pass observes.
+  await h.reconciler.runOnce();
+  assert.deepEqual(h.deletions, [mediaRoom]); assert.equal(h.status().state, "pending");
+  h.advance(1000); await h.reconciler.runOnce();
+  assert.equal(h.status().state, "observed");
+});
+
+test("an idle room is not absent while its retired-namespace room exists", async () => {
+  const h = harness(), next = "d".repeat(32);
+  h.rooms.set(mediaRoom, []);
+  h.rotate(next, "retire"); h.failDeletion(true);
+  h.status(); await h.reconciler.runOnce();
+  assert.equal(h.status().state, "pending");
+  h.failDeletion(false); h.advance(1000);
+  await h.reconciler.runOnce();
+  assert.deepEqual(h.deletions, [mediaRoom]);
+  // The deleting pass listed the room before deleting it; the next one confirms absence independently.
+  h.advance(1000); await h.reconciler.runOnce();
+  assert.deepEqual(h.status(), { enforcementVersion: 6, state: "observed", desiredVersion: { authorityRevision: 3, roomActive: true },
+    observedAtMs: 3000, nativeRoom: "absent" });
+});
+
+test("retired-namespace deletions share the room budget and an invalid retired list is unavailable, not permission", async () => {
+  const h = harness({ maxRooms: 2 }), next = "d".repeat(32);
+  for (const id of ["r1", "r2", "r3"]) h.rooms.set(roomMediaGrantName(id, prefix, namespace), []);
+  h.rotate(next, "retire");
+  await h.reconciler.runOnce(); assert.equal(h.deletions.length, 2);
+  await h.reconciler.runOnce(); assert.equal(h.deletions.length, 3);
+  h.rotate("not-a-namespace", "retire");
+  await h.reconciler.runOnce();
+  assert.ok(h.events.includes("unavailable")); assert.equal(h.deletions.length, 3);
+});
+
+test("retired and current rooms split one budget and take turns, so neither starves the other", async () => {
+  const h = harness({ maxRooms: 1 }), next = "d".repeat(32), lists: string[] = [];
+  h.onList(room => { lists.push(room); });
+  const current = roomMediaGrantName(roomId, prefix, next);
+  h.rooms.set(current, [await peer("current", "m", current)]);
+  for (const id of ["r1", "r2"]) h.rooms.set(roomMediaGrantName(id, prefix, namespace), []);
+  h.rotate(next, "retire"); h.failDeletion(true);
+  const passes: Array<{ deleted: number; reconciled: boolean }> = [];
+  for (let pass = 0; pass < 4; pass++) {
+    const before = lists.length, attempts = h.events.length;
+    await h.reconciler.runOnce();
+    passes.push({ deleted: h.events.slice(attempts).filter(event => event === "pending").length, reconciled: lists.slice(before).includes(current) });
+  }
+  // One room per pass: deletion attempts and the current room alternate even while every deletion fails.
+  assert.deepEqual(passes.map(pass => pass.reconciled), [false, true, false, true]);
+  h.failDeletion(false);
+  await h.reconciler.runOnce(); await h.reconciler.runOnce(); await h.reconciler.runOnce();
+  assert.deepEqual([...h.deletions].sort(), ["r1", "r2"].map(id => roomMediaGrantName(id, prefix, namespace)).sort(),
+    "the cursor moves past failures, so the tail of the retired list is reached too");
+});
+
+test("a retired room appearing later voids an earlier absent observation of its room ID", async () => {
+  const h = harness();
+  h.status(); await h.reconciler.runOnce();
+  assert.equal(h.status().nativeRoom, "absent");
+  h.rotate("d".repeat(32), "retire");
+  h.advance(100); h.status({ namespace: "d".repeat(32), codec: 2, retired: [namespace] });
+  await h.reconciler.runOnce();
+  h.rooms.set(mediaRoom, [new ParticipantInfo({ identity: "replayed-old-jwt" })]); h.failDeletion(true);
+  h.advance(100); await h.reconciler.runOnce();
+  assert.equal(h.status().state, "pending", "an old JWT that recreated its retired room is not covered by the earlier observation");
 });
