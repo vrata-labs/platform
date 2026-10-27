@@ -879,6 +879,12 @@ never retire anything. On staging the irreversible step is the Staging Deploy in
 `retire`), which first checks that both the running candidate and the accepted rollback
 target carry the capability.
 
+Accepted on the on-demand floor-2 stand at codec 3: `b19595671adc910ef2463b1ab8dc2c8e660dea1c`,
+[Staging40554820976](https://github.com/vrata-labs/platform/actions/runs/40554820976) 53/53 plus the Rutube
+canary, then [Staging40558654514](https://github.com/vrata-labs/platform/actions/runs/40558654514) on the same SHA
+with `rotate_media_namespace`: the namespace was replaced, one retired, and the gate passed 53/53 again with grants
+in the new namespace.
+
 ### Note and document effects under identity v2: T13a-S3b-4
 
 Every effect that reads or writes room notes and documents was inventoried: notes
