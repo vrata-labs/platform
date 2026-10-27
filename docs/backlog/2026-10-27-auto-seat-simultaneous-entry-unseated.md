@@ -32,3 +32,4 @@ CI 40352361975, первая попытка job e2e (3), на PR #139, кото�
 - `tests/e2e/room-plugin-auto-seat.spec.ts:17`, `:29`
 - `docs/backlog/2026-10-23-auto-seat-status-after-lease-restart.md` — близкий механизм в том же примере
 - CI 40352361975, job e2e (3), попытка 1
+- CI 40503032375 (PR #149), job e2e (5), попытка 1 — повтор 2026-10-27, при перезапуске job прошёл
