@@ -55,6 +55,8 @@ lease. Callback routing и запуск LiveKit publisher требуют отд�
 
 ## Сделано 2026-10-27
 
+Влито в main в #148, поставлено на stage 2026-10-27.
+
 - Room-state передаёт исполнителю поверхность объекта при каждом запуске сессии:
   первый open-url, повтор после mark-failed и замена URL.
 - Remote-browser хранит `surfaceId` в сессии и подставляет его во все callbacks вместо
@@ -69,4 +71,11 @@ lease. Callback routing и запуск LiveKit publisher требуют отд�
 
 Сценарий с настоящим publisher: open-url → mark-publishing → mark-active на `laptop-screen`
 и `whiteboard-wall`, видео на выбранной поверхности и отказ callback с чужой поверхности.
-Нужен стенд и LiveKit, в unit-тестах это не проверить.
+Нужен стенд и LiveKit, в unit-тестах это не проверить. В плане по бэклогу — пункт 15.
+
+Проверка 2026-10-27 на stage (floor 2, codec 3): в комнате `meeting-room-basic@2.0.0` объект remote-browser на
+`debug-main` проходит loading → publishing → active примерно за 3 с. На `laptop-screen` и `whiteboard-wall` в
+шаблонной комнате его не создать: `laptop-screen` нет в шаблонах каталога (`missing-surface`), `whiteboard-wall`
+принимает только whiteboard и markdown-board (`unknown-object-type`), а комнату со старым шаблоном 0.1.0 создать
+нельзя (`deprecated_template`). Remote-browser на этих поверхностях бывает только в старых комнатах 0.1.0, где
+действует `createDefaultRoomMediaObjectsState`; проверка в такой комнате требует чужой комнаты на стенде.
