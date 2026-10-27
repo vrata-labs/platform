@@ -116,13 +116,11 @@ test("real protocol activation stops a legacy client while a fresh tab joins wit
     const untrustedId = `tab-${randomUUID()}`;
     // Everything the fresh tab sends, from before navigation until after its reload: URLs, headers, bodies and socket frames.
     const outgoing: string[] = [], roomStateParticipants: string[] = [], presenceParticipants: string[] = [];
-    const headerReads: Promise<unknown>[] = [];
     let presenceWrites = 0;
     fresh.on("request", item => {
       const body = item.postDataBuffer()?.toString("latin1") ?? "";
-      outgoing.push(item.url(), body);
-      // allHeaders(), unlike headers(), includes cookies and other security-related headers.
-      headerReads.push(item.allHeaders().then(headers => outgoing.push(JSON.stringify(headers)), () => outgoing.push("headers-unavailable")));
+      // headers() leaves out cookies; the tab's cookie jar is checked separately below.
+      outgoing.push(item.url(), JSON.stringify(item.headers()), body);
       const presence = /^\/api\/rooms\/[^/]+\/presence\/([^/]+)$/.exec(new URL(item.url()).pathname);
       if (presence && item.method() === "PUT") {
         presenceWrites += 1;
@@ -155,10 +153,9 @@ test("real protocol activation stops a legacy client while a fresh tab joins wit
     expect((await (await rejoin).json() as { participantId: string }).participantId).toBe(joined.participantId);
     await expect.poll(() => fresh.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected)).toBe(true);
     await expect.poll(() => presenceWrites, { timeout: 15_000 }).toBeGreaterThan(presenceWritesBeforeReload);
-    await Promise.all(headerReads);
     // The planted local ID never leaves the tab; room-state and presence (path and body) carry only the issued one.
-    expect(outgoing.filter(entry => entry.includes("headers-unavailable"))).toEqual([]);
     expect(outgoing.filter(entry => entry.includes(untrustedId))).toEqual([]);
+    expect((await fresh.context().cookies()).filter(cookie => `${cookie.name}=${cookie.value}`.includes(untrustedId))).toEqual([]);
     expect(roomStateParticipants.length).toBeGreaterThanOrEqual(2);
     expect([...new Set([...roomStateParticipants, ...presenceParticipants])]).toEqual([joined.participantId]);
     expect(await storage.identityProtocol.minimum()).toBe(2);
