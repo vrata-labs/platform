@@ -131,6 +131,7 @@ import {
 
 import { defaultManifest } from "./default-room-manifest.js";
 import { createRoomManifestBuilder } from "./room-manifest.js";
+import { PREJOIN_SETTINGS_ROUTE, readPrejoinSettings } from "./room-prejoin-settings.js";
 import { loadSceneMediaSurfaces } from "./scene-media-surfaces.js";
 import { legacySceneMediaSurfaces } from "./legacy-scene-media-surfaces.js";
 import { normalizeRoomAvatarOverrides } from "./room-input.js";
@@ -3858,6 +3859,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const manifest = await buildManifest(roomId, request, room);
     await releaseRoomRead(request, storage, roomId, room, () => { json(response, 200, manifest); });
     return;
+  }
+
+  const prejoinSettingsMatch = url.pathname.match(PREJOIN_SETTINGS_ROUTE);
+  if (method === "GET" && prejoinSettingsMatch) {
+    const result = await readPrejoinSettings(storage, legacyIdentityBoundary, decodeURIComponent(prejoinSettingsMatch[1]));
+    return json(response, result.status, result.body);
   }
 
   const presenceListMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/presence$/);

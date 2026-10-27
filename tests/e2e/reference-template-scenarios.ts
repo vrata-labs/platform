@@ -58,8 +58,13 @@ async function openRoom(page: Page, url: string) {
   try { await page.goto(url); }
   catch { throw new Error("reference_room_navigation_failed"); }
 }
-async function join(page: Page, url: string) {
+async function join(page: Page, url: string, guestJoinMuted?: boolean) {
   await openRoom(page, url);
+  if (guestJoinMuted !== undefined) {
+    // The pre-join screen applies the room's template, also at identity floor 2 where the manifest is refused.
+    await expect(page.locator("#guest-onboarding")).toBeVisible({ timeout: 120000 });
+    await expect(page.locator("#guest-join-muted")).toBeChecked({ checked: guestJoinMuted });
+  }
   await expect.poll(async () => await page.locator("#guest-onboarding").isVisible()
     || await page.evaluate(() => (window as any).__VRATA_DEBUG__?.sceneBundleState === "loaded"), { timeout: 120000 }).toBe(true);
   if (await page.locator("#guest-onboarding").isVisible()) {
@@ -258,7 +263,7 @@ test(`${staging ? "@staging-extended " : ""}reference meeting synchronizes only 
   const room = await create(request, "meeting-room-basic");
   const hostUrl = new URL(await hostLink(request, room.roomId));
   if (staging) hostUrl.searchParams.set("audiomock", "1");
-  await join(page, hostUrl.href);
+  await join(page, hostUrl.href, false);
   await captureReferenceView(page, "meeting-spawn");
   const viewer = await createFunctionalClient(browser);
   const context = viewer.context;

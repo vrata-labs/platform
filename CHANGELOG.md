@@ -33,6 +33,7 @@ Vrata uses SemVer: `MAJOR.MINOR.PATCH`. Until `1.0.0`, breaking changes can happ
 
 ### Changed
 
+- At identity floor 2 the guest screen again applies the template defaults of a room open to anonymous guests (join muted, notes scope): the new anonymous `GET /api/rooms/:roomId/prejoin-settings` returns only those settings. When they are unavailable, the guest joins muted unless they chose otherwise in that room; a shared choice from another room no longer opens the microphone.
 - The bundled S3 storage is SeaweedFS instead of MinIO community, which was archived with unpatched advisories (unauthenticated object writes among them) and no longer publishes images. The compose service keeps the name `minio`, port 9000 and the `MINIO_*` variables; data lives in the new `storage-data` volume. The `mc` client of bootstrap and backup comes from the maintained `pgsty/mc` image. Self-host S3 listens on `127.0.0.1` only, and the public storage route in production and staging serves only reads (`GET`/`HEAD`, CORS `OPTIONS`) of public objects. Existing self-host data moves with backup and restore, see `docs/upgrades.md`.
 
 ### Known Limitations

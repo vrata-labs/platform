@@ -1,4 +1,5 @@
 import type { Storage } from "../storage-contracts.js";
+import { PREJOIN_SETTINGS_ROUTE } from "../room-prejoin-settings.js";
 
 export class IdentityBoundaryError extends Error {
   constructor(readonly status: 401 | 409 | 426 | 503, readonly reason: "identity_upgrade_required" | "identity_recovery_required" | "identity_authority_unavailable" | "identity_session_expired"
@@ -34,6 +35,8 @@ export function createLegacyIdentityBoundary(storagePromise: Promise<Storage>) {
 export function legacyBoundaryApplies(method: string, pathname: string): boolean {
   if (method === "OPTIONS" || !pathname.startsWith("/api/")) return false;
   if (method === "POST" && /^\/api\/rooms\/[^/]+\/identity-recovery$/.test(pathname)) return false;
+  // The pre-join read releases only the template settings of a room open to anonymous guests and applies this boundary to every other room itself.
+  if (method === "GET" && PREJOIN_SETTINGS_ROUTE.test(pathname)) return false;
   return !(method === "GET" && ["/api/templates", "/api/assets", "/api/tenants", "/api/internal/identity-policy"].includes(pathname))
     && !(method === "POST" && ["/api/internal/identity-session/verify", "/api/tokens/state", "/api/tokens/remote-browser-media", "/api/personal-room",
       "/api/room-grants/exchange"].includes(pathname));
