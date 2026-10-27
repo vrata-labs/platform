@@ -2603,3 +2603,18 @@ Authoritative accepted-release.json до и после публичного read
 - Рассмотрено и отклонено: кэш отказов на 5 с и двойной отказ с интервалом — не добавляют доказательства, если остановка окончательна; отдельный атрибут binding у исполнителя — лишний, адрес экземпляра уже уникален; порог «подключился раньше старта room-state минус 5 с» для room_missing — независимая проверка показала, что экземпляр, вошедший у самой границы, оставался бы навсегда, а вернуться ему всё равно некуда.
 - Последствия выкладки: первый деплой один раз обрывает работающие удалённые браузеры со старой identity, их нужно открыть заново. Откат на образ версии 4 перестаёт распознавать identity экземпляра как исполнителя и не трогает её — поведение до S3b-3a. Поколение комнаты в room-state остаётся в бэклоге (room-state-recreated-room-isolation).
 - e2e жизненного цикла (disable/delete) теперь использует настоящий объект room-state, открытый Host через v2-сокет, и его текущий экземпляр вместо поддельной старой identity. До отключения комната observed, экземпляр сохранён. Прежнее ожидание «после disable исполнитель остаётся» снято: отключение закрывает сокет владельца, room-state удаляет его объект (leaveRoom), и экземпляр законно выводится как object_missing.
+
+## S3b-3b — принято на staging floor 2, кодек 3, 2026-10-27
+
+| Gate | Точный результат |
+|---|---|
+| Исполняемый SHA | e24519744acd14225f605edf6a573fea7f8cc9f2 (S3b-3b поверх main 1d287ac) |
+| [CI40417594471](https://github.com/vrata-labs/platform/actions/runs/40417594471) | Success со второй попытки: в первой упал room-plugin-auto-seat (известная нестабильность из бэклога auto-seat-simultaneous-entry-unseated); [CI40414981012](https://github.com/vrata-labs/platform/actions/runs/40414981012) на том же коде до rebase — success с первой |
+| [Docker40417589895](https://github.com/vrata-labs/platform/actions/runs/40417589895) | Success |
+| [Staging40460563007](https://github.com/vrata-labs/platform/actions/runs/40460563007) | Bootstrap нового стенда прямо на e245197: success, Rutube-канарейка (настоящий удалённый браузер, identity экземпляра) — passed |
+| [Template Catalog 40461354603](https://github.com/vrata-labs/platform/actions/runs/40461354603) | Активация эталонного каталога на e245197 и полный публичный gate: 53/53, включая оба сценария реального screen-share |
+
+- Стенд 111.88.217.54 создан под аренду f1ac8519 с --sha e245197. Предыдущий стенд (аренда 78ac3833) поднялся на 1d287ac, но активация каталога на нём дважды не прошла приёмку (Template Catalog 40417295144: публикация screen-share браузером раннера не устанавливалась; в первой попытке один из двух сценариев прошёл), каталог откатился на Wave 2. Аренда истекла во время ожидания решения, стенд удалён по расписанию; отправленный после этого Staging Deploy 40460188774 отменён до обращения к хосту.
+- Новый стенд сразу на floor 2 и кодеке 3: подтверждён bootstrap из S3b-2 (STAGE_MEDIA_CODEC3).
+- Readback под арендой 2e13fdc2: health ok, identityProtocolVersion 2, mediaIdentityCodec 3; demo-room и control-plane — 200; метрики сверки observed 743, pending 0, unavailable 0, evicted 13; session-control комнат объявляет enforcementVersion 5 и переходит в observed.
+- Локально: room-state 96, remote-browser 71, runtime-web 1503, API 1835 из 1844 (4 падения plugin/portal-managed под нагрузкой, в изоляции 35/35), tools 325 (5 известных таймаутов staging-minio и сверка байтов SDK, SDK не менялся), lint; полный e2e 249/250, упавший room-plugin-auto-seat зелёный при повторе; e2e media-screen-reconciliation 4/4, frame-credential и remote-browser-object 16/16 (один таймерный сбой зелёный при повторе).
