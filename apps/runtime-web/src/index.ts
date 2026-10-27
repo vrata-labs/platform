@@ -513,10 +513,16 @@ export interface VoiceSessionPlan {
   spatialAudioEnabled: boolean;
 }
 
-export async function fetchRuntimeHealth(apiBaseUrl: string): Promise<RuntimeHealthResponse> {
+/**
+ * Reads the API feature flags. With `required`, a non-OK answer rejects instead of degrading to defaults:
+ * admission must not guess the identity protocol, because a floor-2 API answering 502/503 would otherwise
+ * receive the legacy body with the client-chosen participant ID.
+ */
+export async function fetchRuntimeHealth(apiBaseUrl: string, options: { required?: boolean } = {}): Promise<RuntimeHealthResponse> {
   const response = await fetch(new URL("/health", apiBaseUrl));
 
   if (!response.ok) {
+    if (options.required) throw new Error(`runtime_health_unavailable:${response.status}`);
     return {};
   }
 
@@ -529,7 +535,7 @@ export async function bootRuntime(
   userAgent: string,
   accessRequest?: RuntimeAccessRequest
 ): Promise<RuntimeBootResult> {
-  const health = await fetchRuntimeHealth(apiBaseUrl);
+  const health = await fetchRuntimeHealth(apiBaseUrl, { required: true });
   const healthFeatures = health.features ?? {};
   const accessResponse = accessRequest ? await fetchStateToken(apiBaseUrl, roomId,
     { ...accessRequest, identityProtocolVersion: healthFeatures.identityProtocolVersion === 2 ? 2 : undefined }) : null;
