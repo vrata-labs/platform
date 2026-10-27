@@ -116,16 +116,29 @@ test("real protocol activation stops a legacy client while a fresh tab joins wit
     const untrustedId = `tab-${randomUUID()}`;
     // Everything the fresh tab sends, from before navigation until after its reload: URLs, headers, bodies and socket frames.
     const outgoing: string[] = [], roomStateParticipants: string[] = [], presenceParticipants: string[] = [];
-    let presenceWrites = 0;
+    // headers() leaves out cookies; the browser reports the headers it actually sent, cookies and socket handshakes included.
+    const network = await fresh.context().newCDPSession(fresh);
+    network.on("Network.requestWillBeSentExtraInfo", event => outgoing.push(JSON.stringify(event.headers)));
+    network.on("Network.webSocketWillSendHandshakeRequest", event => outgoing.push(JSON.stringify(event.request.headers)));
+    await network.send("Network.enable");
+    // Successful presence writes per document: a write of the page being reloaded never counts for the next one.
+    let documentGeneration = 0;
+    const presenceGeneration = new Map<object, number>(), presenceAccepted = new Map<number, number>();
+    const acceptedPresence = () => presenceAccepted.get(documentGeneration) ?? 0;
+    fresh.on("framenavigated", frame => { if (frame === fresh.mainFrame()) documentGeneration += 1; });
     fresh.on("request", item => {
       const body = item.postDataBuffer()?.toString("latin1") ?? "";
-      // headers() leaves out cookies; the tab's cookie jar is checked separately below.
       outgoing.push(item.url(), JSON.stringify(item.headers()), body);
       const presence = /^\/api\/rooms\/[^/]+\/presence\/([^/]+)$/.exec(new URL(item.url()).pathname);
       if (presence && item.method() === "PUT") {
-        presenceWrites += 1;
+        presenceGeneration.set(item, documentGeneration);
         presenceParticipants.push(decodeURIComponent(presence[1]), (JSON.parse(body) as { participantId: string }).participantId);
       }
+    });
+    // "response", not "requestfinished": the runtime never reads the presence response body, so Chromium never finishes it.
+    fresh.on("response", answer => {
+      const generation = presenceGeneration.get(answer.request());
+      if (generation !== undefined && answer.status() === 200) presenceAccepted.set(generation, (presenceAccepted.get(generation) ?? 0) + 1);
     });
     fresh.on("websocket", socket => {
       outgoing.push(socket.url());
@@ -145,14 +158,14 @@ test("real protocol activation stops a legacy client while a fresh tab joins wit
     await expect.poll(() => fresh.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected)).toBe(true);
     await expect(fresh.locator("#session-upgrade-dialog")).toBeHidden();
     expect(await fresh.evaluate(() => (window as any).__VRATA_DEBUG__?.participantId)).toBe(joined.participantId);
-    await expect.poll(() => presenceWrites, { timeout: 15_000 }).toBeGreaterThan(0);
-    const presenceWritesBeforeReload = presenceWrites;
+    await expect.poll(acceptedPresence, { timeout: 15_000 }).toBeGreaterThan(0);
+    const generationBeforeReload = documentGeneration;
     const rejoin = fresh.waitForResponse(next => new URL(next.url()).pathname === "/api/tokens/state");
     await fresh.reload();
     expect((await rejoin).status()).toBe(200);
     expect((await (await rejoin).json() as { participantId: string }).participantId).toBe(joined.participantId);
     await expect.poll(() => fresh.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected)).toBe(true);
-    await expect.poll(() => presenceWrites, { timeout: 15_000 }).toBeGreaterThan(presenceWritesBeforeReload);
+    await expect.poll(() => documentGeneration > generationBeforeReload && acceptedPresence() > 0, { timeout: 15_000 }).toBe(true);
     // The planted local ID never leaves the tab; room-state and presence (path and body) carry only the issued one.
     expect(outgoing.filter(entry => entry.includes(untrustedId))).toEqual([]);
     expect((await fresh.context().cookies()).filter(cookie => `${cookie.name}=${cookie.value}`.includes(untrustedId))).toEqual([]);
