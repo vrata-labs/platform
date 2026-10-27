@@ -79,3 +79,5 @@ lease. Callback routing и запуск LiveKit publisher требуют отд�
 принимает только whiteboard и markdown-board (`unknown-object-type`), а комнату со старым шаблоном 0.1.0 создать
 нельзя (`deprecated_template`). Remote-browser на этих поверхностях бывает только в старых комнатах 0.1.0, где
 действует `createDefaultRoomMediaObjectsState`; проверка в такой комнате требует чужой комнаты на стенде.
+
+Закрыто 2026-10-27 как есть: проверку в чужой старой комнате 0.1.0 со сменой host решено не проводить.
