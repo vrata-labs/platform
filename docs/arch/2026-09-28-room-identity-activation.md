@@ -440,8 +440,8 @@ desired state from durable identity authority, not from a browser, room-state
 presence, webhook or an in-memory transition queue. Only rooms in the exact
 current persisted media namespace are eligible. A second deployment can share
 the SFU and room prefix; foreign namespaces are never assumed to be retired
-namespaces owned by this database. Cloning/restoring a database onto the same
-SFU still requires an explicit namespace/isolation procedure.
+namespaces owned by this database. Cloning or restoring a database onto the same
+SFU uses the explicit namespace rotation of T13a-S3b-4 below.
 
 `roomIdentities.screenSourceAuthority` reads room lifecycle, authority and the
 Host/Presenter identity records in one existing read-only repeatable-read
@@ -689,7 +689,8 @@ Activation (S3b-2) is a separate, irreversible operator step:
 through `staging-remote-release.py activate-media-codec3` (Staging Deploy input
 `activate_media_codec3`), after preflight of the running candidate and the accepted
 rollback target. From then on only codec 3 is issued, codec-2 rooms are retired and
-open tabs reconnect with codec-3 grants; health advertises `mediaIdentityCodec: 3`.
+open tabs lose their media connection and join audio again with codec-3 grants (the runtime
+does not rejoin by itself; backlog audio-not-rejoined-after-media-eviction); health advertises `mediaIdentityCodec: 3`.
 Executor leases and owned-namespace retirement remain separate S3b slices.
 
 Published image: `3445a5cd92088a784118caeba32c7ad7ad5634f0` on the shared floor-2 stand.
@@ -807,6 +808,111 @@ not reconnect. A rollback to a version-4 image no longer recognizes instance
 identities as executors and leaves them alone, which is the behavior before
 S3b-3a. Room generation in room-state (a deleted and recreated room keeps its
 objects under the same room ID) stays in the backlog.
+
+### Owned media namespace rotation: T13a-S3b-4
+
+The media namespace is set once, when the identity floor is raised to 2, and every
+native room name carries it. Until now nothing could say "every media credential
+issued so far is void": a database restored from a backup onto the same SFU judged
+the live connections by rewound authority, a database cloned onto an SFU the original
+still uses reconciled the original's rooms, and a leak of media JWTs had no lever
+beyond the one-shot codec boundary.
+
+`apps/api/dist/identity/rotate-media-namespace.js --confirm-irreversible
+--previous=retire|disown [--retire=<namespace>...]` replaces the namespace with a fresh
+random one. The activation column `media_namespace` stays immutable (older images verify
+its trigger body byte for byte); the effective namespace is
+`coalesce(rotated_media_namespace, media_namespace)`, and two append-only lists record
+every namespace used before (`previous_media_namespaces`, never reused) and every one
+retired (`retired_media_namespaces`). A trigger admits only one whole rotation per update:
+a fresh hex namespace, the replaced one appended to the history, and the retired list
+extended without removals, duplicates or the new namespace. The rotation takes the
+policy table in EXCLUSIVE mode like the codec raise, so a grant prepared for the
+previous namespace is either released before it or refused after it by the existing
+namespace pin of both issuance fences.
+
+- `retire` keeps the replaced namespace owned. Reconciliation version 6 deletes every
+  native room of a retired namespace, both codecs and managed epochs included, with
+  `DeleteRoom` and without an authority read: nothing in it is current, so executors and
+  unrecognised identities go too. Such a room with the same room ID voids an earlier
+  observation of that room, blocks the current room's observation while it holds any
+  connection and keeps an idle room from being observed as absent. Retired and current
+  rooms share the per-pass room budget: while both wait they split it, take turns going
+  first and keep separate cursors, so failing deletions cannot starve current rooms or
+  the tail of the retired list.
+- `disown` leaves the replaced namespace to whoever else uses it; it becomes foreign and
+  is never touched. A clone keeps the retired list it inherited, which only names
+  namespaces the original has retired as well.
+- `--retire` names further namespaces of this deployment that the database does not know,
+  such as one created by a rotation after the backup it was restored from; every rotation
+  prints its new namespace for the backup records. A dry run lists the namespaces it finds
+  on the SFU under the deployment's prefix that the database neither uses, retired nor used
+  before, with their room counts. A namespace whose JWTs were issued but never used has no
+  room and is invisible; such a JWT stays valid until it expires, and only a LiveKit API key
+  rotation voids it earlier.
+
+The command migrates the schema first, as the API does on start, so it also runs on a
+database restored from an older backup without starting the API. It prints the namespace
+before and after (not secret: every grant names its room), so a lost reply is checked with
+`--dry-run` before running it again. Deleting a room ends connections;
+it is not admission control. A JWT of a retired namespace that rejoins recreates its room
+(LiveKit auto-create) and the following passes delete it again, subject to the same
+budget as every other room; between those passes the old connection is alive.
+
+Procedures (docs/backup-restore.md): restore onto the same SFU — stop the API, restore,
+rotate with `retire` (adding any namespace of a rotation made after the backup), then
+start the API; clone onto a shared SFU — rotate with `disown` before the clone's API first
+starts. Rotation revokes no credential: it isolates new grants in a fresh namespace and
+keeps deleting the rooms of retired ones, so an old media JWT is removed again whenever it
+rejoins, until it expires; a LiveKit API key rotation revokes all media JWTs at once. Room
+sessions and identity credentials signed before a restore, revocations the backup does not
+contain included, stay valid until the state-token secret is rotated as well. Open tabs lose their media connection
+once and need to join audio again; the runtime does not rejoin automatically after a
+server-side eviction. Remote browsers must be reopened.
+
+Rollout: the API image label `io.vrata.media-namespace-rotation=1` and the manifest key
+`mediaNamespaceRotation: 1`. Once the database has a rotated namespace, the staging
+catalog guard and `tools/identity-rollback-guard.mjs` refuse a rollback image without the
+capability, because an older image would issue grants in the activation namespace and
+never retire anything. On staging the irreversible step is the Staging Deploy input
+`rotate_media_namespace` (`staging-remote-release.py rotate-media-namespace`, always
+`retire`), which first checks that both the running candidate and the accepted rollback
+target carry the capability.
+
+### Note and document effects under identity v2: T13a-S3b-4
+
+Every effect that reads or writes room notes and documents was inventoried: notes
+read/save/delete/versions/restore/export, document list/upload/download/presentation/
+content/surface/delete, room deletion, the room-state document objects and their
+internal cleanup. Writes run inside `withRoomIdentityEffect`; reads and bytes are
+prepared outside and released synchronously inside after a recheck. A pre-fence read
+cannot cross a room generation at floor 2, because the actor's identity is resolved at
+entry and identities cascade with their room. The audit closed these gaps:
+
+- Memory `deleteRoom` now drops the room's notes, note versions and documents, as the
+  PostgreSQL foreign keys cascade; a recreated room no longer inherits them in Memory.
+- Surface assignments in one room serialize on a transaction advisory lock, and a missing
+  or deleted target changes nothing, so two documents never share a surface and a
+  concurrent delete never unlinks the document being shown. An administrator's unfenced
+  call runs in its own short transaction.
+- A document read inside a room fence holds its row FOR SHARE until the fence ends: a
+  tombstone or surface change commits only after bytes released on that reading were sent.
+- Room deletion collects the object keys of all the room's documents, deleted ones
+  included, in its own FOR UPDATE transaction and removes those objects after commit. This
+  is best effort: a failed or interrupted removal leaves an orphan, counted and logged,
+  with no collector.
+- For v2 actors the note and document audit writes one record per request: the fenced
+  outcome — allowed once the response was released or the effect committed, denied when
+  the fence refused it, uncertain when the COMMIT outcome is unknown — or, for a request
+  that ends before any fenced effect, what its response ended with. Entry-time
+  authorization is no longer recorded as "allowed".
+
+Residuals: room-state accepts a document ID in its surface commands without asking the
+API, and it keeps the objects of a deleted room under the same room ID (backlog
+room-state-recreated-room-isolation); bytes are still released only by the API with its
+surface and tombstone checks. A failed cleanup after a document delete leaves its object
+without a collector. Deleted notes stay readable through versions and export to readers
+with `notes.view`, which restore relies on.
 
 ### Shared staging delivery (floor 1)
 

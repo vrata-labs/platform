@@ -94,7 +94,7 @@ export function createRoomPluginPackageService(storage: RoomPluginStorage, blobs
 }
 
 export async function deleteRoomWithPluginCleanup(storage: Storage, scope: RoomPluginScope,
-  getBlobs: () => RoomPluginBlobStorage): Promise<boolean> {
+  getBlobs: () => RoomPluginBlobStorage, documentStorageKeys?: string[]): Promise<boolean> {
   scope = { tenantId: scope.tenantId, roomId: scope.roomId };
   // Resolve configuration lazily: ordinary legacy rooms must not need object-storage credentials to delete.
   let resolved: RoomPluginBlobStorage | undefined;
@@ -104,5 +104,5 @@ export async function deleteRoomWithPluginCleanup(storage: Storage, scope: RoomP
     put: (...args) => backend().put(...args), read: (...args) => backend().read(...args), delete: (...args) => backend().delete(...args)
   };
   const intent = await createRoomPluginPackageService(storage.roomPlugins, lazy).cleanupRoom(scope);
-  return storage.deleteRoom(scope.roomId, { tenantId: scope.tenantId, deletionId: intent.deletionId });
+  return storage.deleteRoom(scope.roomId, { tenantId: scope.tenantId, deletionId: intent.deletionId }, documentStorageKeys);
 }

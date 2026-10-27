@@ -12,7 +12,8 @@ export interface MediaCodecActivationResult {
 
 /** Operator action for a deployment whose candidate and rollback images both enforce the codec-3
  * media boundary. Irreversible: codec-2 grants are no longer issued and existing codec-2 rooms are
- * retired by the reconciler; open tabs reconnect with codec-3 grants. Identity floor stays 2. */
+ * retired by the reconciler; open tabs lose their media connection and join audio again with codec-3
+ * grants. Identity floor stays 2. */
 export async function activateMediaCodec3(pool: Pool, options: { dryRun: boolean }): Promise<MediaCodecActivationResult> {
   const policy = createPostgresIdentityProtocol(pool);
   if (await policy.minimum() < 2) throw new Error("media_codec_requires_identity_v2");

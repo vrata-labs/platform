@@ -44,7 +44,7 @@ export function assertIdentityRollbackTarget({ envFile, composeFile, imageTag },
     if (result !== "t" && result !== "f") throw new Error(code);
     return result === "t";
   };
-  let minimum = 1, bound = false, mediaCodec = 2;
+  let minimum = 1, bound = false, mediaCodec = 2, namespaceRotated = false;
   const policy = exists("room_identity_protocol_policy");
   if (policy) {
     const value = sql("select minimum_protocol from room_identity_protocol_policy where singleton=true");
@@ -57,6 +57,14 @@ export function assertIdentityRollbackTarget({ envFile, composeFile, imageTag },
       const codec = sql("select media_codec from room_identity_protocol_policy where singleton=true");
       if (codec !== "2" && codec !== "3") throw new Error("media_rollout_invalid_codec_boundary");
       mediaCodec = Number(codec);
+    }
+    // A database before the rotation migration was never rotated.
+    const rotation = sql("select exists(select 1 from pg_attribute where attrelid=to_regclass('room_identity_protocol_policy') and attname='rotated_media_namespace' and not attisdropped)");
+    if (rotation !== "t" && rotation !== "f") throw new Error("media_rollout_invalid_namespace_rotation");
+    if (rotation === "t") {
+      const rotated = sql("select rotated_media_namespace is not null from room_identity_protocol_policy where singleton=true");
+      if (rotated !== "t" && rotated !== "f") throw new Error("media_rollout_invalid_namespace_rotation");
+      namespaceRotated = rotated === "t";
     }
   }
   const authority = exists("room_identity_authority_v2");
@@ -111,6 +119,11 @@ export function assertIdentityRollbackTarget({ envFile, composeFile, imageTag },
     if (mediaCodec > 2) {
       const supported = run(["image", "inspect", "--format", '{{ index .Config.Labels "io.vrata.media-codec-boundary" }}', model.services.api.image]);
       if (!/^[1-9][0-9]*$/.test(supported) || Number(supported) < mediaCodec) throw new Error("media_rollback_below_codec_boundary_forbidden:api");
+    }
+    // After a rotation an older image would issue grants in the activation namespace and never retire anything.
+    if (namespaceRotated) {
+      const supported = run(["image", "inspect", "--format", '{{ index .Config.Labels "io.vrata.media-namespace-rotation" }}', model.services.api.image]);
+      if (!/^[1-9][0-9]*$/.test(supported)) throw new Error("media_rollback_without_namespace_rotation_forbidden:api");
     }
   }
   // compose.demo-local.yml resets the optional browser; an absent consumer verifies no frame tokens.

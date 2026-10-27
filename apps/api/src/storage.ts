@@ -650,12 +650,19 @@ export class MemoryStorage implements Storage {
     this.rooms.set(roomId, structuredClone(updated));
     return structuredClone(updated);
   }
-  async deleteRoom(roomId: string, pluginDeletion?: { tenantId: string; deletionId: string }): Promise<boolean> {
+  async deleteRoom(roomId: string, pluginDeletion?: { tenantId: string; deletionId: string }, documentStorageKeys?: string[]): Promise<boolean> {
     const room = this.rooms.get(roomId);
     if (room && pluginDeletion && room.tenantId !== pluginDeletion.tenantId) return false;
     if (room) this.pluginAdapter.assertRoomDeletable({ tenantId: room.tenantId, roomId }, pluginDeletion?.deletionId);
+    if (room) documentStorageKeys?.push(...[...this.roomDocuments.values()].filter(document => document.roomId === roomId).map(document => document.storageKey));
     this.identityAdapter.deleteRoom(roomId);
     this.mediaIncarnations.delete(roomId);
+    // The room's notes, their versions and its documents go with it, as the Postgres foreign keys cascade:
+    // a recreated room with the same ID starts empty.
+    for (const note of [...this.roomNotes.values()].filter(note => note.roomId === roomId)) {
+      this.roomNotes.delete(note.noteId); this.roomNoteVersions.delete(note.noteId);
+    }
+    for (const document of [...this.roomDocuments.values()].filter(document => document.roomId === roomId)) this.roomDocuments.delete(document.documentId);
     return this.rooms.delete(roomId);
   }
   private createRoomInviteSync(input: Parameters<Storage["createRoomInvite"]>[0]): RoomInviteRecord {
@@ -1291,7 +1298,7 @@ export class PostgresStorage implements Storage {
         // The locked row's generation; then policy FOR SHARE (rooms before policy, as in every
         // fence), so a concurrent codec raise waits for this release or refuses it afterwards.
         const incarnation = (await client.query("select media_incarnation from rooms where tenant_id=$1 and room_id=$2", [guard.tenantId, guard.roomId])).rows[0]?.media_incarnation;
-        const policy = (await client.query("select media_codec, media_namespace from room_identity_protocol_policy where singleton=true for share")).rows[0];
+        const policy = (await client.query("select media_codec, coalesce(rotated_media_namespace, media_namespace) as media_namespace from room_identity_protocol_policy where singleton=true for share")).rows[0];
         assertMediaGrantPin(guard.media, { codec: policy?.media_codec, namespace: policy?.media_namespace, incarnation,
           accessEpoch: await this.lockedAccessEpoch(client, guard.roomId) });
       }
@@ -1313,7 +1320,7 @@ export class PostgresStorage implements Storage {
       // Rooms before policy, as in every fence; SHARE on both excludes a delete/recreate and a codec raise until COMMIT.
       const room = (await client.query("select media_incarnation from rooms where tenant_id=$1 and room_id=$2 for share", [scope.tenantId, scope.roomId])).rows[0];
       if (!room) throw new IdentityStorageError("room_not_found");
-      const policy = (await client.query("select media_codec, media_namespace from room_identity_protocol_policy where singleton=true for share")).rows[0];
+      const policy = (await client.query("select media_codec, coalesce(rotated_media_namespace, media_namespace) as media_namespace from room_identity_protocol_policy where singleton=true for share")).rows[0];
       assertMediaGrantPin(media, { codec: policy?.media_codec, namespace: policy?.media_namespace, incarnation: room.media_incarnation,
         accessEpoch: await this.lockedAccessEpoch(client, scope.roomId) });
       checkAlive();
@@ -1854,12 +1861,15 @@ export class PostgresStorage implements Storage {
     updated.personalState = defaultPersonalState(row.personal_state ?? updated.personalState);
     return updated;
   }
-  async deleteRoom(roomId: string, pluginDeletion?: { tenantId: string; deletionId: string }): Promise<boolean> {
+  async deleteRoom(roomId: string, pluginDeletion?: { tenantId: string; deletionId: string }, documentStorageKeys?: string[]): Promise<boolean> {
     return roomFenceTransaction(this.pool, {}, async client => {
       const room = (await client.query("select tenant_id from rooms where room_id=$1 for update", [roomId])).rows[0];
       if (!room) return false;
       if (pluginDeletion && room.tenant_id !== pluginDeletion.tenantId) return false;
       await preparePostgresRoomPluginRemoval(client, { tenantId: room.tenant_id, roomId }, pluginDeletion?.deletionId);
+      // Under the room's FOR UPDATE: a fenced upload has either inserted its row already or will find no room.
+      if (documentStorageKeys) documentStorageKeys.push(...(await client.query("select storage_key from room_documents where room_id=$1",
+        [roomId])).rows.map(row => row.storage_key as string));
       const result = await client.query("delete from rooms where room_id=$1", [roomId]);
       return (result.rowCount ?? 0) > 0;
     });
@@ -2128,8 +2138,10 @@ export class PostgresStorage implements Storage {
     return result.rows.map(mapRoomDocumentRow);
   }
   async getRoomDocument(roomId: string, documentId: string): Promise<RoomDocumentRecord | null> {
+    // Inside a room fence the row stays as read until the fence ends: a tombstone or surface change commits only
+    // after bytes released on this reading have been sent.
     const result = await this.effectDatabase.query(
-      `select document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id, metadata from room_documents where room_id = $1 and document_id = $2 limit 1`,
+      `select document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id, metadata from room_documents where room_id = $1 and document_id = $2 limit 1${this.effectClient ? " for share" : ""}`,
       [roomId, documentId]
     );
     return result.rows[0] ? mapRoomDocumentRow(result.rows[0]) : null;
@@ -2157,14 +2169,34 @@ export class PostgresStorage implements Storage {
     return result.rows[0] ? mapRoomDocumentRow(result.rows[0]) : null;
   }
   async updateRoomDocumentSurface(roomId: string, documentId: string, linkedSurfaceId: string | null): Promise<RoomDocumentRecord | null> {
-    const result = await this.effectDatabase.query(
-      `with cleared as (
-         update room_documents set linked_surface_id = null where room_id = $1 and document_id <> $2 and linked_surface_id = $3 and $3 is not null
-       )
-       update room_documents set linked_surface_id = $3 where room_id = $1 and document_id = $2 and deleted_at is null returning document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id, metadata`,
-      [roomId, documentId, linkedSurfaceId]
-    );
-    return result.rows[0] ? mapRoomDocumentRow(result.rows[0]) : null;
+    return this.inEffectTransaction(async database => {
+      // Assignments in one room serialize, so two documents never share a surface. As in Memory, a missing or deleted
+      // target changes nothing; locking it orders a concurrent tombstone, which must not unlink the document being shown.
+      await database.query("select pg_advisory_xact_lock(hashtextextended('vrata:room-document-surface:' || $1, 0))", [roomId]);
+      const target = await database.query("select 1 from room_documents where room_id = $1 and document_id = $2 and deleted_at is null for update",
+        [roomId, documentId]);
+      if (!target.rowCount) return null;
+      const result = await database.query(
+        `with cleared as (
+           update room_documents set linked_surface_id = null where room_id = $1 and document_id <> $2 and linked_surface_id = $3 and $3 is not null
+         )
+         update room_documents set linked_surface_id = $3 where room_id = $1 and document_id = $2 and deleted_at is null returning document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id, metadata`,
+        [roomId, documentId, linkedSurfaceId]
+      );
+      return result.rows[0] ? mapRoomDocumentRow(result.rows[0]) : null;
+    });
+  }
+  /** The fence's transaction, or a short own one for an administrator's unfenced effect. */
+  private async inEffectTransaction<T>(work: (database: PoolClient) => Promise<T>): Promise<T> {
+    if (this.effectClient) return work(this.effectClient);
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const result = await work(client);
+      await client.query("commit");
+      return result;
+    } catch (error) { await client.query("rollback").catch(() => undefined); throw error; }
+    finally { client.release(); }
   }
   async createAsset(input: Partial<AssetRecord>): Promise<AssetRecord> {
     const asset = {

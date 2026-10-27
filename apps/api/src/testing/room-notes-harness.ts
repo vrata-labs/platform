@@ -18,16 +18,17 @@ export function makeNotesExchange(method: string, path: string, body?: unknown, 
     status: 0, headers: {} as Record<string, string>, body: Buffer.alloc(0) as Buffer, writes: 0,
     json(): unknown { return JSON.parse(output.body.toString("utf8")); }
   };
-  // Only the two response methods used by the real HTTP response helpers are implemented.
+  // Only the two response methods used by the real HTTP response helpers, and the state an audit settles from.
   const response = {
+    statusCode: 200, headersSent: false,
     writeHead(status: number, headers: Record<string, string>) {
-      output.status = status; output.headers = headers; return this;
+      output.status = status; output.headers = headers; response.statusCode = status; response.headersSent = true; return response;
     },
     end(data: string | Buffer) {
       output.body = Buffer.isBuffer(data) ? data : Buffer.from(data);
-      output.writes += 1; return this;
+      output.writes += 1; response.headersSent = true; return response;
     }
-  } as unknown as ServerResponse;
+  } as unknown as ServerResponse & { statusCode: number; headersSent: boolean };
   return { request, response, method, url: new URL(path, "http://notes.test"), output };
 }
 
