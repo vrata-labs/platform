@@ -84,8 +84,9 @@ test("real protocol activation stops a legacy client while a fresh tab joins wit
     // A room material created before activation through the ordinary document upload with the legacy host session.
     const legacySession = await (await legacyAdmission).json() as { token: string };
     const pdf = await PDFDocument.create(); pdf.addPage([320, 180]);
+    const pdfBytes = Buffer.from(await pdf.save());
     const uploaded = await request.post(`${fixture.origin}/api/rooms/demo-room/documents`, { headers: { authorization: `Bearer ${legacySession.token}` },
-      multipart: { document: { name: "kept-across-identity-activation.pdf", mimeType: "application/pdf", buffer: Buffer.from(await pdf.save()) } } });
+      multipart: { document: { name: "kept-across-identity-activation.pdf", mimeType: "application/pdf", buffer: pdfBytes } } });
     expect(uploaded.status()).toBe(201);
     const keptDocument = (await uploaded.json() as { document: { documentId: string; uploadedBy: string } }).document;
     expect(keptDocument.uploadedBy).toBe(legacyHostId);
@@ -115,10 +116,18 @@ test("real protocol activation stops a legacy client while a fresh tab joins wit
     const untrustedId = `tab-${randomUUID()}`;
     // Everything the fresh tab sends, from before navigation until after its reload: URLs, headers, bodies and socket frames.
     const outgoing: string[] = [], roomStateParticipants: string[] = [], presenceParticipants: string[] = [];
+    const headerReads: Promise<unknown>[] = [];
+    let presenceWrites = 0;
     fresh.on("request", item => {
-      outgoing.push(item.url(), JSON.stringify(item.headers()), item.postDataBuffer()?.toString("latin1") ?? "");
+      const body = item.postDataBuffer()?.toString("latin1") ?? "";
+      outgoing.push(item.url(), body);
+      // allHeaders(), unlike headers(), includes cookies and other security-related headers.
+      headerReads.push(item.allHeaders().then(headers => outgoing.push(JSON.stringify(headers)), () => outgoing.push("headers-unavailable")));
       const presence = /^\/api\/rooms\/[^/]+\/presence\/([^/]+)$/.exec(new URL(item.url()).pathname);
-      if (presence) presenceParticipants.push(decodeURIComponent(presence[1]));
+      if (presence && item.method() === "PUT") {
+        presenceWrites += 1;
+        presenceParticipants.push(decodeURIComponent(presence[1]), (JSON.parse(body) as { participantId: string }).participantId);
+      }
     });
     fresh.on("websocket", socket => {
       outgoing.push(socket.url());
@@ -138,12 +147,17 @@ test("real protocol activation stops a legacy client while a fresh tab joins wit
     await expect.poll(() => fresh.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected)).toBe(true);
     await expect(fresh.locator("#session-upgrade-dialog")).toBeHidden();
     expect(await fresh.evaluate(() => (window as any).__VRATA_DEBUG__?.participantId)).toBe(joined.participantId);
+    await expect.poll(() => presenceWrites, { timeout: 15_000 }).toBeGreaterThan(0);
+    const presenceWritesBeforeReload = presenceWrites;
     const rejoin = fresh.waitForResponse(next => new URL(next.url()).pathname === "/api/tokens/state");
     await fresh.reload();
     expect((await rejoin).status()).toBe(200);
     expect((await (await rejoin).json() as { participantId: string }).participantId).toBe(joined.participantId);
     await expect.poll(() => fresh.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected)).toBe(true);
-    // The planted local ID never leaves the tab; room-state and presence carry only the issued one.
+    await expect.poll(() => presenceWrites, { timeout: 15_000 }).toBeGreaterThan(presenceWritesBeforeReload);
+    await Promise.all(headerReads);
+    // The planted local ID never leaves the tab; room-state and presence (path and body) carry only the issued one.
+    expect(outgoing.filter(entry => entry.includes("headers-unavailable"))).toEqual([]);
     expect(outgoing.filter(entry => entry.includes(untrustedId))).toEqual([]);
     expect(roomStateParticipants.length).toBeGreaterThanOrEqual(2);
     expect([...new Set([...roomStateParticipants, ...presenceParticipants])]).toEqual([joined.participantId]);
@@ -173,6 +187,10 @@ test("real protocol activation stops a legacy client while a fresh tab joins wit
     const library = await request.get(`${fixture.origin}/api/rooms/demo-room/documents`, { headers: { authorization: `Bearer ${recoveredSessions.at(-1)}` } });
     expect(library.status()).toBe(200);
     expect((await library.json() as { items: Array<{ documentId: string }> }).items.map(item => item.documentId)).toContain(keptDocument.documentId);
+    const download = await request.get(`${fixture.origin}/api/rooms/demo-room/documents/${keptDocument.documentId}/download`,
+      { headers: { authorization: `Bearer ${recoveredSessions.at(-1)}` } });
+    expect(download.status()).toBe(200);
+    expect(Buffer.compare(await download.body(), pdfBytes)).toBe(0);
   } finally {
     releaseWrite?.();
     await Promise.allSettled([page.goto("about:blank"), fresh.close()]);
