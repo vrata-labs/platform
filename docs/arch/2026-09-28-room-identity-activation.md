@@ -1080,7 +1080,10 @@ Coverage is the existing notes/document publication/surface/private-state
 callbacks, invite/waiting lists and decisions, scene binding, and ordinary
 manifest/room/presence write/release branches (including anonymous readers of
 existing rooms). Anonymous bound-room reads were already rejected at entry;
-this also closes a request that became bound while in flight. A missing-room
+this also closes a request that became bound while in flight. The one exception
+is `GET /api/rooms/:id/prejoin-settings`: the path boundary skips it, and the
+handler releases only the template settings of a room open to anonymous guests,
+calling `assertCompatible` for every other room, a missing one included. A missing-room
 manifest is built from the same checked snapshot, including explicit null, and
 never substitutes a new private record via a second read. Virtual v1 fallback
 presence now uses the separate virtual effect and live namespace described below; a cached v2
