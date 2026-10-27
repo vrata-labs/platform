@@ -12,6 +12,7 @@ import {
   remoteBrowserCaptureTargetTitle,
   remoteBrowserCaptureTitleGuard,
   remoteBrowserEventPoint,
+  remoteBrowserExecutorCallbackBody,
   remoteBrowserInitScript,
   remoteBrowserMouseMoveSteps,
   remoteBrowserServiceUrlOrigins,
@@ -23,6 +24,7 @@ import {
   resolveRemoteBrowserFrameIntervalMs,
   resolveRemoteBrowserMediaFrameIntervalMs,
   resolveRemoteBrowserMediaIceServers,
+  resolveRemoteBrowserSessionSurfaceId,
   shouldCaptureRemoteBrowserFrame,
   shouldPreserveRemoteBrowserMediaOverlays,
   shouldRequestPublicLivekitUrlForPage,
@@ -142,6 +144,91 @@ test("remote browser production service requires auth and bound session identity
     assert.match(metricsText, /vrata_remote_browser_denied_total\{reason="forbidden"\} 1/);
     assert.match(metricsText, /vrata_remote_browser_denied_total\{reason="invalid_binding"\} 1/);
   } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("remote browser session surface comes from the start request, with debug-main only for a request without it", () => {
+  assert.equal(resolveRemoteBrowserSessionSurfaceId("laptop-screen"), "laptop-screen");
+  assert.equal(resolveRemoteBrowserSessionSurfaceId(" whiteboard-wall "), "whiteboard-wall");
+  assert.equal(resolveRemoteBrowserSessionSurfaceId(undefined), "debug-main");
+  assert.equal(resolveRemoteBrowserSessionSurfaceId(""), null);
+  assert.equal(resolveRemoteBrowserSessionSurfaceId("   "), null);
+  assert.equal(resolveRemoteBrowserSessionSurfaceId(42), null);
+  assert.equal(resolveRemoteBrowserSessionSurfaceId("laptop screen"), null);
+  assert.equal(resolveRemoteBrowserSessionSurfaceId("s".repeat(129)), null);
+});
+
+test("remote browser executor callbacks carry the object surface for every lifecycle patch", () => {
+  for (const surfaceId of ["laptop-screen", "whiteboard-wall"]) {
+    const session = {
+      sessionId: "remote-browser:object-1",
+      executorInstanceId: "remote-browser:object-1:instance:2",
+      frameStreamId: "remote-browser:object-1:frames",
+      mediaParticipantId: "remote-browser:object-1",
+      roomId: "room-1",
+      surfaceId,
+      objectId: "object-1"
+    };
+    const patches = [
+      { type: "mark-publishing", mediaParticipantId: session.mediaParticipantId, inputEventId: "e:publishing" },
+      { type: "mark-active", mediaParticipantId: session.mediaParticipantId, mediaTrackSid: "TR_V", audioTrackSid: "TR_A", inputEventId: "e:active" },
+      { type: "mark-source-rect", mediaSourceRect: { x: 0, y: 0, width: 1280, height: 720, viewportWidth: 1280, viewportHeight: 720 }, inputEventId: "e:rect" },
+      { type: "mark-input-applied", input: { inputEventId: "input-1", inputType: "pointer", eventKind: "click", x: 1, y: 1, receivedAtMs: 1, appliedAtMs: 2, status: "applied", pageClosed: false }, inputEventId: "e:input" },
+      { type: "mark-stopped", inputEventId: "e:stopped" },
+      { type: "mark-failed", errorCode: "session_expired", inputEventId: "e:failed" }
+    ] as Parameters<typeof remoteBrowserExecutorCallbackBody>[1][];
+    for (const patch of patches) {
+      assert.deepEqual(remoteBrowserExecutorCallbackBody(session, patch), {
+        roomId: "room-1",
+        surfaceId,
+        objectId: "object-1",
+        executorInstanceId: "remote-browser:object-1:instance:2",
+        frameStreamId: "remote-browser:object-1:frames",
+        patch
+      }, `${surfaceId} ${patch.type}`);
+    }
+  }
+});
+
+test("remote browser start failure reports to room-state on the surface of the started object", async () => {
+  const server = startRemoteBrowserService(4047, { NODE_ENV: "development" });
+  const originalFetch = globalThis.fetch;
+  const callbacks: Array<{ url: string; body: { surfaceId?: string; objectId?: string; executorInstanceId?: string; patch?: { type?: string; errorCode?: string } } }> = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.includes("/api/internal/remote-browser/sessions/")) {
+      callbacks.push({ url, body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify({ accepted: true }), { status: 200 });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  const start = (body: Record<string, unknown>) => originalFetch("http://127.0.0.1:4047/api/sessions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    // The media identity is the instance itself.
+    body: JSON.stringify({ sessionId: "remote-browser:object-1", roomId: "room-1", objectId: "object-1", url: "ftp://example.com", ...body, mediaParticipantId: body.executorInstanceId })
+  });
+  try {
+    if (!server.listening) await once(server, "listening");
+    // A first start and a retry/replacement of the same object each name the object's surface.
+    const laptop = await start({ executorInstanceId: "remote-browser:object-1:instance:1", surfaceId: "laptop-screen" });
+    assert.equal(laptop.status, 422);
+    const whiteboard = await start({ executorInstanceId: "remote-browser:object-1:instance:2", surfaceId: "whiteboard-wall" });
+    assert.equal(whiteboard.status, 422);
+    const invalid = await start({ executorInstanceId: "remote-browser:object-1:instance:3", surfaceId: "not a surface" });
+    assert.equal(invalid.status, 400);
+    assert.equal(((await invalid.json()) as { error?: string }).error, "invalid_session_payload");
+    // A room-state that predates the field omits it and only ever ran remote-browser on debug-main.
+    const legacy = await start({ executorInstanceId: "remote-browser:object-1:instance:4" });
+    assert.equal(legacy.status, 422);
+    assert.deepEqual(callbacks.map(({ url, body }) => [new URL(url).pathname, body.surfaceId, body.objectId, body.executorInstanceId, body.patch?.type, body.patch?.errorCode]), [
+      ["/api/internal/remote-browser/sessions/remote-browser%3Aobject-1", "laptop-screen", "object-1", "remote-browser:object-1:instance:1", "mark-failed", "url_not_allowed"],
+      ["/api/internal/remote-browser/sessions/remote-browser%3Aobject-1", "whiteboard-wall", "object-1", "remote-browser:object-1:instance:2", "mark-failed", "url_not_allowed"],
+      ["/api/internal/remote-browser/sessions/remote-browser%3Aobject-1", "debug-main", "object-1", "remote-browser:object-1:instance:4", "mark-failed", "url_not_allowed"]
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });
