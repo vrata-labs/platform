@@ -237,7 +237,7 @@ class Selectel:
         self.region = config.selectel.get("region", "ru-2")
         self.workdir = Path(workdir)
 
-    def call(self, method, service, path, body=None, expect=(200, 201, 202, 204), retry=None):
+    def call(self, method, service, path, body=None, expect=(200, 201, 202, 204), retry=None, headers=None):
         # The API link drops connections now and then; only requests safe to repeat are retried.
         attempts = 4 if (retry if retry is not None else method in ("GET", "PUT", "DELETE")) else 1
         for attempt in range(attempts):
@@ -247,7 +247,8 @@ class Selectel:
                     fd, body_file = tempfile.mkstemp(dir=self.workdir, suffix=".json")
                     with os.fdopen(fd, "w") as stream:
                         json.dump(body, stream)
-                result = self.module.call(method, service, self.region, path, body_file)
+                extra = {"headers": headers} if headers else {}
+                result = self.module.call(method, service, self.region, path, body_file, **extra)
                 break
             except Exception as error:  # the CLI raises plain RuntimeError/KeyError on transport faults
                 if attempt + 1 == attempts:
@@ -270,7 +271,9 @@ class Selectel:
         return [server for server in data["servers"] if server["name"] == name]
 
     def create_server(self, body):
-        _, data = self.call("POST", "compute", "servers", {"server": body})
+        # volume_type inside block_device_mapping_v2 is accepted only from compute microversion 2.67.
+        headers = {"OpenStack-API-Version": "compute 2.67"} if "block_device_mapping_v2" in body else None
+        _, data = self.call("POST", "compute", "servers", {"server": body}, headers=headers)
         return data["server"]["id"]
 
     def delete_server(self, server_id):

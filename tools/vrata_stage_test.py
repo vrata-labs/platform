@@ -608,6 +608,21 @@ class HelperTests(Base):
         self.assertNotIn("imageRef", body)
         self.assertTrue(body["block_device_mapping_v2"][0]["delete_on_termination"])
 
+    def test_boot_volume_server_is_created_with_the_volume_type_microversion(self):
+        cli = Path(self.tmp.name) / "selectel_fake.py"
+        cli.write_text("import json\n"
+                       "CALLS = []\n"
+                       "def call(method, service, region, path, body_file=None, headers=None):\n"
+                       "    CALLS.append((method, path, headers, json.load(open(body_file)) if body_file else None))\n"
+                       "    return {'status': 202, 'data': {'server': {'id': 'new-server'}}}\n")
+        config = type("Config", (), {"selectel": {"cli": str(cli), "region": "ru-2"}})()
+        cloud = vs.Selectel(config, self.tmp.name)
+        calls = cloud.module.CALLS
+        self.assertEqual(cloud.create_server({"name": "a", "block_device_mapping_v2": [{"volume_type": "universal.ru-2c"}]}), "new-server")
+        self.assertEqual(calls[-1][2], {"OpenStack-API-Version": "compute 2.67"})
+        cloud.create_server({"name": "b", "imageRef": "image"})
+        self.assertIsNone(calls[-1][2], "a local-disk server keeps the default microversion")
+
     def api(self, runs, page_size=100, insert_on_page=None):
         """Fake gh api for the runs list: pages of the newest-first list, optional run inserted between pages."""
         queries = []
