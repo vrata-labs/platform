@@ -2653,3 +2653,42 @@ Authoritative accepted-release.json до и после публичного read
 - Независимое ревью: дизайн — один раунд (принятые изменения в D-038), реализация — три раунда, последний без существенных находок.
 - Readback под арендой ca051c80: health — identityProtocolVersion 2, mediaIdentityCodec 3; session-control объявляет enforcementVersion 6; грант той же комнаты после смены — в новом namespace при прежнем поколении комнаты. Метрика retired после смены 0: нативных комнат прежнего namespace на стенде в тот момент не было, удаление проверено локальным e2e на настоящем LiveKit.
 - Решение о публикации при красном полном local по нагрузке принял пользователь («деплой на стенд после CI»); local записан красным.
+
+## T01a — построчная проверка матрицы совместимости identity (§5.2)
+
+### D-040 — 2026-10-28 — Пункт матрицы закрывается проверкой каждой строки, а не закрытыми подпунктами
+- Контекст. Пункт «Проверить всю §5.2 identity compatibility matrix» отмечен 2026-10-27 вместе с приёмкой S3b-4, без построчной сверки. Сверка каждой строки (R1–R5, UI обновления и восстановления, D) с кодом и тестами нашла пробелы.
+- R1. При не-OK `/health` runtime считал API старым и отправлял legacy-тело с выбранным в браузере participantId: на floor 2 временный ID уходил на сервер, а пользователь видел ложный «Update required». Теперь bootRuntime отказывает (`runtime_health_unavailable:<status>`) до запроса допуска; сетевая ошибка `/health` и раньше прерывала загрузку. planVoiceSession остаётся терпимым к сбою.
+- D. activate-v2 необратимо поднимал floor без проверки секрета, и при STATE_TOKEN_SECRET короче 32 байт после подъёма отказывал бы каждый v2-допуск. Теперь команда отказывает до подключения к БД (`identity_activation_secret_too_short`), dry run сообщает secretReady. Добавлен раздел self-hosting «Room Identity v2 Activation». В документе миграции исправлен охват проверок: session-upgrade.spec.ts с #136 только локальный, room-state шлёт только 4406.
+- Добавлены доказательства:
+  - R1 — в трафике новой вкладки нет подставленного ID: URL, заголовки по данным браузера (включая Cookie и handshake WebSocket), тела и кадры; presence проверяется по поколениям документа;
+  - R3 — тело identity-v1 на floor 2 получает 426, в том числе в staging gate;
+  - R4 — PDF, загруженный до активации, после восстановления скачивается побайтно тем же;
+  - R5 — клиент v2 без Worker при включённой авто-посадке остаётся стоять и садится вручную.
+  Таблица соответствия строк тестам — docs/arch/2026-09-28-room-identity-activation.md, «Compatibility matrix verification».
+- Не делаем:
+  - эмиссию 4409 из room-state: восстановление сигналится REST 409 и проверено на реальном сервере, а клиент обрабатывает 4409 на случай будущего сервера;
+  - старт новой установки на floor 2 — бэклог floor-one-product-default;
+  - e2e против настоящего старого API: v2 и плагины поставлены вместе в #128, путь «нет v2 в `/health`» покрыт unit-тестами и локальным e2e на floor 1;
+  - возврат звука после выселения — бэклог audio-not-rejoined-after-media-eviction.
+- Попутно. Если runtime не читает тело ответа presence PUT, Chromium не завершает его загрузку, поэтому для таких запросов не приходят ни requestfinished, ни request.allHeaders(). Тест считает presence по событию response. Это не дефект продукта.
+
+## T01a — локальные проверки и приёмка на staging floor 2, кодек 3, 2026-10-29
+
+| Проверка | Результат |
+|---|---|
+| Исполняемый SHA | 2c1c71fc406ea4eff64903655d5a7953b4f926c8 (поверх main ab7da87), PR #153 |
+| runtime-web | 1514 passed |
+| API (Postgres 16 в Docker, Node 26.5.1) | 1865 passed, 5 skipped, 0 failed, 1 cancelled: `legacy-effect-boundary` «idle-fence backend exit» превысил 60 с. Тот же тест у Postgres без проброса порта: Node 22.23.3 — 1/1 за 12 с, Node 26.5.1 — 57 с; в CI на Node 22 — 1870 passed, 0 failed. Расхождение записано в бэклог node-26-upgrade |
+| packages, lint | сборка 5/5, lint без ошибок |
+| Полный local e2e | красный: 2 воркера, load до 15 — 167 passed, 22 failed, 63 did not run. Повтор 107 упавших и незапущенных в один воркер — 93 passed, 6 failed, 8 did not run; повтор оставшихся 16 — 11 passed, 2 failed, 3 did not run; отдельно document-meeting:34 1/1 и media-source-grants:571 6/6. Каждый упавший тест прошёл хотя бы в одном повторе на том же дереве |
+| [CI40601573552](https://github.com/vrata-labs/platform/actions/runs/40601573552) | Success, attempt 1: core и шесть шардов e2e |
+| [Docker40601565777](https://github.com/vrata-labs/platform/actions/runs/40601565777) | Success |
+| [Staging40886596726](https://github.com/vrata-labs/platform/actions/runs/40886596726) | Bootstrap нового стенда: floor 1 → 2, кодек 2 → 3, deploy success; Rutube-канарейка упала (navigation_failed, затем loading) |
+| [Template Catalog40889190949](https://github.com/vrata-labs/platform/actions/runs/40889190949) | activate на 2c1c71f — success |
+| [Staging40892003049](https://github.com/vrata-labs/platform/actions/runs/40892003049) | Gate 53/53 в attempt 1, в том числе 426 на тело identity-v1 при floor 2 (identity-boundary.spec.ts:25); Rutube-канарейка 1/1 в attempt 3 |
+
+- Readback под арендой 0ee72ee5: health — identityProtocolVersion 2, mediaIdentityCodec 3; api, room-state и remote-browser на образах 2c1c71f.
+- Стенд создан заново на SL1.4-8192 с сетевым томом (PR #154). Канарейка падала не из-за ветки: ветка не меняет remote-browser, а на её базе ab7da87 канарейка была зелёной (Staging40562861532). С нового хоста первый DNS подсети 8.8.8.8 терял 7–17 % запросов. Remote-browser проверяет DNS каждого подзапроса, поэтому Rutube не открывался за 15 с. Первым DNS подсети поставлен 1.1.1.1. Attempt 2 упал с executor_crashed: после `docker restart` в контейнере остался X-лок и Xvfb не стартовал. Контейнер пересоздан через compose на том же образе, attempt 3 прошёл. Найденное — в бэклоге remote-browser-restart-stale-display-lock и remote-browser-dns-per-request.
+- Решение о приёмке при красном полном local принял пользователь; local записан красным.
+- Аренда 0ee72ee5 отпущена. Стенд в фазе failed (хук bootstrap завершился на канарейке), сторож удалит сервер.

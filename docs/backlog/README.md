@@ -19,12 +19,14 @@
 - [Забытый стенд удаляется, только пока работает машина разработки](2026-10-25-stage-watcher-needs-operator-machine.md) — new — P2 — нужно решение владельца о сервисной учётной записи Selectel.
 - [При четырёх одновременных входах авторассадка иногда оставляет участника без места](2026-10-27-auto-seat-simultaneous-entry-unseated.md) — new — P2 — у одного из четырёх currentSeatId остаётся null 60 с; при повторе job проходит. Повторился 2026-10-27 в CI #149.
 - [Запрос теста portal-managed-grants к API иногда обрывается с socket hang up](2026-10-27-portal-managed-grants-socket-hang-up.md) — new — P2 — сервер фикстуры закрыл соединение без ответа; при повторе job проходит.
+- [После перезапуска контейнера remote-browser не открывает страницы, а healthcheck зелёный](2026-10-29-remote-browser-restart-stale-display-lock.md) — new — P2 — устаревший `/tmp/.X99-lock` не даёт Xvfb стартовать, сессии падают с `executor_crashed`
 
 ## P3
 
 - [identity-boundary: первая загрузка комнаты иногда ждёт 90 секунд](2026-10-26-identity-boundary-personal-owner-cold-start.md) — parked — P3 — редкий таймаут page.goto сразу после raise(2), чаще при высокой нагрузке.
 - [Чеклист функций FEAT-001…038 не отражает сделанное](2026-10-26-feature-checklist-stale.md) — new — P3 — FEAT-032…038 отмечены невыполненными, хотя часть закрыта другими планами.
 - [e2e допускают участника по приглашению без токена приглашения и получают гостя](2026-10-27-e2e-invite-token-missing-field.md) — new — P3 — `inviteToken` берётся из ответа, где его нет; роль host набирается через host/transfer, допуск с ролью не проверяется.
+- [Remote-browser проверяет DNS каждого подзапроса без кэша, а причину navigation_failed не пишет](2026-10-29-remote-browser-dns-per-request.md) — new — P3 — на стенде устранено порядком DNS подсети
 
 ## Открытые issue GitHub (2026-10-26)
 

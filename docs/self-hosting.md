@@ -192,3 +192,35 @@ After public DNS/HTTPS is configured, open `$VRATA_APP_BASE_URL/diagnostics?room
 `POST /api/tokens/media` and `POST /api/tokens/remote-browser-media` return `livekit_config_invalid` in production if LiveKit URL/key/secret are missing, insecure, or still using dev credentials.
 
 Rollback for this profile is metadata/config-only: restore the previous `.env.production` and image tag through `pnpm rollback:compose`, then smoke the app URL. If the production profile itself is the problem, stop it and return to the previously used documented compose file. This task does not introduce point-in-time database recovery.
+
+## Room Identity v2 Activation
+
+A new installation starts at identity floor 1: rooms accept the legacy protocol, in which the browser chooses its participant ID, and room plugins are unavailable. Floor 2 makes the server issue every participant ID and identity credential. Raising the floor is a separate operator step and cannot be undone.
+
+Before activation:
+
+- Run images that carry the identity v2 boundary: the `api` and `room-state` images have the label `io.vrata.identity-protocol-floor-guard=1` (check with `docker image inspect`).
+- `STATE_TOKEN_SECRET` is at least 32 bytes and the same for `api` and `room-state` (the compose files pass one variable to both). Production preflight (`node tools/validate-production-config.mjs`) enforces the length; v2 sessions cannot be signed with a shorter secret.
+- Take and validate a backup (`pnpm backup:compose`, `pnpm backup:validate`).
+
+Run a dry run and then the activation inside the running API container, with the env and compose files of your deployment:
+
+```bash
+docker compose --env-file infra/docker/.env.production -f infra/docker/compose.production.yml exec -T -w /app api node apps/api/dist/identity/activate-v2.js --dry-run
+docker compose --env-file infra/docker/.env.production -f infra/docker/compose.production.yml exec -T -w /app api node apps/api/dist/identity/activate-v2.js --confirm-irreversible
+```
+
+Each prints one JSON line. The dry run changes nothing and reports the current floor (`before`), room counts (`audit`: all, disabled, locked, ended and identity-bound rooms) and whether the secret is usable (`secretReady`). The activation refuses with `identity_activation_secret_too_short` before it connects to the database if the secret is too short; on success it prints `"after":2` and `"raised":true`, and a repeated run changes nothing (`"raised":false`). Saved lock, end and disable decisions are kept. `GET /health` then reports `features.identityProtocolVersion: 2`.
+
+What people see:
+
+- Open tabs stop with "Update required to rejoin this room". **Update and rejoin** reloads the page, and the new session receives a server-issued participant ID.
+- A host or personal-room owner known only by a legacy participant ID gets the role back with an administrator recovery code: `POST /api/rooms/<roomId>/identity-recovery` with the `x-vrata-admin-token` header and `{"participantId": "<legacy participant ID>", "role": "host"}` (or `"owner"`). The code is returned once, is single-use and expires after ten minutes. Deliver it outside the app; the person enters it under **Recover room access** in the room and keeps the legacy participant ID.
+- Room materials such as notes and documents are kept.
+
+Two further media boundaries are optional, irreversible and require floor 2:
+
+- Media codec 3: run `node apps/api/dist/identity/activate-media-codec.js` with `--dry-run` and then `--confirm-irreversible` in the same way. Codec-2 media grants are no longer issued and codec-2 media rooms are retired; open tabs lose their media connection once and join audio again. `GET /health` then reports `features.mediaIdentityCodec: 3`.
+- Media namespace rotation, after a restore onto the same LiveKit server or for a clone: see [Media Namespace After Restore Or Clone](backup-restore.md#media-namespace-after-restore-or-clone).
+
+After activation, roll back only to images that support every raised boundary. `pnpm rollback:compose` checks this before it changes anything: it requires an immutable 40-character SHA image tag and refuses images without the matching `io.vrata.*` labels (identity floor guard, frame-token codec, media identity codec, and the media codec boundary or namespace rotation once those were raised). See [Upgrades And Rollback](upgrades.md).
