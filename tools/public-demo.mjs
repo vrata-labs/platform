@@ -1166,27 +1166,22 @@ export async function cleanupPublicDemo(options) {
     context.record.updatedAt = nowIso(now);
     await persistCleanupContext(context);
 
-    if (ownership.room) {
+    if (ownership.room && !context.record.lifecycle.cleanup.sessionEnded) {
       await cleanupMutation(client, "post", `/api/rooms/${encodeURIComponent(input.roomId)}/session-control/end`, "cleanup-end-session");
     }
     context.record.lifecycle.cleanup.sessionEnded = true;
     context.record.updatedAt = nowIso(now);
     await persistCleanupContext(context);
 
-    for (const document of documents) {
-      await cleanupMutation(
-        client,
-        "delete",
-        `/api/rooms/${encodeURIComponent(input.roomId)}/documents/${encodeURIComponent(document.documentId)}`,
-        "cleanup-delete-document"
-      );
-      addUnique(context.record.lifecycle.cleanup.deletedDocumentIds, document.documentId);
-      context.record.updatedAt = nowIso(now);
-      await persistCleanupContext(context);
-    }
-
+    // The empty library/checkpoint is only a snapshot: an author may publish before End,
+    // including after an earlier failed End. The durable DELETE intent fences new packages
+    // and sweeps all plugin blobs before it starts deleting document blobs. Never delete
+    // documents through the individual endpoint ahead of that authoritative sweep.
     if (ownership.room) await cleanupMutation(client, "delete", `/api/rooms/${encodeURIComponent(input.roomId)}`, "cleanup-delete-room");
     context.record.lifecycle.cleanup.roomDeleted = true;
+    for (const document of documents) {
+      addUnique(context.record.lifecycle.cleanup.deletedDocumentIds, document.documentId);
+    }
     context.record.updatedAt = nowIso(now);
     await persistCleanupContext(context);
 

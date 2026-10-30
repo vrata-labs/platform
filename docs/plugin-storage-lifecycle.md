@@ -30,6 +30,8 @@ Room state здесь — долговечные настройки комнат
 
 demo:public cleanup проверяет origin, tenant/room ownership и удаляет только ресурсы собственного run. Порядок для плагинов: disable → unbind → plugin blobs → document blobs → room → tenant. Между CAS-операциями библиотека перечитывается. Общий SDK и данные соседней комнаты остаются.
 
+После End CLI всегда вызывает штатный DELETE комнаты до удаления документов. Сохранённый pluginsCleaned — только checkpoint, не доказательство отсутствия новых пакетов: durable intent закрывает новые публикации, повторно очищает plugin blobs и только затем документы. Отдельные HTTP DELETE документов в CLI не используются.
+
 Partial failure возвращает ошибку и сохраняет private state и redacted cleanup record. Устраните причину и повторите команду; не удаляйте строки вручную. После успеха остаётся только redacted record. Повтор по .cleanup.json также удаляет исходный private state, только если его run/origin/room/tenant совпадают.
 
 Прямой DELETE /api/rooms/:roomId использует durable cleanup intent и удаляет байты до parent row. Отказ storage сохраняет комнату и ключи для повторного DELETE после рестарта API. Неизвестный исход загрузки не признаётся завершённым по таймауту или доступному GET. Конкурентно появившийся документ оставляет комнату для повтора после финальной parent-проверки.

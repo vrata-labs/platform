@@ -2724,3 +2724,15 @@ Authoritative accepted-release.json до и после публичного read
 - Решение: только точная пара 503 / room_plugin_cleanup_pending переводит CLI к штатному DELETE комнаты, как существующая пара 403 / plugin_author_forbidden для завершённых комнат. Проверка ownership остаётся перед этим переходом; доступ author API не расширяется.
 - Ограничение: любой другой 503, включая недоступность identity authority или blob backend, останавливает cleanup без удаления комнаты и tenant. Префикс или похожий текст ошибки не разрешает fallback.
 - Проверка: положительный и отрицательные CLI-тесты; сквозной сценарий seed → ошибка прямого DELETE на document blob → API restart → восстановление storage → CLI cleanup и повтор по единственному redacted record. Соседний пакет и общий SDK должны сохраниться. Полная приёмка T15 этим исправлением не объявляется.
+
+### D-045 — 2026-10-30 — Порядок очистки обеспечивает durable intent, а не checkpoint CLI
+- Контекст: после пустой библиотеки и неуспешного End комната остаётся активной; новый пакет может появиться как между попытками, так и перед End без повтора. Флаг pluginsCleaned не закрывает это окно.
+- Решение: после End CLI всегда вызывает штатный DELETE комнаты вместо отдельных DELETE документов. API сохраняет intent, запрещает новые публикации и повторно очищает все plugin blobs до document blobs и parent row. Предварительные disable/unbind и проверки ownership сохранены; fallback только по точным ошибкам D-044 не расширен.
+- Повтор после сохранённого sessionEnded не вызывает End заново: уже начатое удаление запрещает обычные room effects. Повтор возобновляет DELETE, не реактивируя комнату.
+- Проверка: быстрые сценарии обоих окон, отказ plugin delete без удаления документов, recovery; сквозной сценарий с новым Host-пакетом после неуспешного End, проверкой PDF bytes, закрытой публикации, restart и повтором по redacted record. Приёмка T15 остаётся открытой до staging.
+
+### D-046 — 2026-10-30 — Restore smoke читает manifest с полномочиями оператора
+- Контекст: анонимное чтение manifest штатно запрещено на identity floor 2, поэтому успешное восстановление SQL и объектов завершалось отказом smoke.
+- Решение: restore и rollback берут CONTROL_PLANE_ADMIN_TOKEN из фактического окружения API в разрешённом Compose config. Только same-origin запрос manifest получает x-vrata-admin-token; redirect не выполняется. Health, HTML и scene requests остаются без этого заголовка. Standalone smoke принимает тот же env/compose либо CONTROL_PLANE_ADMIN_TOKEN из окружения процесса.
+- Ограничения: секрет не попадает в URL, argv, backup manifest или вывод; room auth и production validator не меняются. На floor 1 допустимо прежнее анонимное чтение; отсутствие или неверный credential на floor 2 остаётся ошибкой.
+- Проверка: позитивный floor-2 smoke, отрицательные отсутствующий/неверный credential, отдельный scene origin и redirect sinks; штатный общий backup/restore и API restart в изолированной копии проверяются без подмены smoke.
