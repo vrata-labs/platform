@@ -1,4 +1,4 @@
-import { copyFile, link, mkdir, open, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, link, mkdir, open, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createHash, createHmac } from "node:crypto";
 import { dirname, extname, join, relative, sep } from "node:path";
 
@@ -184,27 +184,7 @@ export async function deleteDocumentObject(storage: DocumentUploadStorage, stora
   await deleteS3Object(storage, storageKey, options?.signal);
 }
 
-export function resolveUploadedDocumentPublicUrl(storage: DocumentUploadStorage, storageKey: string): string {
-  if (storage.type === "local") {
-    return joinUrlPath(storage.publicBaseUrl, storageKey);
-  }
-  return resolveSceneBundlePublicUrl(storageKey, process.env, storage.provider);
-}
-
-export async function readDocumentObject(storage: DocumentUploadStorage, storageKey: string): Promise<Buffer> {
-  if (storage.type === "local") {
-    const target = join(storage.root, storageKey);
-    if (!target.startsWith(`${storage.root}${sep}`)) throw new Error("unsafe_document_storage_key");
-    return readFile(target);
-  }
-  const response = await fetch(resolveUploadedDocumentPublicUrl(storage, storageKey));
-  try {
-    if (!response.ok) throw new Error(`document_object_download_failed:${response.status}`);
-    return Buffer.from(await response.arrayBuffer());
-  } finally { await discardResponseBody(response); }
-}
-
-/** Authenticated object read for private code artifacts; never fetch their public URL. */
+/** Authenticated object read for private objects (room plugin artifacts, room documents); never fetch a public URL. */
 export async function readPrivateUploadedObject(storage: DocumentUploadStorage, key: string, maxBytes: number, signal?: AbortSignal): Promise<Buffer> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new Error("invalid_private_object_limit");
   if (storage.type === "local") {
@@ -255,6 +235,83 @@ export async function readPrivateUploadedObject(storage: DocumentUploadStorage, 
     }
     return Buffer.concat(chunks, length);
   } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
+}
+
+function awsQueryEncode(value: string): string {
+  return encodeURIComponent(value).replace(/[!'()*]/g, character => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+function xmlText(value: string): string {
+  return value.replace(/&(lt|gt|quot|apos|amp|#\d+|#x[0-9a-f]+);/gi, (_, entity: string) => {
+    const lower = entity.toLowerCase();
+    if (lower === "lt") return "<";
+    if (lower === "gt") return ">";
+    if (lower === "quot") return "\"";
+    if (lower === "apos") return "'";
+    if (lower === "amp") return "&";
+    return String.fromCodePoint(lower.startsWith("#x") ? parseInt(lower.slice(2), 16) : parseInt(lower.slice(1), 10));
+  });
+}
+
+export interface StoredObjectEntry { key: string; size: number; lastModified: Date }
+
+/** Signed ListObjectsV2 of one prefix, all pages. Local storage lists the files under the prefix directory. */
+export async function listStoredObjects(storage: DocumentUploadStorage, prefix: string, options: { signal?: AbortSignal; pageSize?: number } = {}): Promise<StoredObjectEntry[]> {
+  if (storage.type === "local") {
+    const base = join(storage.root, prefix);
+    if (!base.startsWith(`${storage.root}${sep}`)) throw new Error("unsafe_document_storage_key");
+    let files: string[];
+    try { files = await listFilesRecursive(base); }
+    catch (error) { if ((error as { code?: string }).code === "ENOENT") return []; throw error; }
+    const entries: StoredObjectEntry[] = [];
+    for (const file of files) {
+      const metadata = await stat(join(base, file));
+      entries.push({ key: `${prefix}${file}`, size: metadata.size, lastModified: metadata.mtime });
+    }
+    return entries;
+  }
+  const endpoint = storage.endpoint.endsWith("/") ? storage.endpoint : `${storage.endpoint}/`;
+  const entries: StoredObjectEntry[] = [];
+  let continuation: string | undefined;
+  for (let page = 0; page < 100_000; page++) {
+    const url = new URL(`${trimSlashes(storage.bucket)}/`, endpoint);
+    const query = Object.entries({ "continuation-token": continuation, "encoding-type": "url", "list-type": "2",
+      "max-keys": options.pageSize === undefined ? undefined : String(options.pageSize), prefix })
+      .filter((entry): entry is [string, string] => entry[1] !== undefined)
+      .map(([name, value]) => `${awsQueryEncode(name)}=${awsQueryEncode(value)}`).sort().join("&");
+    url.search = query;
+    const payloadHash = sha256Hex("");
+    const { amzDate, dateStamp } = formatAmzDate(new Date());
+    const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+    const canonicalHeaders = `host:${url.host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`;
+    const scope = `${dateStamp}/${storage.region}/s3/aws4_request`;
+    const canonicalRequest = ["GET", url.pathname, query, canonicalHeaders, signedHeaders, payloadHash].join("\n");
+    const signingKey = hmac(hmac(hmac(hmac(`AWS4${storage.secretAccessKey}`, dateStamp), storage.region), "s3"), "aws4_request");
+    const signature = createHmac("sha256", signingKey).update(["AWS4-HMAC-SHA256", amzDate, scope, sha256Hex(canonicalRequest)].join("\n")).digest("hex");
+    const response = await fetch(url, { headers: {
+      authorization: `AWS4-HMAC-SHA256 Credential=${storage.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
+      "x-amz-content-sha256": payloadHash, "x-amz-date": amzDate
+    }, ...(options.signal ? { signal: options.signal } : {}) });
+    let body: string;
+    try {
+      if (!response.ok) throw new Error(`object_listing_failed:${response.status}`);
+      body = await response.text();
+    } finally { await discardResponseBody(response); }
+    const urlEncoded = /<EncodingType>\s*url\s*<\/EncodingType>/i.test(body);
+    const decodeKey = (value: string) => urlEncoded ? decodeURIComponent(xmlText(value).replace(/\+/g, "%20")) : xmlText(value);
+    for (const match of body.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
+      const key = /<Key>([\s\S]*?)<\/Key>/.exec(match[1])?.[1];
+      const size = Number(/<Size>\s*(\d+)\s*<\/Size>/.exec(match[1])?.[1]);
+      const lastModified = new Date(/<LastModified>([\s\S]*?)<\/LastModified>/.exec(match[1])?.[1] ?? "");
+      if (key === undefined || !Number.isSafeInteger(size) || Number.isNaN(lastModified.getTime())) throw new Error("object_listing_invalid");
+      entries.push({ key: decodeKey(key), size, lastModified });
+    }
+    if (!/<IsTruncated>\s*true\s*<\/IsTruncated>/i.test(body)) return entries;
+    const next = /<NextContinuationToken>([\s\S]*?)<\/NextContinuationToken>/.exec(body)?.[1];
+    if (!next) throw new Error("object_listing_invalid");
+    continuation = xmlText(next);
+  }
+  throw new Error("object_listing_too_long");
 }
 
 export async function publishSceneBundleFiles(storage: SceneBundleUploadStorage, bundleRoot: string, storagePrefix: string): Promise<void> {

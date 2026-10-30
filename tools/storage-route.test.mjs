@@ -77,7 +77,8 @@ test("storage route proxies only public object reads and refuses the rest before
 
   for (const [path, method] of [
     ["/public-assets/scenes/hall/scene.json"], ["/public-assets/a%20b/c%2Bd.json"], ["/public-assets/%D0%B4%D0%BE%D0%BA.pdf"],
-    ["/public-assets/a..b.json"], ["/public-assets/scenes/hall/scene.glb", "HEAD"], ["/public-assets/scenes/hall/scene.glb", "OPTIONS"]
+    ["/public-assets/a..b.json"], ["/public-assets/scenes/hall/scene.glb", "HEAD"], ["/public-assets/scenes/hall/scene.glb", "OPTIONS"],
+    ["/public-assets/documents-other/key"], ["/public-assets/scenes/documents/x.json"]
   ]) {
     const response = await get(port, path, method);
     assert.equal(response.status, 200, `${method ?? "GET"} ${path}`);
@@ -89,6 +90,8 @@ test("storage route proxies only public object reads and refuses the rest before
     ["/public-assets/../room-plugins/x"], ["/public-assets/%2e%2e/room-plugins/x"], ["/public-assets/x%2f..%2f..%2froom-plugins/y"],
     ["/public-assets/x/../key"], ["/public-assets/x/%2E%2E/key"], ["/public-assets/./key"], ["/public-assets//key"], ["/public-assets/x/.."],
     ["/public-assets/x%5ckey"], ["/public-assets/x%00key"],
+    ["/public-assets/documents/demo-tenant/room/doc/agenda.pdf"], ["/public-assets/documents/demo-tenant/room/doc/agenda.pdf", "HEAD"],
+    ["/public-assets/%64ocuments/demo-tenant/room/doc/agenda.pdf"], ["/public-assets/documents/x", "OPTIONS"],
     ["/public-assets/key", "PUT"], ["/public-assets/key", "POST"], ["/public-assets/key", "DELETE"], ["/public-assets/key", "PATCH"]
   ]) {
     const response = await get(port, path, method);

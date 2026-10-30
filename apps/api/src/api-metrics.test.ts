@@ -10,6 +10,7 @@ const emptyStorage: Pick<Storage, "listRooms"> = { async listRooms() { return []
 const create = () => createApiMetrics(new Map(), () => {}, () => 0);
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 const additiveBlocks = [
+  /^# HELP vrata_document_legacy_reads_total[^\n]*\n# TYPE vrata_document_legacy_reads_total counter\nvrata_document_legacy_reads_total \d+\n/gm,
   /^# HELP vrata_api_virtual_state_release_completion_failures_total[^\n]*\n# TYPE vrata_api_virtual_state_release_completion_failures_total counter\nvrata_api_virtual_state_release_completion_failures_total [0-9]+\n/gm,
   /^# HELP vrata_api_legacy_state_release_completion_failures_total[^\n]*\n# TYPE vrata_api_legacy_state_release_completion_failures_total counter\nvrata_api_legacy_state_release_completion_failures_total [0-9]+\n/gm,
   /^# HELP vrata_api_frame_credential_release_completion_failures_total[^\n]*\n# TYPE vrata_api_frame_credential_release_completion_failures_total counter\nvrata_api_frame_credential_release_completion_failures_total [0-9]+\n/gm,
@@ -150,8 +151,8 @@ test("media credential release completion failures render as one unlabelled coun
     + "vrata_api_media_credential_release_completion_failures_total 5\n# HELP vrata_api_media_screen_reconciliation_total "));
   assert.ok(!output.includes("vrata_api_media_credential_release_completion_failures_total{"));
   assert.equal(reporter.metrics.frameCredentialReleaseCompletionFailuresTotal, 0);
-  assert.equal(Object.keys(reporter.metrics).at(-2), "mediaCredentialReleaseCompletionFailuresTotal");
-  assert.equal(Object.keys(reporter.metrics).at(-1), "mediaScreenReconciliationTotal");
+  assert.equal(Object.keys(reporter.metrics).at(-3), "mediaCredentialReleaseCompletionFailuresTotal");
+  assert.equal(Object.keys(reporter.metrics).at(-2), "mediaScreenReconciliationTotal");
 });
 
 test("media outcomes render only six fixed labels without exposing unknown values", async () => {
@@ -164,6 +165,17 @@ test("media outcomes render only six fixed labels without exposing unknown value
   }
   assert.equal(output.includes("private-room:secret"), false);
   assert.equal(digest(legacyReport(output)), "b43d647abb30388f21e7a23b50747c9fd0b1ff9540fd9d1f24d7cc6c7c687a38");
+});
+
+test("legacy document reads render as one unlabelled counter after document blob deletions", async () => {
+  const reporter = create();
+  incrementCounter(reporter.metrics.documentBlobDeletesTotal, "success");
+  reporter.metrics.documentLegacyReadsTotal = 3;
+  const output = await reporter.apiMetricsText(emptyStorage);
+  assert.ok(output.includes('vrata_document_blob_deletes_total{result="success"} 1\n'
+    + "# HELP vrata_document_legacy_reads_total Room document reads served from a copy in the legacy public bucket; nonzero until the move finishes.\n"
+    + "# TYPE vrata_document_legacy_reads_total counter\nvrata_document_legacy_reads_total 3\n"));
+  assert.equal(Object.keys(reporter.metrics).at(-1), "documentLegacyReadsTotal");
 });
 
 test("populated report preserves every metric, HELP text, TYPE, label and line order", async () => {

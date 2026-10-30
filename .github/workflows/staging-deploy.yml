@@ -334,6 +334,11 @@ jobs:
           if [ -f apps/api/src/plugins/verify-private-storage.ts ]; then
             ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo docker compose --env-file '$STAGING_APP_DIR/infra/docker/.env.staging' -f '$STAGING_APP_DIR/infra/docker/compose.staging.yml' exec -T -w /app api node apps/api/dist/plugins/verify-private-storage.js"
           fi
+          # Room documents: a fixture document object is released by a signed read and not served anonymously.
+          if [ -f apps/api/src/document-storage-move.ts ]; then
+            # shellcheck disable=SC2029
+            ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo docker compose --env-file '$STAGING_APP_DIR/infra/docker/.env.staging' -f '$STAGING_APP_DIR/infra/docker/compose.staging.yml' exec -T -w /app api node apps/api/dist/document-storage-move.js --verify"
+          fi
           # A new host continues with the gated reference catalog activation, which runs the full staging suite on
           # the same SHA; its own first gate only proves that the deployment answers (the checks above).
           if [ "$BOOTSTRAP" != true ]; then pnpm test:e2e:staging -- --max-failures=1; fi
@@ -364,6 +369,21 @@ jobs:
           # shellcheck disable=SC2029
           ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo python3 -B '$REMOTE_HELPERS/staging-remote-release.py' prune --root '$STAGING_APP_DIR' --image-sha '$SHA'"
 
+      - name: Move room documents to private storage
+        id: document_move
+        # Moves documents earlier releases left in the public bucket and deletes the public copies (idempotent; counts
+        # only). It runs after acceptance because an image that reads documents from the public bucket cannot read
+        # moved ones; a failure is reported at the end of the job and never rolls back the accepted release.
+        if: steps.publish.outcome == 'success'
+        timeout-minutes: 10
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          if [ -f apps/api/src/document-storage-move.ts ]; then
+            # shellcheck disable=SC2029
+            ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo docker compose --env-file '$STAGING_APP_DIR/infra/docker/.env.staging' -f '$STAGING_APP_DIR/infra/docker/compose.staging.yml' exec -T -w /app api node apps/api/dist/document-storage-move.js --confirm" | tee "$RUNNER_TEMP/document-move.json"
+          fi
+
       - name: Roll back failed deploy
         id: rollback
         timeout-minutes: 20
@@ -393,6 +413,9 @@ jobs:
             test-results/
       - name: Fail after rollback
         if: ${{ !cancelled() && (steps.rollback.outcome == 'success' || steps.rollback.outcome == 'failure') }}
+        run: exit 1
+      - name: Fail after document move failure
+        if: ${{ !cancelled() && steps.document_move.outcome == 'failure' }}
         run: exit 1
 
   rutube-canary:

@@ -29,6 +29,12 @@ const BACKUP_SCHEMA_VERSION = 2;
 const PLUGIN_ROOT = "room-plugins";
 const PLUGIN_OBJECT_KIND = "room-plugin-object";
 const PLUGIN_TABLES = ["room_plugin_bindings", "room_plugin_packages", "room_plugin_state"];
+// The private plugin bucket also holds room documents (under the API's document prefix); the whole bucket is mirrored,
+// so they are backed up and restored with the plugin objects. Earlier releases wrote documents to the public bucket.
+function legacyDocumentObjects(compose) {
+  const prefix = String(compose.model?.services?.api?.environment?.MINIO_DOCUMENT_PREFIX ?? "documents").replace(/^\/+|\/+$/g, "");
+  return `minio/objects/${prefix || "documents"}/`;
+}
 const DEFAULT_ENV_FILE = "infra/docker/.env.selfhost";
 const DEFAULT_COMPOSE_FILE = "infra/docker/compose.selfhost.yml";
 const DEFAULT_OUTPUT_DIR = "backups";
@@ -1153,6 +1159,13 @@ async function runRestore(options, operations = {}) {
     "-lc",
     "mc alias set vrata \"${MINIO_ENDPOINT:-http://minio:9000}\" \"$MINIO_ROOT_USER\" \"$MINIO_ROOT_PASSWORD\" >/dev/null && mc mb --ignore-existing \"vrata/$MINIO_BUCKET\" >/dev/null && mc anonymous set download \"vrata/$MINIO_BUCKET\" >/dev/null && mc mirror --overwrite --remove /backup/objects \"vrata/$MINIO_BUCKET\" >/dev/null"
   ]);
+  // A backup taken before room documents moved to the private bucket brings their objects back into the public one.
+  // Move them before the restore is reported complete; the restored snapshot has no writer in flight, so objects
+  // without a row are deleted at once. The privacy probe is left to --verify: the public address may not answer yet.
+  const documentObjects = legacyDocumentObjects(compose);
+  if (manifest.artifacts.some(artifact => artifact.kind === "minio-object" && artifact.path.startsWith(documentObjects))) {
+    runCompose(compose, ["exec", "-T", "-w", "/app", "api", "node", "apps/api/dist/document-storage-move.js", "--restore"]);
+  }
 
   await (operations.smoke || runSmokeChecks)({
     baseUrl: smokeBaseUrl,

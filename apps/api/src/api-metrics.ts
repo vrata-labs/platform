@@ -72,7 +72,8 @@ export function createApiMetrics(
     legacyStateReleaseCompletionFailuresTotal: 0,
     frameCredentialReleaseCompletionFailuresTotal: 0,
     mediaCredentialReleaseCompletionFailuresTotal: 0,
-    mediaScreenReconciliationTotal: new Map<string, number>()
+    mediaScreenReconciliationTotal: new Map<string, number>(),
+    documentLegacyReadsTotal: 0
   };
 
   async function apiMetricsText(storage: Pick<Storage, "listRooms">): Promise<string> {
@@ -230,6 +231,9 @@ export function createApiMetrics(
       "# HELP vrata_document_blob_deletes_total Document blob delete attempts by result.",
       "# TYPE vrata_document_blob_deletes_total counter",
       ...Array.from(metrics.documentBlobDeletesTotal.entries()).map(([result, count]) => formatMetricLine("vrata_document_blob_deletes_total", count, { result })),
+      "# HELP vrata_document_legacy_reads_total Room document reads served from a copy in the legacy public bucket; nonzero until the move finishes.",
+      "# TYPE vrata_document_legacy_reads_total counter",
+      formatMetricLine("vrata_document_legacy_reads_total", metrics.documentLegacyReadsTotal),
       "# HELP vrata_document_media_validation_failures_total Rejected image and video uploads by bounded reason.",
       "# TYPE vrata_document_media_validation_failures_total counter",
       ...Array.from(metrics.documentMediaValidationFailuresTotal.entries()).map(([key, count]) => {

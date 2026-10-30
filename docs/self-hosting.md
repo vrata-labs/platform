@@ -82,8 +82,23 @@ The compose service `minio` runs [SeaweedFS](https://github.com/seaweedfs/seawee
 
 - `infra/docker/storage-server.sh` starts the server with one S3 identity, `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`. The API and the bootstrap share it, so the API key can also manage buckets and policies.
 - `minio-bootstrap` and the backup tool use the `mc` client from `pgsty/mc` (the maintained multi-arch build of the pgsty MinIO fork, AGPL-3.0, pinned by digest): upstream MinIO no longer publishes client images. Bootstrap creates the public `MINIO_BUCKET` with an anonymous download policy and the private `ROOM_PLUGIN_BUCKET` without any policy, retrying for about a minute while the storage warms up.
-- Master, volume and filer listen on loopback inside the container; other containers reach only the S3 API and its gRPC port. Self-host publishes the S3 port on `127.0.0.1` for `MINIO_PUBLIC_BASE_URL=http://127.0.0.1:9000`; production and staging publish public objects through Caddy, which passes only `GET`/`HEAD` (and CORS `OPTIONS`) of non-empty keys in the public bucket without a query.
+- Master, volume and filer listen on loopback inside the container; other containers reach only the S3 API and its gRPC port. Self-host publishes the S3 port on `127.0.0.1` for `MINIO_PUBLIC_BASE_URL=http://127.0.0.1:9000`; production and staging publish public objects through Caddy, which passes only `GET`/`HEAD` (and CORS `OPTIONS`) of non-empty keys in the public bucket without a query and refuses the `documents/` prefix.
 - For about half a minute after a start the storage refuses writes (its filer lock is not ready yet); conditional writes stay atomic, refused requests are retried by the client.
+
+## Room Document Storage
+
+Room documents (PDF, images, video) are stored in the private `ROOM_PLUGIN_BUCKET` under `documents/<tenant>/<room>/<document>/<file>` and are released only by the API, after the room access checks, from signed reads. The public `MINIO_BUCKET` (or `SCENE_BUNDLE_S3_BUCKET`) holds scene bundles only. For the `s3-compatible` provider the operator creates `ROOM_PLUGIN_BUCKET` without anonymous access before uploading documents (see `infra/docker/room-plugin-storage.md`); without it uploads and reads answer `document_storage_unavailable`.
+
+Releases before this change wrote documents to the public bucket. While such objects remain, the API reads them with signed requests when the private object is missing and counts these reads in `vrata_document_legacy_reads_total`. After upgrading, move them and delete the public copies from the API container:
+
+```sh
+docker compose --env-file infra/docker/.env.production -f infra/docker/compose.production.yml exec -T -w /app api node apps/api/dist/document-storage-move.js
+docker compose --env-file infra/docker/.env.production -f infra/docker/compose.production.yml exec -T -w /app api node apps/api/dist/document-storage-move.js --confirm
+```
+
+The first command only counts. `--confirm` copies each live document after checking its recorded checksum, deletes the public copy after a signed read of the private copy matches, deletes copies of deleted documents and objects of deleted rooms, lists the public prefix again and checks with a fixture object that documents are not served anonymously. Objects without a row younger than 15 minutes are kept for the next run (a writer of the previous release may not have committed its row yet). The output is counts only; a non-zero exit names a checksum mismatch, a conflicting private object or a failed operation, which leave the public copy for the operator. `--verify` runs only the privacy check. The check fetches the public storage address from inside the API container; where `MINIO_PUBLIC_BASE_URL` is a loopback address of the host (the self-host default), it fails until `ROOM_PLUGIN_ANONYMOUS_ENDPOINT` names an address reachable from the container, as for the room plugin probe. Caddy refuses only the default `documents/` prefix; if the API runs with another `MINIO_DOCUMENT_PREFIX`, refuse that prefix of the public bucket in the proxy until the move reports nothing remaining. In local development without object storage, documents live in `apps/.room-document-objects` (or `DOCUMENT_LOCAL_UPLOAD_ROOT`, which must lie outside every directory the API serves statically); the previous `apps/runtime-web/public/assets/uploaded-documents` is read-only legacy and is not served.
+
+Rolling back to a release from before this change after the move leaves moved documents unreadable (`document_storage_unavailable`) until the upgrade is applied again; no data is lost.
 
 ## Persistent Data
 

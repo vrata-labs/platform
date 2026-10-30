@@ -8,7 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { createRoomPluginArtifact } from "@vrata/room-plugin-sdk/artifact";
 import { MemoryStorage } from "../storage.js";
 import type { DocumentUploadStorage } from "../upload-storage-config.js";
-import { deleteDocumentObject, readDocumentObject, readPrivateUploadedObject, writeDocumentObject } from "../uploaded-object-storage.js";
+import { deleteDocumentObject, readPrivateUploadedObject, writeDocumentObject } from "../uploaded-object-storage.js";
 import { createRoomPluginBlobStorage } from "./blob-storage.js";
 import { RoomPluginBlobIoError } from "./blob-errors.js";
 import { createRoomPluginPackageService, RoomPluginOperationPending } from "./package-service.js";
@@ -66,8 +66,6 @@ test("real 503 GET headers with endless body release private/public/plugin HTTP 
   let attempts = 0;
   for (let index = 0; index < 12; index++) {
     await assert.rejects(readPrivateUploadedObject(server.config, key, 1024), /private_object_download_failed:503/);
-    await server.released(++attempts);
-    await assert.rejects(readDocumentObject(server.config, key), /document_object_download_failed:503/);
     await server.released(++attempts);
     await assert.rejects(adapter.read(scope, key), RoomPluginBlobIoError);
     await server.released(++attempts);

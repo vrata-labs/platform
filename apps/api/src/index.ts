@@ -113,13 +113,11 @@ import type { RoomPluginAuthorActor } from "./plugins/access-contracts.js";
 import {
   trimSlashes,
   sha256Hex,
-  writeDocumentObject,
-  deleteDocumentObject,
-  resolveUploadedDocumentPublicUrl,
-  readDocumentObject,
   publishSceneBundleFiles,
   resolveUploadedSceneBundlePublicUrl
 } from "./uploaded-object-storage.js";
+import { deleteDocumentBytes, documentObjectStores, isLegacyLocalDocumentAssetPath, readDocumentBytes, writeDocumentBytes,
+  type DocumentObjectStores } from "./document-storage.js";
 
 import {
   isRoomVisibility,
@@ -2037,7 +2035,15 @@ function publicBaseUrlFromRequest(request: IncomingMessage): string {
   return url.toString();
 }
 
-const { getSceneBundleUploadStorage, getDocumentUploadStorage } = createUploadStorageConfig(runtimePublicRoot, publicBaseUrlFromRequest);
+const { getSceneBundleUploadStorage } = createUploadStorageConfig(runtimePublicRoot, publicBaseUrlFromRequest);
+const documentStores = () => documentObjectStores(runtimePublicRoot);
+
+/** Signed read of a document's bytes; a legacy public copy is counted so that an unfinished move stays visible. */
+async function readRoomDocumentBytes(document: RoomDocumentRecord): Promise<Buffer> {
+  const { bytes, legacy } = await readDocumentBytes(documentStores(), document.storageKey, document.sizeBytes);
+  if (legacy) metrics.documentLegacyReadsTotal += 1;
+  return bytes;
+}
 
 async function cleanupDocumentMediaObjects(roomId: string, documentId: string): Promise<void> {
   const baseUrl = process.env.ROOM_STATE_INTERNAL_URL?.trim();
@@ -2420,6 +2426,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (method === "GET" && url.pathname.startsWith("/assets/")) {
+    // Room documents are released only through the room routes; older local uploads may still sit here.
+    if (isLegacyLocalDocumentAssetPath(url.pathname)) return json(response, 404, { error: "asset_not_found" });
     const localUploadRoot = process.env.SCENE_BUNDLE_LOCAL_UPLOAD_ROOT ? resolve(process.env.SCENE_BUNDLE_LOCAL_UPLOAD_ROOT) : null;
     const uploadedScenePath = url.pathname.match(/^\/assets\/uploaded-scene-bundles\/(.+)$/)?.[1];
     const normalizedUploadedScenePath = uploadedScenePath ? normalizeSceneBundleRelativePath(uploadedScenePath) : null;
@@ -3110,14 +3118,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         }
       }
 
-      let uploadedStorage: ReturnType<typeof getDocumentUploadStorage> | null = null;
+      let uploadedStorage: DocumentObjectStores | null = null;
       let uploadedKey: string | null = null;
       let documentPersisted = false;
       try {
         const documentId = randomUUID();
-        const uploadStorage = getDocumentUploadStorage(request);
+        const uploadStorage = documentStores();
         const storageKey = documentStorageKey(room.tenantId, roomId, documentId, filename);
-        await writeDocumentObject(uploadStorage, storageKey, documentFile.data, contentType);
+        await writeDocumentBytes(uploadStorage, storageKey, documentFile.data, contentType);
         uploadedStorage = uploadStorage;
         uploadedKey = storageKey;
         const document = await audit.effect(() => runGuardedRoomEffect(storage, actor, room, permission, scoped => scoped.createRoomDocument({
@@ -3140,7 +3148,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         // A lost COMMIT acknowledgement is not evidence that publication failed.
         // Retain the blob for reconciliation rather than breaking a committed row.
         if (uploadedKey && uploadedStorage && !documentPersisted && !uncertainRoomCommit(error)) {
-          await deleteDocumentObject(uploadedStorage, uploadedKey).catch(() => {
+          await deleteDocumentBytes(uploadedStorage, uploadedKey).catch(() => {
             incrementCounter(metrics.documentBlobDeletesTotal, "failed");
           });
         }
@@ -3178,7 +3186,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       if (method === "GET" && actionPath === "download") {
         let bytes: Buffer;
         try {
-          bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+          bytes = await readRoomDocumentBytes(document);
         } catch (error) {
           json(response, 503, { error: "document_storage_unavailable", requestId });
           return;
@@ -3205,7 +3213,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         }
         let bytes: Buffer;
         try {
-          bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+          bytes = await readRoomDocumentBytes(document);
         } catch (error) {
           incrementCounter(metrics.documentPresentationContentTotal, "failed");
           json(response, 503, { error: "document_storage_unavailable", requestId });
@@ -3234,7 +3242,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         }
         let bytes: Buffer;
         try {
-          bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+          bytes = await readRoomDocumentBytes(document);
         } catch (error) {
           incrementCounter(metrics.documentMediaContentTotal, `${kind}:failed`);
           json(response, 503, { error: "document_storage_unavailable", requestId });
@@ -3273,7 +3281,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
           return json(response, 503, { error: "document_cleanup_unavailable", requestId });
         }
         try {
-          await deleteDocumentObject(getDocumentUploadStorage(request), result.document.storageKey);
+          await deleteDocumentBytes(documentStores(), result.document.storageKey);
           incrementCounter(metrics.documentBlobDeletesTotal, "success");
         } catch (error) {
           incrementCounter(metrics.documentBlobDeletesTotal, "failed");
@@ -3874,7 +3882,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     // orphaned, the room is deleted either way.
     for (const storageKey of documentStorageKeys) {
       try {
-        await deleteDocumentObject(getDocumentUploadStorage(request), storageKey);
+        await deleteDocumentBytes(documentStores(), storageKey);
         incrementCounter(metrics.documentBlobDeletesTotal, "success");
       } catch {
         incrementCounter(metrics.documentBlobDeletesTotal, "failed");

@@ -357,6 +357,13 @@ function fakeDeployment(t, { privateConfigured = true, rows, provider = "minio-d
     runCompose(_compose, args, io = {}) {
       calls.push(args);
       if (args[0] === "images") { writeFileSync(io.stdoutFile, "fixture-images\n"); return; }
+      if (args[0] === "exec" && args.includes("apps/api/dist/document-storage-move.js")) {
+        assert.deepEqual(args, ["exec", "-T", "-w", "/app", "api", "node", "apps/api/dist/document-storage-move.js", "--restore"]);
+        for (const [key, bytes] of [...publicObjects].filter(([key]) => key.startsWith("documents/"))) {
+          privateObjects.set(key, bytes); publicObjects.delete(key);
+        }
+        return;
+      }
       if (args[0] === "exec") {
         if (io.stdoutFile) writeFileSync(io.stdoutFile, fixture.dump);
         else {
@@ -452,6 +459,31 @@ test("compose backup and restore preserve private plugin namespace, checksums, S
       assert.equal(fixture.smokeRan, true);
     });
   }
+});
+
+test("private room documents are backed up with the private bucket; restored public documents are moved again", async t => {
+  const fixture = fakeDeployment(t, { profile: "selfhost" });
+  const privateDocument = "documents/demo-tenant/room/0d6c/agenda.pdf", legacyDocument = "documents/demo-tenant/room/7a1e/notes.pdf";
+  fixture.privateObjects.set(privateDocument, Buffer.from("private document"));
+  await fixture.backup();
+  const artifact = fixture.manifest().artifacts.find(entry => entry.path === `room-plugins/objects/${privateDocument}`);
+  assert.equal(artifact?.kind, "room-plugin-object");
+  assert.equal(artifact.sha256, hash(Buffer.from("private document")));
+  await fixture.restore();
+  assert.equal(fixture.calls.some(args => args.includes("apps/api/dist/document-storage-move.js")), false, "nothing to move");
+  assert.deepEqual(fixture.privateObjects.get(privateDocument), Buffer.from("private document"));
+
+  // A backup from an earlier release: the document object sits in the public bucket.
+  fixture.publicObjects.set(legacyDocument, Buffer.from("legacy document"));
+  rmSync(fixture.backupDir, { recursive: true, force: true });
+  await fixture.backup();
+  fixture.calls.length = 0;
+  await fixture.restore();
+  const move = fixture.calls.findIndex(args => args.includes("apps/api/dist/document-storage-move.js"));
+  const publicMirror = fixture.calls.findIndex(args => args[0] === "run" && args.at(-1).includes("anonymous set download"));
+  assert.ok(publicMirror >= 0 && move > publicMirror, "the move runs after the public objects are restored");
+  assert.equal(fixture.publicObjects.has(legacyDocument), false);
+  assert.deepEqual(fixture.privateObjects.get(legacyDocument), Buffer.from("legacy document"));
 });
 
 test("legacy schema-1 backup/restore needs no private configuration and does not touch the new private bucket", async t => {

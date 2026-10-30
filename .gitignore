@@ -24,3 +24,7 @@ backups/
 infra/docker/.env.staging
 __pycache__/
 *.py[cod]
+# Local development objects (outside the statically served runtime tree) and the legacy document directory.
+apps/.room-document-objects/
+apps/.room-plugin-objects/
+apps/runtime-web/public/assets/uploaded-documents/
