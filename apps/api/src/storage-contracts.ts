@@ -551,7 +551,8 @@ export interface Storage extends IntegrationStore {
   updateRoom(roomId: string, input: Partial<RoomRecord>, expectedTemplateBinding?: ExpectedRoomTemplateBinding): Promise<RoomRecord | null>;
   /** `documentStorageKeys`, when given, receives the object keys of the room's documents (deleted ones included) read in
    * the deleting transaction; use them only after `true`. */
-  deleteRoom(roomId: string, pluginDeletion?: { tenantId: string; deletionId: string }, documentStorageKeys?: string[]): Promise<boolean>;
+  deleteRoom(roomId: string, pluginDeletion?: { tenantId: string; deletionId: string; cleanedDocumentKeys?: readonly string[] }, documentStorageKeys?: string[]): Promise<boolean>;
+  prepareRoomDocumentCleanup(roomId: string, tenantId: string, deletionId: string): Promise<RoomDocumentRecord[]>;
   createRoomInvite(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy"> & { inviteId?: string; createdAt?: string }): Promise<RoomInviteRecord>;
   createRoomInviteV2(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy" | "protocolVersion"> & {
     actor: import("./identity/contracts.js").RoomIdentityActor

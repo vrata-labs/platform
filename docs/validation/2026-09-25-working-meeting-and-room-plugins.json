@@ -1,38 +1,54 @@
 {
   "schema": 1,
-  "task": "T07: room lifecycle, async SDK broker и plain-text status; public floor1 сохраняется, положительные проверки только в собственных disposable-v2 схемах",
+  "task": "T15: поставка sandbox assets и общий storage/config lifecycle; не приёмка всего плана",
   "domain": "general",
-  "scope": ["apps/runtime-web/src", "apps/runtime-web/index.html", "apps/runtime-web/plugin-sandbox-probe.html", "apps/runtime-web/vite.config.ts", "apps/runtime-web/public/assets/plugin-sdk", "apps/api/src", "packages/room-plugin-sdk", "tests/e2e"],
+  "scope": ["apps", "packages", "tools", "infra", "tests", "package.json", "pnpm-lock.yaml"],
   "criteria": [
     {
       "id": "package-checks",
-      "description": "Собраны и проходят тесты runtime/API/SDK на окончательном дереве, SDK distribution immutable",
+      "description": "Lint, typecheck, build и package tests на окончательном дереве с настоящим Postgres из окружения",
       "required": true,
       "kind": "command",
-      "argv": ["bash", "-o", "pipefail", "-lc", "set -e\npnpm --filter @vrata/runtime-web build\npnpm --filter @vrata/runtime-web test\npnpm --filter @vrata/api build\npnpm --filter @vrata/api test\npnpm --filter @vrata/room-plugin-sdk build\npnpm --filter @vrata/room-plugin-sdk test\nnode --test tools/room-plugin-sdk-distribution.test.mjs"],
-      "timeout_seconds": 1800
-    },
-    {
-      "id": "real-room-lifecycle",
-      "description": "Production headers, after-auth discovery из0bindings, внешний SDK artifact, enable/config/disable/re-enable, sticky failure с настоящим PDF upload; безопасная очистка и поздние ответы",
-      "required": true,
-      "kind": "evidence"
-    },
-    {
-      "id": "hostile-resource-browser",
-      "description": "На общем kernel facade проходят40 hostile/normal probes,100dual-instance cycles, cumulative budgets, точные kernel/guest CSP и изоляция token/network",
-      "required": true,
-      "kind": "evidence"
+      "argv": ["bash", "-o", "pipefail", "-lc", "set -e\n: \"${VRATA_TEST_POSTGRES_URL:?VRATA_TEST_POSTGRES_URL must point to disposable Postgres}\"\nexport VRATA_TEST_POSTGRES_URL\npnpm lint\npnpm typecheck\npnpm build\npnpm test"],
+      "timeout_seconds": 3600
     },
     {
       "id": "final-full-local",
-      "description": "Разово пропущен по прямому поручению пользователя для текущего T07 (D-014); прежние failed остаются failed, не PASS. Исключение T14 не переиспользуется; полный CI и staging обязательны",
-      "required": false,
+      "description": "Полный локальный e2e на окончательном дереве с настоящим Postgres из окружения",
+      "required": true,
+      "kind": "command",
+      "argv": ["bash", "-o", "pipefail", "-lc", "set -e\n: \"${VRATA_TEST_POSTGRES_URL:?VRATA_TEST_POSTGRES_URL must point to disposable Postgres}\"\nexport VRATA_TEST_POSTGRES_URL\npnpm test:e2e --workers=1"],
+      "timeout_seconds": 14400
+    },
+    {
+      "id": "docker-assets",
+      "description": "Локальная сборка API image проверяет pinned WASM/worker/SDK bytes и release manifest до prune",
+      "required": true,
+      "kind": "command",
+      "argv": ["docker", "build", "-f", "apps/api/Dockerfile", "-t", "vrata-t15-api:verify", "."],
+      "timeout_seconds": 3600
+    },
+    {
+      "id": "backup-restore-access-lifecycle",
+      "description": "Настоящий общий backup/restore в изолированную копию и API restart сохраняют exact plugin versions/hash/config/bindings, Notes revisions, PDF bytes, settings и Host/Guest access. CLI и прямой DELETE выдерживают partial blob failure и restart; cleanup оставляет только redacted record, сохраняя соседний пакет и общий SDK",
+      "required": true,
+      "kind": "evidence"
+    },
+    {
+      "id": "substantive-review",
+      "description": "Независимое содержательное ревью окончательного T15 diff по требованиям и контракту; подтверждённые дефекты исправлены и повторно проверены",
+      "required": true,
       "kind": "evidence"
     },
     {
       "id": "published-staging",
-      "description": "Commit/push, exact-SHA CI/Docker и обычный gated staging; accepted record/images/public smoke, staging e2e и важные комнаты подтверждают новый commit без включения общего floor2",
+      "description": "Commit/push, успешные exact-SHA CI и Docker Publish, обычный gated Staging Deploy; accepted-release и реальные image SHA совпадают. Staging e2e, key room flows и T15 assets/access/lifecycle подтверждены на этом commit",
+      "required": true,
+      "kind": "evidence"
+    },
+    {
+      "id": "stage-lifecycle",
+      "description": "Стенд использован под собственной арендой; зафиксированы lease ID, освобождение аренды и конечная фаза стенда без изменений чужих аренд",
       "required": true,
       "kind": "evidence"
     }

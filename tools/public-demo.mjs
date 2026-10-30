@@ -360,6 +360,7 @@ function createCleanupLifecycle() {
     phase: "not-started",
     revokedInviteIds: [],
     deletedDocumentIds: [],
+    pluginsCleaned: false,
     sessionEnded: false,
     roomDeleted: false,
     tenantDeleted: false,
@@ -449,6 +450,7 @@ export function createRedactedCleanupRecord(state) {
         phase: state.cleanup.phase,
         revokedInviteIds: [...state.cleanup.revokedInviteIds],
         deletedDocumentIds: [...state.cleanup.deletedDocumentIds],
+        pluginsCleaned: state.cleanup.pluginsCleaned === true,
         sessionEnded: state.cleanup.sessionEnded,
         roomDeleted: state.cleanup.roomDeleted,
         tenantDeleted: state.cleanup.tenantDeleted,
@@ -1019,6 +1021,48 @@ async function cleanupMutation(client, method, path, step, options = {}) {
   return result.status;
 }
 
+// Re-read after each CAS mutation: a lost reply or a concurrent author never turns a stale snapshot
+// into permission to delete another version. Do not persist plugin config or source in the cleanup record.
+async function cleanupRoomPlugins(client, roomId) {
+  const root = `/api/rooms/${encodeURIComponent(roomId)}/plugins`;
+  for (let attempt = 0; attempt < 64; attempt++) {
+    const response = await client.get(`${root}/packages`, { step: "cleanup-discover-plugins", acceptStatuses: [403, 409, 503] });
+    if (response.status === 409 && response.data?.error === "plugin_identity_not_active") return;
+    // Ended/disabled meetings and durable deletion intents no longer admit plugin authors.
+    // Resume the room DELETE lifecycle only for these exact errors, never for other service failures.
+    if ((response.status === 403 && response.data?.error === "plugin_author_forbidden")
+      || (response.status === 503 && response.data?.error === "room_plugin_cleanup_pending")) {
+      await cleanupMutation(client, "delete", `/api/rooms/${encodeURIComponent(roomId)}`, "cleanup-delete-room");
+      return;
+    }
+    if (response.status !== 200) throw demoError("demo_cleanup_incomplete", "cleanup-discover-plugins", { status: response.status });
+    const library = response.data;
+    if (!Array.isArray(library?.packages) || !Array.isArray(library.bindings) || !Number.isSafeInteger(library.revision)) {
+      throw demoError("demo_state_conflict", "cleanup-discover-plugins", { reason: "invalid_plugin_library" });
+    }
+    const binding = library.bindings.find(item => item.enabled) ?? library.bindings[0];
+    if (binding) {
+      if (!safeIdentifier(binding.pluginId)) throw demoError("demo_state_conflict", "cleanup-plugins");
+      const path = `${root}/bindings/${encodeURIComponent(binding.pluginId)}`;
+      const result = binding.enabled
+        ? await client.put(path, { step: "cleanup-disable-plugin", acceptStatuses: [409], body: {
+          expectedRevision: library.revision, packageId: binding.packageId, version: binding.version,
+          artifactSha256: binding.artifactSha256, enabled: false, config: binding.config,
+          approvedCapabilities: binding.approvedCapabilities } })
+        : await client.delete(path, { step: "cleanup-unbind-plugin", acceptStatuses: [409], body: { expectedRevision: library.revision } });
+      if (result.status === 409 && result.data?.error !== "plugin_revision_conflict") {
+        throw demoError("demo_cleanup_incomplete", "cleanup-plugins", { status: 409 });
+      }
+      continue;
+    }
+    const pkg = library.packages.find(item => item.state !== "deleted");
+    if (!pkg) return;
+    if (!safeIdentifier(pkg.packageId)) throw demoError("demo_state_conflict", "cleanup-plugins");
+    await cleanupMutation(client, "delete", `${root}/packages/${encodeURIComponent(pkg.packageId)}`, "cleanup-delete-plugin");
+  }
+  throw demoError("demo_cleanup_incomplete", "cleanup-plugins", { reason: "plugin_library_did_not_settle" });
+}
+
 const ambiguousSeedMutationSteps = new Set([
   "create-tenant",
   "create-room",
@@ -1115,6 +1159,13 @@ export async function cleanupPublicDemo(options) {
       await persistCleanupContext(context);
     }
 
+    if (ownership.room && !context.record.lifecycle.cleanup.pluginsCleaned) {
+      await cleanupRoomPlugins(client, input.roomId);
+    }
+    context.record.lifecycle.cleanup.pluginsCleaned = true;
+    context.record.updatedAt = nowIso(now);
+    await persistCleanupContext(context);
+
     if (ownership.room) {
       await cleanupMutation(client, "post", `/api/rooms/${encodeURIComponent(input.roomId)}/session-control/end`, "cleanup-end-session");
     }
@@ -1165,6 +1216,16 @@ export async function cleanupPublicDemo(options) {
     if (context.state) {
       cleanupRecord = publicDemoCleanupRecordPath(inputFile);
       await rm(inputFile, { force: true });
+    } else if (inputFile.endsWith(".cleanup.json")) {
+      const privateFile = inputFile.slice(0, -".cleanup.json".length);
+      if (await pathExists(privateFile)) {
+        const privateState = await readPublicDemoState(privateFile);
+        if (privateState.origin !== input.origin || privateState.runId !== input.runId
+          || privateState.roomId !== input.roomId || privateState.tenantId !== input.tenantId) {
+          throw demoError("demo_state_conflict", "cleanup-private-state", { reason: "private_state_binding_mismatch" });
+        }
+        await rm(privateFile);
+      }
     }
     return {
       status: "cleaned",

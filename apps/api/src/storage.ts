@@ -1,5 +1,6 @@
 import { initPostgresStorageWithRetry } from "./storage-init-retry.js";
 import { Pool, type PoolClient } from "pg";
+import { RoomPluginStorageError } from "./plugins/contracts.js";
 import { expectedReferenceCatalog, getTemplateVersion as getSeedTemplateVersion, listReferenceTemplateVersionContracts, listTemplateDefinitions, planReferenceCatalogTransition, PRODUCT_ROOM_TEMPLATE_IDS, PRODUCT_ROOM_TEMPLATE_VERSION, type ReferenceCatalogState, type TemplateCatalogPointer } from "@vrata/templates";
 import type { RoomTemplateStatus, RoomTemplateVersionSnapshotV1 } from "@vrata/shared-types";
 
@@ -650,9 +651,13 @@ export class MemoryStorage implements Storage {
     this.rooms.set(roomId, structuredClone(updated));
     return structuredClone(updated);
   }
-  async deleteRoom(roomId: string, pluginDeletion?: { tenantId: string; deletionId: string }, documentStorageKeys?: string[]): Promise<boolean> {
+  async deleteRoom(roomId: string, pluginDeletion?: { tenantId: string; deletionId: string; cleanedDocumentKeys?: readonly string[] }, documentStorageKeys?: string[]): Promise<boolean> {
     const room = this.rooms.get(roomId);
     if (room && pluginDeletion && room.tenantId !== pluginDeletion.tenantId) return false;
+    if (pluginDeletion?.cleanedDocumentKeys && [...this.roomDocuments.values()].some(document =>
+      document.roomId === roomId && !pluginDeletion.cleanedDocumentKeys!.includes(document.storageKey))) {
+      throw new RoomPluginStorageError("room_plugin_cleanup_pending");
+    }
     if (room) this.pluginAdapter.assertRoomDeletable({ tenantId: room.tenantId, roomId }, pluginDeletion?.deletionId);
     if (room) documentStorageKeys?.push(...[...this.roomDocuments.values()].filter(document => document.roomId === roomId).map(document => document.storageKey));
     this.identityAdapter.deleteRoom(roomId);
@@ -664,6 +669,12 @@ export class MemoryStorage implements Storage {
     }
     for (const document of [...this.roomDocuments.values()].filter(document => document.roomId === roomId)) this.roomDocuments.delete(document.documentId);
     return this.rooms.delete(roomId);
+  }
+  async prepareRoomDocumentCleanup(roomId: string, tenantId: string, deletionId: string): Promise<RoomDocumentRecord[]> {
+    this.pluginAdapter.assertDeletionIntent({ tenantId, roomId }, deletionId);
+    const documents = [...this.roomDocuments.values()].filter(document => document.roomId === roomId);
+    for (const document of documents) { if (!document.deletedAt) document.deletedAt = new Date().toISOString(); document.linkedSurfaceId = null; }
+    return structuredClone(documents);
   }
   private createRoomInviteSync(input: Parameters<Storage["createRoomInvite"]>[0]): RoomInviteRecord {
     if (input.protocolVersion === 2 && this.identityPolicy.current() < 2) throw new Error("identity_upgrade_required");
@@ -1861,17 +1872,33 @@ export class PostgresStorage implements Storage {
     updated.personalState = defaultPersonalState(row.personal_state ?? updated.personalState);
     return updated;
   }
-  async deleteRoom(roomId: string, pluginDeletion?: { tenantId: string; deletionId: string }, documentStorageKeys?: string[]): Promise<boolean> {
+  async deleteRoom(roomId: string, pluginDeletion?: { tenantId: string; deletionId: string; cleanedDocumentKeys?: readonly string[] }, documentStorageKeys?: string[]): Promise<boolean> {
     return roomFenceTransaction(this.pool, {}, async client => {
       const room = (await client.query("select tenant_id from rooms where room_id=$1 for update", [roomId])).rows[0];
       if (!room) return false;
       if (pluginDeletion && room.tenant_id !== pluginDeletion.tenantId) return false;
+      if (pluginDeletion?.cleanedDocumentKeys) {
+        const documents = await client.query("select storage_key from room_documents where room_id=$1", [roomId]);
+        if (documents.rows.some(row => !pluginDeletion.cleanedDocumentKeys!.includes(row.storage_key))) {
+          throw new RoomPluginStorageError("room_plugin_cleanup_pending");
+        }
+      }
       await preparePostgresRoomPluginRemoval(client, { tenantId: room.tenant_id, roomId }, pluginDeletion?.deletionId);
       // Under the room's FOR UPDATE: a fenced upload has either inserted its row already or will find no room.
       if (documentStorageKeys) documentStorageKeys.push(...(await client.query("select storage_key from room_documents where room_id=$1",
         [roomId])).rows.map(row => row.storage_key as string));
       const result = await client.query("delete from rooms where room_id=$1", [roomId]);
       return (result.rowCount ?? 0) > 0;
+    });
+  }
+  async prepareRoomDocumentCleanup(roomId: string, tenantId: string, deletionId: string): Promise<RoomDocumentRecord[]> {
+    return roomFenceTransaction(this.pool, {}, async client => {
+      const parent = (await client.query("select tenant_id from rooms where room_id=$1 for update", [roomId])).rows[0];
+      if (!parent || parent.tenant_id !== tenantId) throw new RoomPluginStorageError("room_not_found");
+      const intent = (await client.query("select deletion_id from room_plugin_state where room_id=$1 and tenant_id=$2", [roomId, tenantId])).rows[0];
+      if (intent?.deletion_id !== deletionId) throw new RoomPluginStorageError("room_plugin_cleanup_pending");
+      await client.query("update room_documents set deleted_at=coalesce(deleted_at,now()),linked_surface_id=null where room_id=$1", [roomId]);
+      return (await client.query("select * from room_documents where room_id=$1 order by uploaded_at,document_id", [roomId])).rows.map(mapRoomDocumentRow);
     });
   }
   async createRoomInvite(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy"> & { inviteId?: string; createdAt?: string }): Promise<RoomInviteRecord> {

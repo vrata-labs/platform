@@ -3868,27 +3868,27 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!room) return json(response, 404, { error: "room_not_found" });
     if (room.managed) return writeManagedResourceDenied(request, response, "room", roomId);
     let deleted: boolean;
-    const documentStorageKeys: string[] = [];
     try {
       deleted = await deleteRoomWithPluginCleanup(storage, { tenantId: room.tenantId, roomId },
-        () => configuredRoomPluginBlobStorage(runtimePublicRoot, request, publicBaseUrlFromRequest), documentStorageKeys);
+        () => configuredRoomPluginBlobStorage(runtimePublicRoot, request, publicBaseUrlFromRequest), undefined, async storageKey => {
+          try {
+            await deleteDocumentBytes(documentStores(), storageKey);
+            incrementCounter(metrics.documentBlobDeletesTotal, "success");
+          } catch {
+            incrementCounter(metrics.documentBlobDeletesTotal, "failed");
+            logEvent({ service: "api", event: "room_document_object_delete_failed", alert: true, roomId, requestId });
+            throw new Error("room_document_cleanup_unavailable");
+          }
+        });
     } catch (error) {
+      if (error instanceof Error && error.message === "room_document_cleanup_unavailable") {
+        return json(response, 503, { error: "room_document_cleanup_unavailable" });
+      }
       const failure = roomPluginDeletionFailure(error);
       if (failure) return json(response, failure.status, { error: failure.code });
       throw error;
     }
     if (!deleted) return json(response, 404, { error: "room_not_found" });
-    // The rows are gone with the room; their objects follow. Best effort: a failed object is counted and stays
-    // orphaned, the room is deleted either way.
-    for (const storageKey of documentStorageKeys) {
-      try {
-        await deleteDocumentBytes(documentStores(), storageKey);
-        incrementCounter(metrics.documentBlobDeletesTotal, "success");
-      } catch {
-        incrementCounter(metrics.documentBlobDeletesTotal, "failed");
-        logEvent({ service: "api", event: "room_document_object_delete_failed", alert: true, roomId, requestId });
-      }
-    }
     json(response, 200, { ok: true, roomId });
     return;
   }

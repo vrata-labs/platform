@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "quickjsVersion": "0.32.0",
+  "inputs": {
+    "wasm": "105c3bed22d457e43e3d1c3c1c6959fda62a8fe06f0fc8a985303c3a2be72232",
+    "ffi": "ccf8b3aa066c2be5755e3ea49d81b01dff5a671deb34b7ec3a1c983dd52e9335",
+    "loader": "3b8e916b3248062be4bbd3281c8d2832f074e6850596fc9951e93b846139ddea"
+  }
+}
