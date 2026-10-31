@@ -15,6 +15,13 @@
 - `apps/runtime-web/src/hardening.ts`
 - `packages/runtime-core/src/*`
 
+## Entry, language and leaving
+
+- Preflight (`#guest-onboarding`) asks for a display name only; the microphone is requested only by "Check microphone" or "Join Audio". A refused, missing or unusable microphone gets its own message and the guest enters muted. "Enter in VR" appears where an immersive session can start; once the room is ready, one press enters VR (`#vr-ready`), since the session needs a fresh user gesture.
+- The critical UI (preflight, room actions and audio, statuses, XR menu, ended and left screens, the session update dialog) is in Russian and English: `apps/runtime-web/src/i18n/`. The language is the tab's choice, then `?lang=`, then the portal cookie `vrata-locale`, then the browser, else English. The switch in the panel changes texts in place; the address and the room session stay.
+- "Leave the space" (panel button, XR menu) ends XR, removes the presence, stops media and room-state and goes to the way back from the grant exchange (`returnUrls`, made by the platform from `VRATA_RETURN_TARGETS`, see `docs/integration-api.md`). Without one it shows the left screen with "Return to the space". The tab keeps the way back next to the room identity, so a reload or Back enters the same room again.
+- The XR menu opens with B or Y: microphone, "Back to screen" (ends only the XR session, the room stays), "Leave the space" (a second press within four seconds) and "Close". While it is open, locomotion gets a resting input sample. A system end of the XR session keeps the room as well.
+
 ## PDF presentations
 
 - Hosts and assigned presenters can upload a validated PDF from the Documents panel and select an available room surface.

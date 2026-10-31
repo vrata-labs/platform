@@ -62,6 +62,8 @@ export interface RoomGrantExchange {
   participantId: string;
   identityCredential: string;
   cutoff: string;
+  /** The way back the platform made of the grant's returnContext; checked by the room-return module before use. */
+  returnUrls?: unknown;
 }
 
 /** Trades the code for a room identity; the normal v2 admission then renews it like any other. */

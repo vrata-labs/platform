@@ -1,4 +1,5 @@
 import { identityRequirementFromResponse, type IdentityRequirementReason } from "@vrata/shared-types";
+import { t } from "./i18n/i18n.js";
 
 export class SessionUpgradeError extends Error {
   constructor(readonly reason: IdentityRequirementReason) {
@@ -45,5 +46,5 @@ export const runtimeSessionGate = createSessionUpgradeGate();
 export const runtimeFetch = createSessionAwareFetch(runtimeSessionGate, (...args) => globalThis.fetch(...args));
 
 export function describeIdentityRequirement(reason: IdentityRequirementReason): string {
-  return reason === "identity_recovery_required" ? "Room access needs recovery" : "Update required to rejoin this room";
+  return reason === "identity_recovery_required" ? t("upgrade.recoveryTitle") : t("upgrade.title");
 }

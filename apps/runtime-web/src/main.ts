@@ -63,7 +63,10 @@ import { redeemRoomRecovery } from "./identity-recovery.js";
 import { probeDocumentMedia } from "./document-media-probe.js";
 import { createRuntimeDebugState } from "./runtime-debug-state.js";
 import { formatClientCompatibilityStatus, resolveClientCompatibility, type ClientCompatibilitySummary } from "./client-capabilities.js";
-import { formatGuestCompatibilityWarnings, formatGuestControlsHint, shouldShowGuestOnboarding, validateGuestDisplayName } from "./guest-onboarding.js";
+import { classifyMicrophoneCheckError, formatGuestCompatibilityWarnings, microphoneCheckFailureMessage, formatGuestControlsHint, shouldShowGuestOnboarding, validateGuestDisplayName } from "./guest-onboarding.js";
+import { bindLanguageSwitch, translateStaticText } from "./i18n/dom.js";
+import { currentLocale, LOCALE_STORAGE_KEY, onLocaleChange, renderText, resolveRuntimeLocale, setLocale, t, type LocalizedText } from "./i18n/i18n.js";
+import { createRoomReturnTab, planLeaveSpace } from "./room-return.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
 import { mergePresenceSources } from "./presence-sources.js";
 import {
@@ -202,6 +205,8 @@ import {
 } from "./seating/seat-anchor-reconcile.js";
 import { planSeatReclaimOnReconnect, shouldRetrySeatReclaim } from "./seating/seat-reclaim.js";
 import { resolveRuntimeInteractionRay, updateInteractionRayState } from "./interaction/interaction-frame.js";
+import { createXrMenuState, stepXrMenu, withoutLocomotionInput, XR_MENU_ACTIONS, xrMenuButtonLabel, xrMenuOwnsFrame, type XrMenuAction, type XrMenuCommand } from "./xr-menu/xr-menu.js";
+import { createXrMenuView, resolveXrMenuHit } from "./xr-menu/xr-menu-view.js";
 import { clearInteractionRayView, createInteractionRayView, showInteractionRayPointView } from "./interaction/interaction-ray-view.js";
 import { createInteractionTargetPerformer } from "./interaction/interaction-perform.js";
 import { createSeatMarkerViewController } from "./interaction/seat-marker-view.js";
@@ -321,6 +326,7 @@ const XR_SESSION_OPTIONS: XRSessionInit = {
 };
 let participantId = getParticipantId();
 const roomIdentityTab = createRoomIdentityTab(sessionStorage, roomId);
+const roomReturnTab = createRoomReturnTab(sessionStorage, roomId);
 // Read before anything else touches the address: the one-time portal grant code leaves the URL here.
 const pendingRoomGrant = takeRoomGrant(window.location, window.history, sessionStorage, roomId);
 let activeIdentityProtocolVersion: 2 | null = null;
@@ -359,6 +365,34 @@ const guestEnterRoomButton = mustElement<HTMLButtonElement>("#guest-enter-room")
 const guestCompatibilityWarningEl = mustElement<HTMLDivElement>("#guest-compatibility-warning");
 const guestControlsHintEl = mustElement<HTMLDivElement>("#guest-controls-hint");
 const guestOnboardingStatusEl = mustElement<HTMLDivElement>("#guest-onboarding-status");
+const guestEnterVrButton = mustElement<HTMLButtonElement>("#guest-enter-vr");
+const leaveSpaceButton = mustElement<HTMLButtonElement>("#leave-space");
+const spaceLeftEl = mustElement<HTMLElement>("#space-left");
+const spaceLeftRejoinButton = mustElement<HTMLButtonElement>("#space-left-rejoin");
+const roomAccessEndedBackLink = mustElement<HTMLAnchorElement>("#room-access-ended-back");
+const vrReadyEl = mustElement<HTMLElement>("#vr-ready");
+const vrReadyEnterButton = mustElement<HTMLButtonElement>("#vr-ready-enter");
+const vrReadyStayButton = mustElement<HTMLButtonElement>("#vr-ready-stay");
+const languageSelect = mustElement<HTMLSelectElement>("#language-select");
+const guestLanguageSelect = mustElement<HTMLSelectElement>("#guest-language-select");
+setLocale(resolveRuntimeLocale({
+  stored: (() => { try { return sessionStorage.getItem(LOCALE_STORAGE_KEY); } catch { return null; } })(),
+  query: query.get("lang"), cookie: document.cookie, languages: navigator.languages ?? [navigator.language]
+}));
+translateStaticText(document);
+roomNameEl.textContent = t("room.loading");
+bindLanguageSwitch(languageSelect, () => sessionStorage);
+bindLanguageSwitch(guestLanguageSelect, () => sessionStorage);
+// The status line keeps its source, so a language switch renders it again.
+let statusSource: string | LocalizedText = { key: "status.connecting" };
+onLocaleChange(() => {
+  translateStaticText(document);
+  setStatus(statusSource);
+  updateVrButtonState();
+  syncAudioControls();
+  if (!guestOnboardingEl.hidden) renderGuestOnboarding();
+  if (!roomAccessEndedEl.hidden && roomAccessEndedEl.dataset.reason) showRoomEnded(roomAccessEndedEl.dataset.reason);
+});
 const sceneAttributionsPanelEl = mustElement<HTMLDivElement>("#scene-attributions");
 const sceneAttributionsListEl = mustElement<HTMLUListElement>("#scene-attributions-list");
 const spaceSelect = mustElement<HTMLSelectElement>("#space-select");
@@ -730,6 +764,7 @@ let syntheticXrState: {
   rayDirection: { x: number; y: number; z: number };
   axes: { moveX: number; moveY: number; turnX: number; turnY: number };
   triggerPressed: boolean;
+  menuPressed: boolean;
   rayVisible: boolean;
 } | null = null;
 let activeSceneBundleRoot: THREE.Object3D | null = null;
@@ -1260,6 +1295,9 @@ let surfaceAudioCommandPending = false;
 let surfaceAudioPendingEnabled: boolean | null = null;
 const pointerNdc = new THREE.Vector2(0, 0);
 const interactionRaycaster = new THREE.Raycaster();
+const xrMenuView = createXrMenuView();
+scene.add(xrMenuView.group);
+let xrMenuState = createXrMenuState();
 const surfaceInputRaycaster = new THREE.Raycaster();
 const remoteBrowserVrKeyboardRaycaster = new THREE.Raycaster();
 const cameraWorldPosition = new THREE.Vector3();
@@ -1737,11 +1775,24 @@ function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["acc
 }
 
 function disableRuntimeForSessionBlock(reason: string): void {
+  const message = describeSessionControlReason(reason);
+  showRoomEnded(reason);
+  stopRoomSession("session_blocked", "room_session_blocked");
+  setStatus(message);
+  guestAccessLineEl.textContent = message;
+  debugState.issueCode = "room_access_denied";
+  debugState.issueSeverity = "warn";
+  debugState.degradedMode = "access_denied";
+  debugState.lastRecoveryAction = reason;
+  debugState.hostControls.lastReason = reason;
+  renderHostControls(message);
+}
+
+/** Stops everything this tab runs for the room: plugins, room-state, media, surfaces; the scene stays. */
+function stopRoomSession(mediaReason: string, commandReason: string): void {
   roomPluginTokenBound.clear();
   try { roomPluginRuntime.stop(); if (roomPluginAuthorReady) roomPluginAuthor.stop(); } catch { /* Plugin cleanup must not prevent the core session block. */ }
   sessionControlPoller.stop();
-  const message = describeSessionControlReason(reason);
-  showRoomAccessEnded(roomAccessEndedEl, reason);
   sessionControlBlocked = true;
   meetingTools?.invalidate();
   clearRoomStateReconnect();
@@ -1758,20 +1809,13 @@ function disableRuntimeForSessionBlock(reason: string): void {
   deferredScreenShareStops.clear();
   passiveMediaRequired = false;
   audioSessionJoined = false;
-  if (livekitRoom) void disconnectMediaRoom(livekitRoom, "session_blocked").catch(() => undefined);
-  mediaSurfaceCommands.rejectAll("room_session_blocked");
+  if (livekitRoom) void disconnectMediaRoom(livekitRoom, mediaReason).catch(() => undefined);
+  mediaSurfaceCommands.rejectAll(commandReason);
   cancelPendingNotes();
   syncNotesAccessUi();
   invalidateDocumentLibrary();
   clearDocumentFeedback();
   renderDocumentsUi();
-  setStatus(message);
-  guestAccessLineEl.textContent = message;
-  debugState.issueCode = "room_access_denied";
-  debugState.issueSeverity = "warn";
-  debugState.degradedMode = "access_denied";
-  debugState.lastRecoveryAction = reason;
-  debugState.hostControls.lastReason = reason;
   for (const surfaceId of Array.from(mediaSurfaceViews.keys())) {
     closeMediaSurfaceRuntimes(surfaceId);
   }
@@ -1780,7 +1824,77 @@ function disableRuntimeForSessionBlock(reason: string): void {
   startShareButton.disabled = true;
   stopShareButton.disabled = true;
   syncWhiteboardControls();
-  renderHostControls(message);
+}
+
+function showRoomEnded(reason: string): void {
+  if (!showRoomAccessEnded(roomAccessEndedEl, reason)) return;
+  const back = roomReturnTab.urlFor(currentLocale());
+  roomAccessEndedBackLink.hidden = !back;
+  if (back) roomAccessEndedBackLink.href = back;
+}
+
+let spaceLeaving = false;
+let roomEntered = false;
+
+/**
+ * "Leave the space": the participant goes, not only the headset view. Media and room-state stop and the tab returns to
+ * the portal page the grant came from; without one it shows that the space was left and can be entered again.
+ */
+async function leaveSpace(): Promise<void> {
+  // Before the room is entered there is nothing to leave yet. A room that paused or removed the participant can still
+  // be left: the way back works, there is just no session to stop.
+  if (spaceLeaving || !roomEntered) return;
+  spaceLeaving = true;
+  // No presence is published from here on, so nothing re-creates it after the DELETE.
+  runtimeBootReady = false;
+  leaveSpaceButton.disabled = true;
+  vrReadyEl.hidden = true;
+  setStatus({ key: "status.leaving" });
+  const returnUrl = roomReturnTab.urlFor(currentLocale());
+  const token = roomStateAccessToken;
+  debugState.leave = { requested: true, returnUrl, steps: [] };
+  for (const step of planLeaveSpace({ xrPresenting: Boolean(currentXrSession), sessionActive: !sessionControlBlocked, admitted: Boolean(token), returnUrl })) {
+    debugState.leave.steps.push(step);
+    if (step === "end_xr") {
+      await currentXrSession?.end().catch(() => undefined);
+    } else if (step === "remove_presence") {
+      // An update already on its way normally lands first, then the DELETE, which outlives the page (keepalive). The
+      // waits are bounded: a slow API must not keep the participant on the page. An update delayed past them can bring
+      // the presence back, but nothing renews it, so it lapses with the API presence TTL (15 s).
+      const deadline = Date.now() + 4000;
+      while (apiPresenceSyncInFlight && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25));
+      await Promise.race([removePresence(apiBaseUrl, roomId, participantId, token).catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 1500))]);
+    } else if (step === "stop_session") {
+      stopRoomSession("left_space", "left_space");
+      disconnectLocalAudioTrack();
+      stopMockAudioSource();
+      microphoneEnabled = false;
+      debugState.media.audioJoined = false;
+      debugState.media.publishedAudio = false;
+    } else if (step === "navigate" && returnUrl) {
+      window.location.assign(returnUrl);
+    } else if (step === "show_left") {
+      spaceLeftEl.hidden = false;
+      spaceLeftRejoinButton.focus();
+    }
+  }
+}
+
+leaveSpaceButton.addEventListener("click", () => { void leaveSpace(); });
+// Back after leaving may restore this page from the back/forward cache with its session stopped: enter again instead.
+window.addEventListener("pageshow", (event) => { if (event.persisted && spaceLeaving) window.location.reload(); });
+spaceLeftRejoinButton.addEventListener("click", () => { window.location.reload(); });
+vrReadyStayButton.addEventListener("click", () => { vrReadyEl.hidden = true; });
+vrReadyEnterButton.addEventListener("click", () => {
+  vrReadyEl.hidden = true;
+  void toggleXrSession();
+});
+
+/** After a preflight choice of VR: the room is ready, one press starts the immersive session (it needs a user gesture). */
+function offerVrEntryIfChosen(): void {
+  if (!preflightVrChosen || !runtimeFlags.enterVr || !getEnterVrVisibility(xrSupport, runtimeFlags.enterVr) || currentXrSession) return;
+  vrReadyEl.hidden = false;
+  vrReadyEnterButton.focus();
 }
 
 const sessionControlPoller = createSessionControlPoller({ intervalMs: SESSION_CONTROL_REFRESH_INTERVAL_MS,
@@ -2509,15 +2623,20 @@ function confirmInteractionTarget(frameContext: RuntimeFrameContext): void {
   forcedTestInteractionSeatId = null;
 }
 
+/** Ends XR drawing without a stroke: the pencil is hidden and an unfinished stroke is dropped. */
+function releaseWhiteboardXrDrawInput(frameContext: RuntimeFrameContext): void {
+  if (xrWhiteboardPointerActive) {
+    cancelWhiteboardPreview();
+  }
+  xrWhiteboardPointerActive = false;
+  lastXrWhiteboardHit = null;
+  syncWhiteboardPencilVisuals(frameContext, false);
+}
+
 function updateWhiteboardXrDrawInput(frameContext: RuntimeFrameContext): void {
   const canDraw = canUseWhiteboardXrDrawInput(frameContext);
   if (!canDraw) {
-    if (xrWhiteboardPointerActive) {
-      cancelWhiteboardPreview();
-    }
-    xrWhiteboardPointerActive = false;
-    lastXrWhiteboardHit = null;
-    syncWhiteboardPencilVisuals(frameContext, false);
+    releaseWhiteboardXrDrawInput(frameContext);
     return;
   }
   const hit = resolveDebugSurfaceHitFromXrPencil(frameContext, "xr-controller");
@@ -3287,7 +3406,8 @@ function renderAudioDeviceOptions(select: HTMLSelectElement, devices: MediaDevic
   select.replaceChildren();
   const defaultOption = document.createElement("option");
   defaultOption.value = "default";
-  defaultOption.textContent = `System default ${fallbackLabel.toLowerCase()}`;
+  defaultOption.dataset.i18n = fallbackLabel === "Microphone" ? "audio.defaultMicrophone" : "audio.defaultSpeaker";
+  defaultOption.textContent = t(defaultOption.dataset.i18n as "audio.defaultMicrophone" | "audio.defaultSpeaker");
   defaultOption.selected = selectedId === "default" || !devices.some((device) => device.deviceId === selectedId);
   select.appendChild(defaultOption);
   devices.forEach((device, index) => {
@@ -3311,32 +3431,28 @@ function syncAudioControls(): void {
   const audioUnsupported = runtimeFlags.audioJoin && !audioMockEnabled && !browserMediaCapabilities.audioInput.supported;
   if (!runtimeFlags.audioJoin) {
     joinAudioButton.disabled = true;
-    joinAudioButton.textContent = "Audio Disabled";
-    joinAudioButton.title = "Audio is disabled for this runtime";
+    joinAudioButton.textContent = t("audio.disabled");
+    joinAudioButton.title = t("audio.disabledTitle");
     muteButton.disabled = true;
-    muteButton.textContent = "Mute";
+    muteButton.textContent = t("audio.mute");
     joinMutedCheckbox.disabled = true;
     return;
   }
   if (audioUnsupported) {
     joinAudioButton.disabled = true;
-    joinAudioButton.textContent = "Audio Unsupported";
-    joinAudioButton.title = `Microphone unsupported: ${describeMediaCapabilityReason(browserMediaCapabilities.audioInput.reason)}`;
+    joinAudioButton.textContent = t("audio.unsupported");
+    joinAudioButton.title = t("audio.unsupportedTitle", { reason: describeMediaCapabilityReason(browserMediaCapabilities.audioInput.reason) });
     muteButton.disabled = true;
-    muteButton.textContent = "Mute";
+    muteButton.textContent = t("audio.mute");
     joinMutedCheckbox.disabled = true;
     return;
   }
   joinAudioButton.disabled = audioActionInFlight || mediaRoomTransitionInFlight;
-  joinAudioButton.textContent = audioSessionJoined ? "Leave Audio" : joinMutedPreference ? "Join Audio Muted" : "Join Audio";
-  joinAudioButton.title = audioSessionJoined
-    ? "Leave the audio session"
-    : joinMutedPreference
-      ? "Connect without publishing your microphone; press Unmute to speak"
-      : "Connect and publish your microphone";
+  joinAudioButton.textContent = t(audioSessionJoined ? "audio.leave" : joinMutedPreference ? "audio.joinMuted" : "audio.join");
+  joinAudioButton.title = t(audioSessionJoined ? "audio.leaveTitle" : joinMutedPreference ? "audio.joinMutedTitle" : "audio.joinTitle");
   muteButton.disabled = audioActionInFlight || mediaRoomTransitionInFlight || !audioSessionJoined || !livekitRoom;
-  muteButton.textContent = microphoneEnabled ? "Mute" : "Unmute";
-  muteButton.title = microphoneEnabled ? "Mute your microphone" : "Unmute your microphone";
+  muteButton.textContent = t(microphoneEnabled ? "audio.mute" : "audio.unmute");
+  muteButton.title = t(microphoneEnabled ? "audio.muteTitle" : "audio.unmuteTitle");
   joinMutedCheckbox.disabled = audioActionInFlight || mediaRoomTransitionInFlight || audioSessionJoined;
 }
 
@@ -4553,6 +4669,15 @@ function resolveGuestOnboardingMode(): "desktop" | "mobile" | "vr" {
   return presenceXrMockEnabled ? "vr" : resolveJoinMode(navigator.userAgent);
 }
 
+// The preflight status keeps its source, so a language switch renders it again.
+let guestOnboardingStatus: LocalizedText | string = { key: "onboarding.ready" };
+let preflightVrChosen = false;
+
+function setGuestOnboardingStatus(status: LocalizedText | string): void {
+  guestOnboardingStatus = status;
+  guestOnboardingStatusEl.textContent = renderText(status);
+}
+
 function renderGuestOnboarding(): void {
   const mode = resolveGuestOnboardingMode();
   const warnings = formatGuestCompatibilityWarnings({
@@ -4561,23 +4686,26 @@ function renderGuestOnboarding(): void {
     audioInputSupported: audioMockEnabled || browserMediaCapabilities.audioInput.supported,
     screenShareSupported: shareMockEnabled || browserMediaCapabilities.screenShare.supported
   });
-  guestNameInput.value = storedDisplayName ?? displayName;
   guestControlsHintEl.textContent = formatGuestControlsHint(mode);
   guestCompatibilityWarningEl.textContent = warnings.length > 0
-    ? `Compatibility warning: ${warnings.join(" ")}`
-    : "Compatibility: this browser can enter the room.";
+    ? t("onboarding.compatibilityWarning", { warnings: warnings.join(" ") })
+    : t("onboarding.compatibilityOk");
+  setGuestOnboardingStatus(guestOnboardingStatus);
+  // Direct VR entry is offered only where an immersive session can start; the room flag is checked after boot.
+  guestEnterVrButton.hidden = !xrSupport.canEnterVr;
   debugState.guestOnboarding.required = true;
   debugState.guestOnboarding.controlsHint = guestControlsHintEl.textContent;
   debugState.guestOnboarding.warnings = warnings;
   debugState.guestOnboarding.joinMuted = guestJoinMutedCheckbox.checked;
 }
 
+// The microphone is asked for only here, on the participant's own action; entering never asks for it.
 async function checkGuestMicrophone(): Promise<boolean> {
   guestCheckMicrophoneButton.disabled = true;
-  guestOnboardingStatusEl.textContent = "Checking microphone permission...";
+  setGuestOnboardingStatus({ key: "onboarding.checkingMicrophone" });
   try {
     if (audioMockEnabled) {
-      guestOnboardingStatusEl.textContent = "Microphone check passed in mock mode.";
+      setGuestOnboardingStatus({ key: "onboarding.microphoneMock" });
       debugState.guestOnboarding.audioMode = "microphone_ok";
       return true;
     }
@@ -4590,23 +4718,27 @@ async function checkGuestMicrophone(): Promise<boolean> {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     stream.getTracks().forEach((track) => track.stop());
     await refreshAudioDevices(false);
-    guestOnboardingStatusEl.textContent = "Microphone permission granted. You can still join muted.";
+    setGuestOnboardingStatus({ key: "onboarding.microphoneGranted" });
     debugState.guestOnboarding.audioMode = "microphone_ok";
     return true;
   } catch (error) {
     console.warn("guest_microphone_check_failed", error);
-    guestOnboardingStatusEl.textContent = "Microphone permission denied or unavailable. You can enter without audio.";
+    const failure = classifyMicrophoneCheckError(error);
+    setGuestOnboardingStatus({ key: microphoneCheckFailureMessage(failure) });
+    // Without a microphone the room is entered muted; the participant can still listen.
+    guestJoinMutedCheckbox.checked = true;
     debugState.guestOnboarding.audioMode = "microphone_denied";
+    debugState.guestOnboarding.microphoneFailure = failure;
     return false;
   } finally {
     guestCheckMicrophoneButton.disabled = false;
   }
 }
 
-function completeGuestOnboarding(options: { withoutAudio: boolean; resolve: () => void }): void {
+function completeGuestOnboarding(options: { withoutAudio: boolean; vr?: boolean; resolve: () => void }): void {
   const validation = validateGuestDisplayName(guestNameInput.value);
   if (!validation.accepted) {
-    guestOnboardingStatusEl.textContent = validation.error ?? "Enter a display name.";
+    setGuestOnboardingStatus({ key: validation.errorKey ?? "onboarding.nameTooShort" });
     guestNameInput.focus();
     return;
   }
@@ -4616,10 +4748,12 @@ function completeGuestOnboarding(options: { withoutAudio: boolean; resolve: () =
   guestJoinMutedCheckbox.checked = joinMutedPreference;
   localStorage.setItem("vrata.displayName", displayName);
   templatePreferences.setJoinMuted(joinMutedPreference);
+  preflightVrChosen = Boolean(options.vr);
   debugState.guestOnboarding.completed = true;
   debugState.guestOnboarding.displayNameProvided = true;
   debugState.guestOnboarding.joinMuted = joinMutedPreference;
   debugState.guestOnboarding.audioMode = options.withoutAudio ? "without_audio" : debugState.guestOnboarding.audioMode;
+  debugState.guestOnboarding.vrChosen = preflightVrChosen;
   guestOnboardingEl.hidden = true;
   options.resolve();
 }
@@ -4640,15 +4774,18 @@ async function waitForGuestOnboardingIfNeeded(): Promise<void> {
     return;
   }
 
+  await resolveRuntimeXrSupport();
+  guestNameInput.value = storedDisplayName ?? displayName;
   renderGuestOnboarding();
   guestOnboardingEl.hidden = false;
-  setStatus("Pre-join ready");
+  setStatus({ key: "status.preJoinReady" });
   await new Promise<void>((resolve) => {
     guestCheckMicrophoneButton.onclick = () => {
       void checkGuestMicrophone();
     };
     guestEnterRoomButton.onclick = () => completeGuestOnboarding({ withoutAudio: false, resolve });
     guestEnterWithoutAudioButton.onclick = () => completeGuestOnboarding({ withoutAudio: true, resolve });
+    guestEnterVrButton.onclick = () => completeGuestOnboarding({ withoutAudio: false, vr: true, resolve });
     guestNameInput.onkeydown = (event) => {
       if (event.key === "Enter") {
         completeGuestOnboarding({ withoutAudio: false, resolve });
@@ -4688,21 +4825,21 @@ function updateVrButtonState(): void {
   vrButton.hidden = false;
   if (!getEnterVrVisibility(xrSupport, runtimeFlags.enterVr)) {
     vrButton.disabled = true;
-    vrButton.textContent = "VR unavailable";
+    vrButton.textContent = t("vr.unavailable");
     return;
   }
 
   vrButton.disabled = debugState.xrSession.sessionState === "entering" || debugState.xrSession.sessionState === "exiting";
   if (debugState.xrSession.sessionState === "entering") {
-    vrButton.textContent = "Starting VR";
+    vrButton.textContent = t("vr.starting");
   } else if (debugState.xrSession.sessionState === "exiting") {
-    vrButton.textContent = "Exiting VR";
+    vrButton.textContent = t("vr.exiting");
   } else if (currentXrSession || renderer.xr.isPresenting) {
-    vrButton.textContent = "Exit VR";
+    vrButton.textContent = t("vr.exit");
   } else if (debugState.xrSession.sessionState === "failed") {
-    vrButton.textContent = "Retry VR";
+    vrButton.textContent = t("vr.retry");
   } else {
-    vrButton.textContent = "Enter VR";
+    vrButton.textContent = t("vr.enter");
   }
 }
 
@@ -4875,7 +5012,7 @@ const mediaSurfaceTestControls = createMediaSurfaceTestControls({
     seatingController.forceSeated(seatAnchor.id);
     syncSeatDebugState();
     syncSeatStateFromOccupancy();
-    setStatus(`Seated at ${seatAnchor.label ?? seatAnchor.id}`);
+    setStatus({ key: "status.seatedAt", params: { seat: seatAnchor.label ?? seatAnchor.id } });
     return true;
   },
   requestSeatClaimById: (seatId: string) => {
@@ -4998,6 +5135,7 @@ const mediaSurfaceTestControls = createMediaSurfaceTestControls({
         turnY: state.axes?.turnY ?? 0
       },
       triggerPressed: state.triggerPressed ?? false,
+      menuPressed: state.menuPressed ?? false,
       rayVisible: state.rayVisible ?? false
     } : null;
     return true;
@@ -5013,10 +5151,11 @@ const mediaSurfaceTestControls = createMediaSurfaceTestControls({
 };
 (window as Window & { __NOAH_TEST__?: unknown }).__NOAH_TEST__ = (window as Window & { __VRATA_TEST__?: unknown }).__VRATA_TEST__;
 
-function setStatus(message: string): void {
-  if (runtimeSessionGate.reason) message = describeIdentityRequirement(runtimeSessionGate.reason);
-  statusLineEl.textContent = message;
-  debugState.statusLine = message;
+function setStatus(message: string | LocalizedText): void {
+  statusSource = message;
+  const text = runtimeSessionGate.reason ? describeIdentityRequirement(runtimeSessionGate.reason) : renderText(message);
+  statusLineEl.textContent = text;
+  debugState.statusLine = text;
 }
 
 const { renderDebugPanel, reportDiagnostics, reportUnhandledRuntimeError } = createRuntimeDiagnostics({
@@ -5189,6 +5328,9 @@ function applyIssue(issue: RuntimeIssue, input: {
   roomStateLabel?: string;
   updateStatus?: boolean;
 }): void {
+  // A stopped session (paused, ended, removed, left) keeps its own status: a request that fails late because of the stop
+  // must not turn it into "realtime unavailable".
+  if (sessionControlBlocked) return;
   if (input.roomStateLabel) {
     setRoomStateStatus(input.roomStateLabel);
   }
@@ -5201,14 +5343,16 @@ function applyIssue(issue: RuntimeIssue, input: {
     roomStateMode: input.roomStateMode,
     lastRecoveryAction: input.lastRecoveryAction,
     incrementRetry: input.incrementRetry
-  }), input.updateStatus ?? true);
+  }), false);
+  if (input.updateStatus ?? true) setStatus({ key: issue.messageKey });
 }
 
-function clearIssue(statusLine: string): void {
-  commitRuntimeUiState(clearRuntimeIssueState(runtimeUiState, statusLine));
+function clearIssue(statusLine: string | LocalizedText): void {
+  commitRuntimeUiState(clearRuntimeIssueState(runtimeUiState, renderText(statusLine)), false);
+  setStatus(statusLine);
 }
 
-function clearAudioIssue(statusLine: string): void {
+function clearAudioIssue(statusLine: string | LocalizedText): void {
   if (runtimeUiState.issueCode === "mic_denied" || runtimeUiState.issueCode === "no_audio_device" || runtimeUiState.issueCode === "audio_unsupported" || runtimeUiState.issueCode === "livekit_failed" || runtimeUiState.issueCode === "media_network_blocked") {
     clearIssue(statusLine);
   } else {
@@ -5272,7 +5416,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       setRoomStateStatus("Room-state: connected");
       void flushDeferredScreenShareStops();
       if (runtimeUiState.issueCode === "room_state_failed") {
-        clearIssue(debugState.audioState === "connected-passive" ? `Joined as ${displayName}` : debugState.statusLine);
+        clearIssue(debugState.audioState === "connected-passive" ? { key: "status.joinedAs", params: { name: displayName } } : statusSource);
       }
       void reportDiagnostics("room_state_connected");
       if (reopened) {
@@ -5339,13 +5483,13 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
         roomSeatOccupancy = applyAcceptedSeatClaimToOccupancy(roomSeatOccupancy, { result, participantId });
         clearSeatReclaimRetry();
         syncSeatStateFromOccupancy();
-        setStatus(`Seated at ${result.seatId}`);
+        setStatus({ key: "status.seatedAt", params: { seat: result.seatId } });
         return;
       }
       seatingController.settleRejectedClaim(result);
       clearSeatReclaimRetry();
       syncSeatDebugState();
-      setStatus(result.occupantId ? `Seat occupied by ${result.occupantId}` : "Seat unavailable");
+      setStatus(result.occupantId ? { key: "status.seatOccupied", params: { occupant: result.occupantId } } : { key: "status.seatUnavailable" });
       roomPluginRuntime.seatingChanged();
     },
     onSeatReleaseResult: (result) => {
@@ -6237,6 +6381,7 @@ function sampleRuntimeFrameContext(deltaSeconds: number, nowMs: number): Runtime
           sanitizedAxes: resolved.sanitizedAxes,
           rawAxes: syntheticXrState.axes,
           triggerPressed,
+          menuPressed: syntheticXrState.menuPressed,
           rayVisibleLatched: resolved.rayVisibleLatched || syntheticXrState.rayVisible
         }
       };
@@ -6274,6 +6419,8 @@ function sampleRuntimeFrameContext(deltaSeconds: number, nowMs: number): Runtime
         sanitizedAxes: resolved.sanitizedAxes,
         rawAxes: xrInput.axes,
         triggerPressed,
+        // B or Y (xr-standard button 5) on either controller.
+        menuPressed: inputSources.some((source) => Boolean(source.gamepad?.buttons?.[5]?.pressed)),
         rayVisibleLatched: resolved.rayVisibleLatched
       }
     };
@@ -6325,6 +6472,7 @@ function updateMovement(delta: number, frameContext: RuntimeFrameContext): void 
 }
 
 async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): Promise<void> {
+  if (spaceLeaving) return;
   const pose = localPoseController.getPose();
   const useTrackedHead = renderer.xr.isPresenting && !presenceXrMockEnabled;
   const worldPosition = useTrackedHead ? camera.getWorldPosition(new THREE.Vector3()) : resolveNonXrHeadWorldPosition(pose);
@@ -6884,7 +7032,7 @@ function handleAudioActionError(error: unknown, lastRecoveryAction: string): voi
   muteButton.disabled = true;
   if (issue.code === "audio_unsupported") {
     joinAudioButton.disabled = true;
-    joinAudioButton.textContent = "Audio Unsupported";
+    joinAudioButton.textContent = t("audio.unsupported");
     joinAudioButton.title = `Microphone unsupported: ${describeMediaCapabilityReason(browserMediaCapabilities.audioInput.reason)}`;
   } else {
     syncAudioControls();
@@ -6923,7 +7071,7 @@ async function joinAudio(): Promise<void> {
 
   clearMediaRoomIdleDisconnect();
   const startMuted = joinMutedPreference;
-  setStatus("Joining audio...");
+  setStatus({ key: "status.joiningAudio" });
   debugState.audioState = "joining";
   // An audio action already admitted before a promotion must settle on the base room before it is retired.
   const room = await ensureBaseMediaRoom();
@@ -6934,7 +7082,7 @@ async function joinAudio(): Promise<void> {
   syncWhiteboardControls();
   syncLocalAudioPresence();
   syncAudioControls();
-  clearAudioIssue(startMuted ? "Joined muted — press Unmute to speak" : "Audio connected");
+  clearAudioIssue(startMuted ? { key: "status.joinedMuted" } : { key: "status.audioConnected" });
   debugState.audioState = startMuted ? "muted" : "connected";
   void reportDiagnostics(startMuted ? "audio_joined_muted" : "audio_connected");
 }
@@ -6967,10 +7115,10 @@ async function leaveAudio(): Promise<void> {
     await runCleanup("unpublish", () => unpublishLocalMicrophoneTrack(room));
   }
   muteButton.disabled = true;
-  muteButton.textContent = "Mute";
-  joinAudioButton.textContent = "Join Audio";
+  muteButton.textContent = t("audio.mute");
+  joinAudioButton.textContent = t("audio.join");
   joinAudioButton.title = "Publish your microphone";
-  clearAudioIssue("Audio left");
+  clearAudioIssue({ key: "status.audioLeft" });
   debugState.audioState = "not_joined";
   reconcileMediaRoomIdleDisconnect(room, "audio_left_idle");
   syncLocalAudioPresence();
@@ -6986,7 +7134,7 @@ async function toggleLocalMute(): Promise<void> {
   await setLocalMicrophoneEnabled(livekitRoom, nextEnabled);
   syncLocalAudioPresence();
   syncAudioControls();
-  setStatus(microphoneEnabled ? "Audio live" : "Muted");
+  setStatus(microphoneEnabled ? { key: "status.audioLive" } : { key: "status.muted" });
   debugState.audioState = microphoneEnabled ? "live" : "muted";
   void reportDiagnostics(microphoneEnabled ? "audio_unmuted" : "audio_muted");
 }
@@ -7681,8 +7829,11 @@ renderer.setAnimationLoop(() => {
   if (recentFrameBudgetMs.length > 60) {
     recentFrameBudgetMs.splice(0, recentFrameBudgetMs.length - 60);
   }
-  updateMovement(delta, frameContext);
-  updateWhiteboardXrDrawInput(frameContext);
+  // The XR menu takes this frame's input when it is open or opens now: locomotion sees a resting sample, drawing stops.
+  const xrMenuOwnsInput = xrMenuOwnsFrame(xrMenuState, { presenting: frameContext.source === "xr", menuPressed: frameContext.xr?.menuPressed ?? false });
+  updateMovement(delta, xrMenuOwnsInput ? withoutLocomotionInput(frameContext) : frameContext);
+  if (xrMenuOwnsInput) releaseWhiteboardXrDrawInput(frameContext);
+  else updateWhiteboardXrDrawInput(frameContext);
   applyBotPose(nowMs / 1000);
   updateLocalPresenceDiagnostics();
   updateAvatarLipsync(delta);
@@ -7690,7 +7841,9 @@ renderer.setAnimationLoop(() => {
   updateMediaDiagnostics();
   updateLocalAvatar(delta, frameContext);
   remoteAvatarRuntime.update(delta, debugState);
-  if (!updateRemoteBrowserXrInput(frameContext)) {
+  // The menu's frames, including the one where a button closes it, reach neither the remote browser nor the room ray.
+  const xrMenuOwnsRay = updateXrMenu(frameContext);
+  if (!xrMenuOwnsInput && !xrMenuOwnsRay && !updateRemoteBrowserXrInput(frameContext)) {
     updateInteractionRayState(getInteractionFrameInput(frameContext));
   }
   updateSeatMarkerVisuals(nowMs / 1000);
@@ -7761,6 +7914,61 @@ renderer.setAnimationLoop(() => {
   }
 });
 
+/** The XR menu for this frame; true when it owns the controller ray, so no seat or floor target is resolved. */
+function updateXrMenu(frameContext: RuntimeFrameContext): boolean {
+  let ray: THREE.Ray | null = null;
+  let hit: ReturnType<typeof resolveXrMenuHit> = null;
+  if (xrMenuState.open) {
+    ray = resolveRuntimeInteractionRay(getInteractionFrameInput(frameContext, { forceXrAimRay: true }))?.ray ?? null;
+    hit = ray ? resolveXrMenuHit(ray, interactionRaycaster, xrMenuView.buttons) : null;
+  }
+  const step = stepXrMenu(xrMenuState, {
+    presenting: frameContext.source === "xr",
+    menuPressed: frameContext.xr?.menuPressed ?? false,
+    confirm: frameContext.intents.confirmInteraction,
+    hoveredAction: hit?.action ?? null,
+    nowMs: frameContext.nowMs
+  });
+  xrMenuState = step.state;
+  if (step.opened) {
+    xrMenuView.placeInFront(camera);
+    clearInteractionVisuals();
+    const head = camera.getWorldPosition(new THREE.Vector3());
+    debugState.xrMenu.head = { x: Number(head.x.toFixed(3)), y: Number(head.y.toFixed(3)), z: Number(head.z.toFixed(3)) };
+    debugState.xrMenu.buttons = xrMenuView.buttonCenters();
+  }
+  xrMenuView.setVisible(xrMenuState.open);
+  if (xrMenuState.open) {
+    const audio = { available: runtimeFlags.audioJoin && (audioMockEnabled || browserMediaCapabilities.audioInput.supported), joined: audioSessionJoined, microphoneEnabled };
+    const labels = Object.fromEntries(XR_MENU_ACTIONS.map((action) => [action, t(xrMenuButtonLabel(action, xrMenuState, audio))])) as Record<XrMenuAction, string>;
+    xrMenuView.render({ title: t("leave.menuTitle"), labels, hovered: hit?.action ?? null, armed: xrMenuState.leaveArmedUntilMs !== null, ray, hitDistance: hit?.distance ?? null });
+  }
+  debugState.xrMenu.open = xrMenuState.open;
+  debugState.xrMenu.hovered = hit?.action ?? null;
+  debugState.xrMenu.leaveArmed = xrMenuState.leaveArmedUntilMs !== null;
+  if (step.command) executeXrMenuCommand(step.command);
+  return xrMenuState.open || step.command !== null;
+}
+
+function executeXrMenuCommand(command: XrMenuCommand): void {
+  debugState.xrMenu.lastCommand = command.type;
+  if (command.type === "end_xr_session") {
+    // Back to the screen only: the session ends, the room, media and presence stay.
+    void currentXrSession?.end().catch(() => undefined);
+  } else if (command.type === "leave_space") {
+    void leaveSpace();
+  } else if (runtimeFlags.audioJoin) {
+    void performAudioAction(async () => {
+      if (!audioSessionJoined) {
+        await joinAudio();
+        if (audioSessionJoined && !microphoneEnabled) await toggleLocalMute();
+      } else {
+        await toggleLocalMute();
+      }
+    }).catch((error: unknown) => handleAudioActionError(error, "audio_xr_microphone_failed"));
+  }
+}
+
 async function main(): Promise<void> {
   templatePreferences.setTemplate(await fetchPublicTemplateSettings(apiBaseUrl, roomId));
   joinMutedPreference = templatePreferences.joinMuted();
@@ -7775,7 +7983,9 @@ async function main(): Promise<void> {
     try {
       if (previousIdentity && await pendingRoomGrant.wasSpent(grantCode)) pendingRoomGrant.clear();
       else {
-        roomIdentityTab.rememberIdentity((await exchangeRoomGrant(apiBaseUrl, roomId, grantCode, displayName)).identityCredential);
+        const exchanged = await exchangeRoomGrant(apiBaseUrl, roomId, grantCode, displayName);
+        roomIdentityTab.rememberIdentity(exchanged.identityCredential);
+        roomReturnTab.remember(exchanged.returnUrls);
         await pendingRoomGrant.markSpent(grantCode);
         pendingRoomGrant.clear();
       }
@@ -7921,6 +8131,12 @@ async function main(): Promise<void> {
     setRoomStateStatus("Room-state: fallback API");
     void reportDiagnostics("room_state_connect_failed");
   }
+  // From here the participant is in the room and may leave it. The rest of the boot loads the avatar and the scene
+  // locally and stops at the session check below once leaving has stopped the session.
+  if (!sessionControlBlocked) {
+    roomEntered = true;
+    leaveSpaceButton.disabled = false;
+  }
 
   if (avatarSandboxEnabled) {
     avatarPresetLabel.textContent = "Avatar Sandbox";
@@ -8054,7 +8270,7 @@ async function main(): Promise<void> {
     void ensureMediaRoom().then((room) => {
       passiveMediaRequired = transitionPassiveMediaOwnership(passiveMediaRequired, "startup-succeeded");
       reconcileMediaRoomIdleDisconnect(room, "passive_media_required");
-      clearAudioIssue(`Joined as ${displayName}`);
+      clearAudioIssue({ key: "status.joinedAs", params: { name: displayName } });
       debugState.audioState = "connected-passive";
       void reportDiagnostics("media_connected_passive");
     }).catch((error: unknown) => {
@@ -8147,6 +8363,7 @@ async function main(): Promise<void> {
   presenceAccumulator = 0;
   diagnosticsAccumulator = 0;
   runtimeBootReady = !sessionControlBlocked;
+  if (runtimeBootReady) offerVrEntryIfChosen();
   roomPluginRuntime.kick();
   roomPluginSeats.observe();
   roomPluginRuntime.seatingChanged();
@@ -8195,10 +8412,10 @@ void main().catch((error: unknown) => {
       try { roomIdentityTab.rememberWaiting(error.waitingCredential); } catch { /* invalid proof is never stored */ }
     }
     const message = describeRoomAccessError(error);
-    showRoomAccessEnded(roomAccessEndedEl, error.reason);
+    showRoomEnded(error.reason);
     setStatus(message);
     guestAccessLineEl.textContent = error.accessRequestId
-      ? `${message}. Request: ${error.accessRequestId}`
+      ? t("access.request", { message, requestId: error.accessRequestId })
       : message;
     debugState.issueCode = "room_access_denied";
     debugState.issueSeverity = error.status === 202 ? "warn" : "error";
@@ -8206,6 +8423,6 @@ void main().catch((error: unknown) => {
     debugState.lastRecoveryAction = error.requestId ? `access_request:${error.requestId}` : "access_denied";
     return;
   }
-  setStatus("Runtime failed to boot");
+  setStatus({ key: "status.bootFailed" });
   void reportDiagnostics("runtime_boot_failed");
 });

@@ -145,8 +145,44 @@ canvas {
 
 .guest-onboarding-card h1 {
   margin: 0;
-  font-size: clamp(2rem, 7vw, 3.7rem);
-  line-height: 0.98;
+  font-size: clamp(1.5rem, 5vw, 2.4rem);
+  line-height: 1.05;
+}
+
+.guest-onboarding-header,
+.room-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.room-actions {
+  margin-bottom: 8px;
+}
+
+.language-select {
+  color-scheme: dark;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+  padding: 6px 10px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.button-link {
+  flex: 1 1 150px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+  padding: 10px 14px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+  text-align: center;
+  text-decoration: none;
+}
+
+.button-link[hidden] {
+  display: none;
 }
 
 .guest-onboarding-copy,

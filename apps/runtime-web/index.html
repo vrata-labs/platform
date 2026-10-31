@@ -16,28 +16,35 @@
       </div>
     </dialog>
     <dialog id="session-upgrade-dialog" aria-labelledby="session-upgrade-title" aria-describedby="session-upgrade-message">
-      <h1 id="session-upgrade-title" tabindex="-1">Update required to rejoin this room</h1>
+      <h1 id="session-upgrade-title" tabindex="-1" data-i18n="upgrade.title">Update required to rejoin this room</h1>
       <p id="session-upgrade-message"></p>
-      <button id="session-upgrade-reload" type="button">Update and rejoin</button>
+      <button id="session-upgrade-reload" type="button" data-i18n="upgrade.reload">Update and rejoin</button>
     </dialog>
     <div id="app">
       <section id="guest-onboarding" class="guest-onboarding" hidden aria-labelledby="guest-onboarding-title">
         <div class="guest-onboarding-card">
-          <div class="brand">Vrata</div>
-          <h1 id="guest-onboarding-title">Join this room</h1>
-          <p class="guest-onboarding-copy">Set your display name, review device status, then enter. Enter without audio does not turn on your microphone. If Join muted is checked, press Unmute after Join Audio so others can hear you.</p>
-          <label for="guest-name-input">Display name</label>
-          <input id="guest-name-input" type="text" autocomplete="name" maxlength="40" placeholder="Your name" />
+          <div class="guest-onboarding-header">
+            <div class="brand">Vrata</div>
+            <select id="guest-language-select" class="language-select" data-i18n-aria-label="language.label" aria-label="Language">
+              <option value="ru">Русский</option>
+              <option value="en">English</option>
+            </select>
+          </div>
+          <h1 id="guest-onboarding-title" data-i18n="onboarding.title">Join this room</h1>
+          <p class="guest-onboarding-copy" data-i18n="onboarding.copy">Enter your name and choose how to join. Your microphone turns on only when you allow it.</p>
+          <label for="guest-name-input" data-i18n="onboarding.nameLabel">Display name</label>
+          <input id="guest-name-input" type="text" autocomplete="name" maxlength="40" placeholder="Your name" data-i18n-placeholder="onboarding.namePlaceholder" />
           <label class="surface-audio-toggle" for="guest-join-muted">
             <input id="guest-join-muted" type="checkbox" checked />
-            Join muted
+            <span data-i18n="onboarding.joinMuted">Join muted</span>
           </label>
           <div id="guest-compatibility-warning" class="guest-onboarding-status"></div>
           <div id="guest-controls-hint" class="guest-onboarding-hint"></div>
           <div class="guest-onboarding-actions">
-            <button id="guest-check-microphone" type="button">Check microphone</button>
-            <button id="guest-enter-without-audio" type="button">Enter without audio</button>
-            <button id="guest-enter-room" type="button">Enter room</button>
+            <button id="guest-check-microphone" type="button" data-i18n="onboarding.checkMicrophone">Check microphone</button>
+            <button id="guest-enter-without-audio" type="button" data-i18n="onboarding.enterWithoutAudio">Enter without audio</button>
+            <button id="guest-enter-room" type="button" data-i18n="onboarding.enterRoom">Enter room</button>
+            <button id="guest-enter-vr" type="button" hidden data-i18n="onboarding.enterVr">Enter in VR</button>
           </div>
           <div id="guest-onboarding-status" class="guest-onboarding-status" role="status" aria-live="polite">Ready to join.</div>
         </div>
@@ -47,6 +54,30 @@
           <div class="brand">Vrata</div>
           <h1 id="room-access-ended-title" data-room-access-ended-title>This room has ended</h1>
           <p class="guest-onboarding-copy" data-room-access-ended-message></p>
+          <div class="guest-onboarding-actions">
+            <a id="room-access-ended-back" class="button-link" hidden data-i18n="ended.back">Back to Vrata</a>
+          </div>
+        </div>
+      </section>
+      <section id="vr-ready" class="guest-onboarding" hidden aria-labelledby="vr-ready-title">
+        <div class="guest-onboarding-card">
+          <div class="brand">Vrata</div>
+          <h1 id="vr-ready-title" data-i18n="vrReady.title">The room is ready</h1>
+          <p class="guest-onboarding-copy" data-i18n="vrReady.message">Put on the headset and enter VR.</p>
+          <div class="guest-onboarding-actions">
+            <button id="vr-ready-enter" type="button" data-i18n="vr.enter">Enter VR</button>
+            <button id="vr-ready-stay" type="button" data-i18n="vrReady.stay">Stay on screen</button>
+          </div>
+        </div>
+      </section>
+      <section id="space-left" class="guest-onboarding" hidden aria-labelledby="space-left-title" role="status">
+        <div class="guest-onboarding-card">
+          <div class="brand">Vrata</div>
+          <h1 id="space-left-title" data-i18n="left.title">You left the space</h1>
+          <p class="guest-onboarding-copy" data-i18n="left.message">Audio and video are off. You can come back while the room is open.</p>
+          <div class="guest-onboarding-actions">
+            <button id="space-left-rejoin" type="button" data-i18n="left.rejoin">Return to the space</button>
+          </div>
         </div>
       </section>
       <details class="hud" open>
@@ -54,12 +85,19 @@
           <span class="brand">Vrata</span>
         </summary>
         <div class="hud-content">
-          <nav id="meeting-nav" class="meeting-nav" aria-label="Meeting tools">
-            <button id="meeting-nav-audio" type="button" aria-controls="meeting-audio">Audio</button>
-            <button id="meeting-nav-present" type="button" aria-controls="meeting-present">Present</button>
-            <button id="meeting-nav-board" type="button" aria-controls="meeting-board">Board</button>
-            <button id="meeting-nav-notes" type="button" aria-controls="meeting-notes">Notes</button>
-            <button id="meeting-nav-people" type="button" aria-controls="meeting-people">People</button>
+          <div class="room-actions">
+            <button id="leave-space" type="button" disabled data-i18n="leave.button">Leave the space</button>
+            <select id="language-select" class="language-select" data-i18n-aria-label="language.label" aria-label="Language">
+              <option value="ru">Русский</option>
+              <option value="en">English</option>
+            </select>
+          </div>
+          <nav id="meeting-nav" class="meeting-nav" aria-label="Meeting tools" data-i18n-aria-label="nav.label">
+            <button id="meeting-nav-audio" type="button" aria-controls="meeting-audio" data-i18n="nav.audio">Audio</button>
+            <button id="meeting-nav-present" type="button" aria-controls="meeting-present" data-i18n="nav.present">Present</button>
+            <button id="meeting-nav-board" type="button" aria-controls="meeting-board" data-i18n="nav.board">Board</button>
+            <button id="meeting-nav-notes" type="button" aria-controls="meeting-notes" data-i18n="nav.notes">Notes</button>
+            <button id="meeting-nav-people" type="button" aria-controls="meeting-people" data-i18n="nav.people">People</button>
           </nav>
           <p id="meeting-transition-status" class="meeting-tool-status" role="status" aria-live="polite" aria-busy="false"></p>
           <div class="room-meta">
@@ -202,32 +240,32 @@
           </div>
           </details>
           <details id="meeting-audio" class="meeting-panel" open>
-            <summary><h2>Audio</h2></summary>
+            <summary><h2 data-i18n="audio.heading">Audio</h2></summary>
             <p id="meeting-audio-status" class="meeting-tool-status"></p>
           <div id="primary-controls" class="controls">
             <button id="join-audio">Join Audio</button>
             <button id="toggle-mute" disabled>Mute</button>
-            <button id="stand-up" type="button" hidden>Stand up</button>
+            <button id="stand-up" type="button" hidden data-i18n="audio.standUp">Stand up</button>
           </div>
           <div class="audio-panel">
-            <label for="mic-select">Microphone</label>
+            <label for="mic-select" data-i18n="audio.microphone">Microphone</label>
             <select id="mic-select">
-              <option value="default">System default microphone</option>
+              <option value="default" data-i18n="audio.defaultMicrophone">System default microphone</option>
             </select>
             <label class="surface-audio-toggle" for="join-muted">
               <input id="join-muted" type="checkbox" />
-              Join muted
+              <span data-i18n="audio.joinMutedCheckbox">Join muted</span>
             </label>
             <div class="audio-meter-row">
-              <span>Mic level</span>
+              <span data-i18n="audio.micLevel">Mic level</span>
               <div class="audio-meter"><div id="mic-level-fill" class="audio-meter-fill"></div></div>
             </div>
-            <label for="speaker-select">Speaker</label>
+            <label for="speaker-select" data-i18n="audio.speaker">Speaker</label>
             <select id="speaker-select">
-              <option value="default">System default speaker</option>
+              <option value="default" data-i18n="audio.defaultSpeaker">System default speaker</option>
             </select>
             <div class="audio-meter-row">
-              <span>Speaker level</span>
+              <span data-i18n="audio.speakerLevel">Speaker level</span>
               <div class="audio-meter"><div id="speaker-level-fill" class="audio-meter-fill"></div></div>
             </div>
             <div id="audio-device-status" class="audio-device-status">Audio devices idle</div>
@@ -320,12 +358,12 @@
           <div id="xr-debug-panel" class="audio-device-status" hidden></div>
           <pre id="debug-panel" hidden></pre>
           <div class="help">
-            <div>WASD or arrows - move</div>
-            <div>Hold Shift - sprint</div>
-            <div>Drag mouse - look around</div>
-            <div>Mobile: left drag - move, right drag - look</div>
-            <div>Tap panel title - show or hide controls</div>
-            <div>VR: left stick move, right stick snap turn</div>
+            <div data-i18n="help.move">WASD or arrows - move</div>
+            <div data-i18n="help.sprint">Hold Shift - sprint</div>
+            <div data-i18n="help.look">Drag mouse - look around</div>
+            <div data-i18n="help.mobile">Mobile: left drag - move, right drag - look</div>
+            <div data-i18n="help.panel">Tap panel title - show or hide controls</div>
+            <div data-i18n="help.vr">VR: left stick move, right stick snap turn, B or Y - menu</div>
             <div>`?debug=1` shows diagnostics, `?bot=orbit` emulates second client</div>
             <div>`?avatarsandbox=1` opens the technical avatar sandbox</div>
           </div>

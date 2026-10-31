@@ -1,3 +1,4 @@
+import type { LocalizedText } from "./i18n/i18n.js";
 import type { RuntimeIssue } from "./runtime-errors.js";
 import type { RuntimeUiState } from "./runtime-state.js";
 
@@ -16,10 +17,10 @@ export function applyPostBootControls(input: {
   canStartScreenShare: boolean;
   shareMockEnabled: boolean;
   elements: RuntimeStartupElements;
-  setStatus(message: string): void;
+  setStatus(message: LocalizedText): void;
   setAudioStateDisabled(): void;
 }): void {
-  input.setStatus(`Joined as ${input.displayName}`);
+  input.setStatus({ key: "status.joinedAs", params: { name: input.displayName } });
   input.elements.startShareButton.disabled = !input.canStartScreenShare || (!input.runtimeFlags.screenShare && !input.shareMockEnabled);
   input.elements.joinAudioButton.disabled = !input.runtimeFlags.audioJoin;
   if (!input.runtimeFlags.audioJoin) {
