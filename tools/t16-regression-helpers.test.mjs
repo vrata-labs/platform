@@ -398,3 +398,50 @@ test("preinstalled seat-delivery observer counts only actual correlated replay a
   assert.equal(Socket.prototype.send, originalSend); assert.equal(Target.prototype.dispatchEvent, originalDispatch);
   assert.equal(window.__t16SeatDelivery, undefined); assert.equal(window.__t16SeatDeliveryCleanup, undefined);
 });
+
+test("actual Playwright mock keeps native receive distinct from delayed app dispatch on the same page clock", async () => {
+  const { installSeatAckObservation } = loadHelper("tests/e2e/seat-ack-observation.ts");
+  let now = 0;
+  const sockets = [], bindingCalls = [], delivered = [];
+  const context = vm.createContext({ URL, Blob, Uint8Array, crypto: require("node:crypto").webcrypto,
+    EventTarget, MessageEvent, Event, CloseEvent: Event, performance: { now: () => now }, document: { baseURI: "https://example.invalid/" } });
+  // Native classes and their EventTarget methods must all belong to this VM.
+  vm.runInContext(`class Target {
+    constructor() { this.listeners={}; }
+    addEventListener(type, listener) { (this.listeners[type]??=[]).push(listener); }
+    dispatchEvent(event) { for(const listener of this.listeners[event.type]??[]) listener.call(this,event); return true; }
+  }
+  class Native extends Target {
+    static OPEN=1; constructor(url) { super(); this.url=url; this.readyState=1; sockets.push(this); }
+    get [Symbol.toStringTag]() { return 'WebSocket'; }
+    send(data) { this.lastSent=data; }
+    get onmessage() { return this.listener; }
+    set onmessage(fn) { this.listener=fn; originalAdd.call(this,'message',fn); }
+  }
+  globalThis.EventTarget=Target; globalThis.WebSocket=Native; globalThis.window=globalThis;
+  globalThis.originalAdd=Target.prototype.addEventListener; globalThis.originalDispatch=Target.prototype.dispatchEvent;`, Object.assign(context, { sockets }));
+  await installSeatAckObservation({ addInitScript: async callback => vm.runInContext(`(${callback.toString()})()`, context) });
+  const pwRoot = dirname(dirname(require.resolve("@playwright/test")));
+  const core = createRequire(resolve(pwRoot, "package.json")).resolve("playwright-core/package.json");
+  const mockSource = require(resolve(dirname(core), "lib/generated/webSocketMockSource.js")).source;
+  context.module = { exports: {} }; context.__pwWebSocketBinding = call => bindingCalls.push(call);
+  vm.runInContext(mockSource + "\n(module.exports.inject())(globalThis);", context);
+  vm.runInContext(`globalThis.app=new WebSocket('ws://example.invalid/?roomId=private-owned');
+    app.addEventListener('message', event=>delivered.push(event.data));`, Object.assign(context, { delivered }));
+  const id = bindingCalls[0].id;
+  const dispatch = (type, data) => context.__pwWebSocketDispatch({ id, type, ...(data ? { data: { data: JSON.stringify(data), isBase64: false } } : {}) });
+  dispatch("ensureOpened"); dispatch("connect");
+  const claim = { type: "seat_claim", commandId: "plugin-seat:private-first", seatId: "private-seat" };
+  now = 100; context.app.send(JSON.stringify(claim));
+  now = 200; dispatch("sendToServer", claim);
+  const accepted = { type: "seat_claim_result", seatClaimResult: { commandId: claim.commandId, accepted: true } };
+  now = 400; context.originalDispatch.call(sockets[0], new MessageEvent("message", { data: JSON.stringify(accepted) }));
+  assert.equal(delivered.length, 0, "native reception is not application delivery");
+  now = 3500; dispatch("sendToPage", accepted);
+  const facts = JSON.parse(JSON.stringify(context.__t16SeatAckFacts()));
+  assert.deepEqual(facts.rows.map(row => [row.phase, row.atMs]), [["outgoing-claim", 100], ["native-send", 200],
+    ["native-receive", 400], ["mock-dispatch", 3500], ["app-delivery", 3500], ["app-handler-return", 3500]]);
+  assert.equal(delivered.length, 1); assert.equal(facts.nativeSetterObserved, true);
+  assert(facts.rows.every(row => row.attempt === 1 && row.current === true));
+  for (const secret of [claim.commandId, claim.seatId, "private-owned", "example.invalid"]) assert.equal(JSON.stringify(facts).includes(secret), false);
+});

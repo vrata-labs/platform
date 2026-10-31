@@ -96,6 +96,10 @@
 
 - Единственный browser run на9e8519fff788ab21e4bc9379f810e65fa9eeb23a: failed,0 expected/1 unexpected/0 skipped/flaky,137.2s, timed_out=false. Три initial entrants used/accepted; один имел claim и lost-answer settlement33637.4, затем closed/window-expired34322.8 (page monotonic). Новая instance получает arrivalAllowed=false. Это конкретный отменённый initial claim, а не старый c0837de с claims[]/candidates0; физическая причина задержки и первоначальная причина c0837de не приписываются по аналогии.
 - Pending-disable не достигнут, поэтому новый Host scheduling/retired/release<3000/intermediate standing в browser ещё не доказан. Никаких дополнительных тяжёлых повторов не было. Новый actual-component late-accepted control воспроизводит lost-answer→window-expired и отказ новой instance без второго claim; итоговый build и47/47 узких tests passed. Это не browser elapsed/PASS.
+
+### Дополнение D-075: initial ACK phases
+- Initial readiness barrier оставляет живые frames в постоянном native→Node→mock proxy даже после connectToServer; CDP endpoint и app delivery — разные фазы. Source chain проверена на используемой Playwright1.58.2.
+- Bounded passive page-clock/correlated generation observer и adapter answer reasons добавлены без изменения transport/deadlines. Actual injected mock regression разделяет native400/app3500; build48/48 domain/20/20 helpers/strict types passed. Причина D-074 ещё требует одного instrumented browser; c0837de ретроспективно не объяснён. Все13 required/full без исключений сохраняются.
 - Порты свободны, schema0→0,63 прежних artifacts unchanged, собственный healthy PG сохранён. Процессы/внешний source checkout/план/T17 не менялись; all13 required=true, full без исключений, substantive review/focused/package/full/CI/G/X открыты. **T16 NOT_READY**.
 
 ## Минимальные изменения после проверки матрицы

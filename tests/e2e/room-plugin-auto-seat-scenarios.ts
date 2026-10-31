@@ -6,6 +6,7 @@ import { runSeatProtocolRace } from "./room-seat-protocol-race";
 import { identityProtocolAt } from "./staging-identity";
 import { inlineSceneBundleUrl } from "./scene-bundle-fixtures";
 import { cleanupAll, withCleanup } from "./test-cleanup";
+import { installSeatAckObservation } from "./seat-ack-observation";
 
 export const seatState = (page: Page) => page.evaluate(() => {
   const debug = (window as any).__VRATA_DEBUG__;
@@ -44,6 +45,7 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
       const arrivalPhases: Record<string, number> = {};
       const entries = [1, 2, 3, 4].map(index => enterPluginRoom(browser, value, host.roomId, "member", `Auto-seat member ${index}`, async (context, page) => {
         contexts.push(context); pages.push(page); observations.set(page, await observe(page));
+        await installSeatAckObservation(page);
         // All four real clients finish scene loading before any gets the initial
         // authoritative snapshot. No fabricated readiness, snapshots or claims.
         await page.routeWebSocket(url => url.searchParams.has("roomId"), socket => {
@@ -73,7 +75,9 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
                 pending: Boolean(debug?.pendingSeatId), seated: Boolean(debug?.currentSeatId),
                 state: plugins?.state ?? null, running: plugins?.running ?? null, failure: plugins?.lastFailure ?? null,
                 hostPhase: plugins?.lastHostPhase ?? null, startupTiming: plugins?.startupTiming ?? null,
-                readyDeliveries: plugins?.readyDeliveries ?? null,
+                 readyDeliveries: plugins?.readyDeliveries ?? null,
+                 ack: (window as any).__t16SeatAckFacts?.() ?? null,
+                 longTasks: (window as any).__meetingPerformance?.longTasks ?? null,
                 seating: plugins?.seating ?? null };
             }).catch(() => ({ unavailable: true })),
             commands: member.authority.commands().map(command => ({ type: command.type, accepted: command.accepted,

@@ -143,3 +143,22 @@ test("settlement diagnostics are bounded copies and distinguish owner cancellati
   assert.equal(JSON.stringify(h.adapter.diagnostics()).includes("private-owner-identity"), false);
   assert.equal(JSON.stringify(h.adapter.diagnostics()).includes("self-private-id"), false);
 });
+
+test("claim phase diagnostics distinguish correlated acceptance, mismatched answers and late no-flight delivery without identities", async () => {
+  const h = harness({ ready: true }); h.adapter.activate(); h.advance(100);
+  const pending = h.adapter.claim("seat-a", "private-owner");
+  h.advance(20); h.adapter.settleClaim({ seatId: "seat-a", accepted: true, commandId: "private-other" });
+  h.advance(30); h.adapter.settleClaim({ seatId: "seat-a", accepted: true, commandId: h.claims[0][1] });
+  assert.deepEqual(await pending, { result: "accepted" });
+  h.advance(50); h.adapter.settleClaim({ seatId: "seat-a", accepted: true, commandId: h.claims[0][1] });
+  const facts = h.adapter.diagnostics();
+  assert.deepEqual(facts.claimPhases, [
+    { atMs: 100, phase: "requested", reason: "pending" }, { atMs: 120, phase: "answer", reason: "different-command" },
+    { atMs: 150, phase: "answer", reason: "accepted" }, { atMs: 200, phase: "answer", reason: "no-flight" }
+  ]);
+  facts.claimPhases[0].reason = "busy"; facts.claimPhases.length = 0;
+  for (let i = 0; i < 40; i++) h.adapter.settleClaim({ seatId: "private-seat", accepted: false, commandId: "private-other" });
+  assert.equal(h.adapter.diagnostics().claimPhases.length, 32);
+  assert.equal(h.adapter.diagnostics().claimPhases[0].reason, "pending");
+  for (const secret of ["private-owner", "private-other", "private-seat", h.claims[0][1]]) assert.equal(JSON.stringify(h.adapter.diagnostics()).includes(secret), false);
+});

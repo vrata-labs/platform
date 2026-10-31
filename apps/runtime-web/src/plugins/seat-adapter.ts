@@ -50,6 +50,7 @@ export class RoomPluginSeatAdapter {
   private readonly transitions: Array<{ from: Grant; to: Grant; reason: GrantReason; atMs: number }> = [];
   private readonly activations: number[] = [];
   private readonly settlements: Array<{ atMs: number; reason: SettlementReason }> = [];
+  private readonly claimPhases: Array<{ atMs: number; phase: "requested" | "answer"; reason: "pending" | "accepted" | "busy" | "no-flight" | "different-command" }> = [];
   private candidates = 0;
   private sequence = 0;
   private inFlight: { owner: string; commandId: string; seatId: string; resolve(outcome: RoomPluginSeatOutcome): void; timer: ReturnType<typeof setTimeout> } | null = null;
@@ -70,7 +71,7 @@ export class RoomPluginSeatAdapter {
     return { grant: this.grant, openedAtMs: this.grant === "open" || this.grant === "used" ? this.openedAtMs : null, candidates: this.candidates, inFlight: Boolean(this.inFlight),
       ready: world.ready, correlation: world.correlation, online: world.online,
       firstReadyAtMs: this.firstReadyAtMs, transitions: this.transitions.map(row => ({ ...row })), activations: [...this.activations],
-      settlements: this.settlements.map(row => ({ ...row })) };
+      settlements: this.settlements.map(row => ({ ...row })), claimPhases: this.claimPhases.map(row => ({ ...row })) };
   }
 
   /** Re-evaluates the grant from platform facts. It is armed and opened at most once per page session. */
@@ -136,6 +137,7 @@ export class RoomPluginSeatAdapter {
     }
     const commandId = `plugin-seat:${this.nonce}:${++this.sequence}`;
     return new Promise(resolve => {
+      this.recordClaimPhase("requested", "pending");
       const timer = setTimeout(() => this.finish(commandId, { result: "offline" }, true, "lost-answer"), ROOM_PLUGIN_ARRIVAL.claimResponseMs);
       this.inFlight = { owner, commandId, seatId, resolve, timer };
       try { this.ports.claim(seatId, commandId); }
@@ -144,6 +146,7 @@ export class RoomPluginSeatAdapter {
   }
   /** Correlated server answer. Answers for other or cancelled attempts are ignored here. */
   settleClaim(result: { seatId: string; accepted: boolean; commandId?: string }): void {
+    this.recordClaimPhase("answer", !this.inFlight ? "no-flight" : result.commandId !== this.inFlight.commandId ? "different-command" : result.accepted ? "accepted" : "busy");
     if (!this.inFlight || result.commandId !== this.inFlight.commandId) return;
     if (result.accepted) this.transition("used", "accepted");
     this.finish(result.commandId, { result: result.accepted ? "accepted" : "busy" }, false, result.accepted ? "accepted" : "busy");
@@ -173,6 +176,10 @@ export class RoomPluginSeatAdapter {
     // Bounded, identity-free history survives closure; it never drives a grant decision.
     if (this.transitions.length < 8) this.transitions.push({ from: this.grant, to, reason, atMs });
     this.grant = to;
+  }
+
+  private recordClaimPhase(phase: "requested" | "answer", reason: (typeof this.claimPhases)[number]["reason"]): void {
+    if (this.claimPhases.length < 32) this.claimPhases.push({ atMs: this.clock(), phase, reason });
   }
 
   private finish(commandId: string, outcome: RoomPluginSeatOutcome, cancel: boolean, reason: SettlementReason): void {
