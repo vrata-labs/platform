@@ -1,260 +1,153 @@
-# T16: безопасное приложение к журналу решений
+# T16: решения и причинные ограничения
 
 Основание: внешний план `2026-09-25-working-meeting-and-room-plugins.md`, §0/T16/T17/§8.
-Продолжение нумерации основного журнала `2026-09-26-working-meeting-implementation.md` после D-047. Исторические записи не изменяются и не копируются в это приложение.
-Матрица: [T16](../validation/2026-10-31-t16-regression-matrix.md). Контракт: [JSON](../validation/2026-10-31-t16-regression.json).
+Продолжение нумерации основного журнала после D-047; исторические записи не изменяются.
+[Матрица T16](../validation/2026-10-31-t16-regression-matrix.md) · [Контракт проверок](../validation/2026-10-31-t16-regression.json).
 
-## D-048 — 2026-10-31 — Отдельный T16-контракт без переноса исключений предыдущего среза
+## D-048 — 2026-10-31 — Отдельный T16-контракт без исключений предыдущего среза
+- T15 JSON относится к уже принятому срезу и содержит узкое исключение. Для T16 используется отдельный контракт: 13 required=true, scope=[.], final-tree review/full local/exact-SHA publication обязательны.
+- Основание: внешний план §0/T16, D-042–D-047 и исходники на b7ef73e. Успехи T15 не закрывают T16; внешний план до staging-приёмки не меняется, T17 открыт.
 
-- Контекст: T15 уже принят, T16 требует нового full local после последних исполняемых изменений. Существующий общий по имени JSON фактически относится к T15 и содержит узкое исключение.
-- Решение: сохранить T15 JSON неизменным, создать отдельные T16 матрицу и workflow-verify JSON, все критерии обязательны. Матрица сначала проверяется до реализации; сейчас нет commit/push/deploy и новых результатов тестов.
-- Основание: внешний план §0/T16; основной журнал D-042–D-047; исходники на b7ef73e. Указанный внешний путь журнала недоступен, tracked-копия найдена в текущем main/worktree.
-- Последствия: прошлые успехи/исключения не закрывают новые проверки; final-tree review/full local/exact SHA publication остаются обязательными. Внешний план до staging-приёмки не меняется; T17 остаётся открыт.
-- Проверка: аудит файлов завершён; исполняемые проверки в этом этапе намеренно не запускались.
+## D-049 — 2026-10-31 — Дополнять shared demo, не повторять sandbox/storage
+- Normal onboarding, внешний SDK/author UI, PG barriers и быстрый sandbox уже существуют отдельно. Недостающая связь — общий public demo и exact server no-ghost proof.
+- Используются прежний shared demo, passive existing-socket capture и reusable auto-seat local/X; protocol race не требует дополнительных 3D. Guest403 и owner exception сохраняются, pose ownership не меняется. Heavy cases остаются X, не G.
 
-## D-049 — 2026-10-31 — Дополнять shared demo и авторитетное наблюдение, а не повторять sandbox/storage
+## D-050 — 2026-10-31 — Принимать проверяемые exact-SHA CI artifacts G/X
+- Обычные gated/Extended workflows сохраняют Playwright artifacts; обязательные evidence включают run/attempt, точный candidate SHA, все mandatory cases без skips и before/after accepted/images.
+- Второй дублирующий локальный G/X не обязателен при применимом CI proof. Дополнительный запуск — только на том же опубликованном commit под арендой. Это не исключение из full local.
 
-- Контекст: normal invite/onboarding, внешний SDK/author UI, PG authority barriers и быстрый sandbox уже существуют отдельно. Public demo не связывает их в один продуктовый сценарий; auto-seat assertions не проверяют exact server participant set после lifecycle transitions.
-- Решение: минимальные будущие правки — расширение существующего shared demo, пассивное наблюдение существующего room_state socket и reusable auto-seat для local/staging-extended; детерминированные protocol races без дополнительных 3D. Центральный local CI PG fail-fast закрывает найденные unconditional skips.
-- Основание: строки R01–R14 матрицы. Полноценный отдельный повтор T15 storage/backup или 3D для каждого malicious payload не закрывает эти пробелы и увеличивает стоимость.
-- Последствия: это выбор границ реализации, не утверждение о готовом коде. Успешные Guest denials сохраняются, роли для удобства теста не повышаются. Pose/locomotion ownership не меняется. Heavy four-client published checks остаются X, обычный gate не расширяется ими.
-- Проверка: после согласования матрицы требуется реализация и все критерии T16 JSON; общее X тоже нельзя объявить зелёным по одному scoped T16 прогону.
+## D-051 — 2026-10-31 — Общие observers без новой identity/API
+- Passive CDP наблюдает только существующий authenticated socket; bounded participants/occupancy/correlated commands, media hash вместо содержимого. Новая observer identity изменила бы проверяемый состав участников.
+- **Заменено D-056:** прежнее условие «closed либо denial» недостаточно. Действующий OLD witness требует реальный sent и correlated permission denial на pre-demotion scope/generation, затем fresh ordered media barrier.
+- Hooks/CDP/DTO очищаются независимо; raw frames/URL/token/config/source не публикуются.
 
-## D-050 — 2026-10-31 — Переиспользовать CI-подтверждения published suites без второго полного прогона
+## D-052 — 2026-10-31 — Реальные permissions и явное approval нового hash
+- Guest не имеет document.view/download: сохраняется штатный403, полноценный PDF render проверяется у разрешённых Host/Member. Роль ради теста не повышается.
+- Новый artifact hash требует явного capability approval; допустимое частичное approval не запрещается. UI grant/revoke/transfer дополняют PG/security; former Host использует первоначальный Bearer при текущей authority.
 
-- Контекст: поставка имеет отдельный операционный бриф; обычный gate и Extended workflow уже сохраняют Playwright artifacts. Повтор G/X локально после тех же успешных exact-SHA CI checks не добавляет обязательного результата.
-- Решение: published suite criteria остаются required=true как evidence: проверенные run/attempt, candidate test SHA, actual mandatory cases без skips и before/after accepted/images. При необходимости локального дополнительного запуска использовать тот же опубликованный commit под арендой.
-- Основание: R16, существующие staging workflows; workflow-verify допускает внешние наблюдения. Это не исключение из full local, который остаётся обязательным command.
-- Последствия: не дублировать операционные инструкции в Git. Локальные команды явно выбирают уже установленный /usr/bin/node22.23.2; frozen dependencies установлены главным потоком, повторная установка Node не требуется.
-- Проверка: CI/deploy/Extended ещё не запускались; все соответствующие evidence остаются открыты.
+## D-053 — 2026-10-31 — Разделить одновременную рассадку и deterministic busy race
+- Четыре случайных offsets не гарантируют busy. Отдельные реальные WS contenders претендуют на одно место, требуют one-winner/busy/correlated release и выходят до exact-set проверки.
+- **Post-ready readiness barrier заменён D-078** на четыре actionable onboarding формы до admission. Управляемый pending replay остаётся отдельным case по D-080; его release обязан быть раньше3000ms, иначе это не disable proof.
 
-## D-051 — 2026-10-31 — Общие test-only observers без новой identity и production API
+## D-054 — 2026-10-31 — Focused Node tests используют package autostart fence
+- Прямой import room-state entry point без VRATA_DISABLE_AUTOSTART=1 оставляет сервер после assertions. Focused-unit использует тот же fence, что `apps/room-state/package.json:test`, без изменения runtime lifecycle или deadlines.
+- Прерванный процесс не означает успешный набор; нужны terminal receipts всех обязательных tests.
 
-- Контекст: R06/R08/R09 требуют raw-authority proof, которого не дают клиентские проекции.
-- Решение: CDP-наблюдение только уже аутентифицированного WebSocket, bounded participants/occupancy и коррелированные seat/results; состояния media сравниваются по хешу, не по сохранённому содержимому. Adversarial privileged commands отправляются по уже существующему сокету отдельным test-only hook.
-- Основание: room-state protocol, normal v2 onboarding и существующие CDP PDF observers. Дополнительная observer identity изменила бы проверяемый состав участников.
-- Последствия: hooks, CDP listeners и DTO очищаются в finally. Перед revoke/transfer сохраняется ссылка на именно прежний сокет; запрет проверяется его закрытием либо correlated access_denied, а не отправкой по новому соединению. Сырые frames/URL/token/config/source не включаются в отчёты. Production pose/locomotion и sandbox не меняются.
-- Проверка: новый helper проходит строгую проверку типов; browser assertions ещё требуют focused/full и published прогонов.
+## D-055 — 2026-10-31 — Результат до исправления witness не подтверждает исправленное дерево
+- Browser запуск на b998bc5 прерван до окончательных assertions; его частичные успехи/ошибки не являются итоговой приёмкой.
+- Каждый новый результат привязан к проверяемому дереву; interrupted/failed не заменяются последующим PASS. Independent owned cleanup обязателен даже при остановке проверки.
 
-## D-052 — 2026-10-31 — Проверять реальные permissions и явное одобрение нового hash
-
-- Контекст: R03–R06; Guest не имеет document.view/download, а plugin API разрешает одобрить подмножество запрошенных capabilities.
-- Решение: не повышать роль Guest ради PDF render. Проверять его штатный 403 и проекцию страницы; полноценный render сохраняется для Host/Member. При выборе новой версии явно подтверждать новую capability; stale CAS проверяет неизменность библиотеки. Не вводить несуществующий запрет на частичное одобрение capabilities.
-- Основание: shared-types/access.ts и plugins/author-model.ts:planRoomPluginAuthorAction; прежний public demo требовал render PDF у Guest вопреки разрешениям.
-- Последствия: короткий UI grant/revoke и UI transfer дополняют существующий security/PG набор, а не копируют Presenter/media suite. Former Host проверяется по текущей authority с первоначальным Bearer.
-- Проверка: строгая проверка типов helpers прошла; сквозное исполнение и финальная приёмка ещё открыты.
-
-## D-053 — 2026-10-31 — Отделить одновременную рассадку от детерминированного конфликта
-
-- Контекст: четыре случайных seat offsets не гарантируют busy и не закрывают отменённый ACK.
-- Решение: общий readiness barrier четырёх normal clients перед первым authoritative snapshot; отдельные два настоящих protocol contenders отправляют claims на одно свободное место без двух дополнительных 3D. Один browser transport witness задерживает server snapshot/accept до disable и correlated release, затем доставляет их в исходном порядке.
-- Основание: seat adapter имеет entry/window/claim-response deadlines и seating-controller cancellation barrier. Нельзя продлевать их ради сценария.
-- Последствия: release должен произойти до штатного 3000ms lost-answer timeout; иначе witness не доказывает disable. Протокольные contenders покидают комнату до повторной exact-set проверки. Heavy scenario остаётся local/X, не deploy gate.
-- Проверка: CI PG guard и шардирование 6/6 passed; browser witness пока требует исполнения. Все критерии T16 остаются обязательны.
-
-## D-054 — 2026-10-31 — Focused Node tests используют тот же autostart fence, что package scripts
-
-- Контекст: первый объединённый focused запуск прерван внешним 120s лимитом; отдельный room-state запуск прерван на 60s после успешного socket assertion. Исходные логи сохранены, успех всего прогона не объявляется.
-- Решение: добавить VRATA_DISABLE_AUTOSTART=1 в focused-unit command, как в штатных package test scripts. Изменять runtime lifecycle или продуктовые timeout для этого не требуется.
-- Основание: apps/room-state/package.json:test и нижний autostart в index.ts. Прямой node --test без fence импортировал service entry point и оставлял запущенный сервер после assertions.
-- Последствия: прерванные прогоны остаются видимыми; последующий правильный запуск не переименовывает их в успешные. Полный local и package contract остаются required=true.
-- Проверка: отдельный runtime focused прошёл 355/355, room-state с fence —34/34, без skips. Исправленный общий focused-unit ещё требуется выполнить; browser/full/published gates остаются открыты.
-
-## D-055 — 2026-10-31 — Старый focused browser прерван до исправления подтверждённых дефектов
-
-- Контекст: на b998bc5 уже выполнялся focused; продолжение после обнаружения пяти дефектов тестовых свидетельств не проверяло бы окончательное дерево.
-- Решение: установить точные PID/владение script → work-check → browser, завершить только его browser process group и оставшиеся собственные services. Runner сохранил terminal receipt до изменения файлов.
-- Основание: общий focused-unit завершён:155+355 passed,0 skipped; browser receipt exit−15. До прерывания browser отметил8 passed и2 failed; итогового JSON report нет. Исходные логи/receipts не удалены и не переименованы в passed.
-- Последствия: новый focused — только после commit последних правок, с отдельными именами отчётов. Старые ошибки не заменяются новым успехом. Full/package/published gates остаются обязательными; исходный checkout, внешний план и T17 не меняются.
-- Проверка: все PID зафиксированного дерева завершены, локальные4416/25676/4417 освобождены. Другие процессы и контейнеры не изменялись.
-
-## D-056 — 2026-10-31 — Реальное действие старого сокета и наблюдательный media barrier
-
-- Контекст: surface_create_object без probeOnly:false проверял лишь permission probe и не возвращал commandId; немедленный cached media hash другого клиента не доказывал отсутствие эффекта.
-- Решение: реальный поддерживаемый create на сохранённом до revoke/transfer открытом сокете, обязательный sent и correlated access_denied/missing-permission на том же socket scope. После ответа через этот же сокет отправляется безвредный participant_update с уникальным clientTimeMs; reader обязан увидеть именно этот marker в новом room_state и неизменный media hash.
-- Основание: существующие dispatch/ordered socket guard и applyParticipantUpdate/broadcast; production protocol/probe не меняются. Свежесть snapshot привязана к test-only socket scope/generation/sequence, close/new connection инвалидируют старый snapshot. Reload/reconnect ждут room_state новой generation.
-- Последствия: marker не меняет pose/роль/права и не сохраняется в DTO/артефактах. Потерянный/старый snapshot не закрывает проверку. Одни глобальные receive/connect counters больше не являются reconnect witness.
-- Проверка: source probe реального create подтвердил correlated permission denial/unchanged media и разрешённый Host positive control; лёгкие tests отклоняют closed/overlapping old snapshots и cached/unrelated media barrier. Browser ещё требуется.
+## D-056 — 2026-10-31 — Реальное действие OLD socket и fresh media barrier
+- Surface create без probeOnly:false был лишь permission probe; cached media hash другого клиента не доказывал отсутствие эффекта.
+- OLD command обязан быть sent с correlated access_denied/missing-permission на том же pre-demotion scope/generation. Затем тот же socket отправляет безвредный participant_update с уникальным clientTimeMs; reader должен увидеть marker в новом server snapshot и неизменный media hash.
+- Marker не меняет pose/роль/права и не сохраняется в DTO. Close/new connection инвалидируют snapshot; reload/reconnect ждут новую generation. Counters и OLD overlap не заменяют этот proof.
 
 ## D-057 — 2026-10-31 — No-anchor использует собственный non-reference template
+- Personal-workspace-basic deprecated, а reference scene override запрещён. Fixture создаёт свой template/version/hash только в проверенной disposable schema; inline scene передаётся штатному POST room.
+- Перед teardown template скрывается; shared catalog/GLB/policy не меняются. Actual PG/API create201 проверяет допустимость fixture; browser zero-claim/manual refusal проверяется отдельно. Case остаётся local/C.
 
-- Контекст: personal-workspace-basic deprecated в active catalog; reference scene override намеренно запрещён продуктовым контрактом.
-- Решение: отдельная disposable fixture добавляет свой non-reference template/version только в свою проверенную schema. Inline scene задаётся при штатном POST room; перед закрытием fixture её template скрывается, затем базовая fixture проверяет reference catalog и удаляет schema/services/files.
-- Основание: storage version/hash contract и resolveRoomTemplateCreate. Замена shared template policy или shared GLB ради теста не нужна.
-- Последствия: новый template не публикуется и не попадает в shared catalog; no-anchor остаётся local/C, не published X.
-- Проверка: настоящие PostgreSQL/API вернули201 на inline room; meeting-room-basic сохранил2.0.0, room и fixture закрылись. Два ранних probe harness failures (непереданные VM globals/default-import interop) сохранены отдельно, не product failures. Browser assertions ещё открыты.
+## D-058 — 2026-10-31 — Отменённая посадка проверяется до empty snapshot
+- Final-only replay мог скрыть краткую ошибочную посадку. Сначала actual occupied/accepted отменённой попытки, delivery counters и два RAF, затем current+pending=null/desktop/unchanged standing root. Только после этого original-order empty/release и fresh exact authority.
+- SeatingController mutation control нарушает intermediate standing при правильном final standing. Release<3000 и pose ownership сохраняются.
 
-## D-058 — 2026-10-31 — Отменённая посадка проверяется до исправляющего empty snapshot
+## D-059 — 2026-10-31 — Независимая очистка сохраняет primary и cleanup errors
+- Неуспешный enter закрывает уже созданный, но не возвращённый context. cleanupAll/withCleanup независимо закрывают observers/contexts/author/room и сохраняют все ошибки в AggregateError с primary/cause.
+- Owned actor всегда пытается удалить room; pending entries дожидаются завершения после закрытия contexts. Helper failure-path tests покрывают entry/close/actor/observer failures; cleanup error не становится PASS.
 
-- Контекст: replay всего потока мог скрыть краткую ошибочную посадку последующим empty/release.
-- Решение: сначала доставить только удержанные occupied snapshot/accepted с commandId отменённой попытки; дождаться фактических delivery counters и двух кадров, проверить current/pending=null и неизменный standing root pose. Только затем доставить остаток в исходном порядке, correlated release и exact authoritative empty/no ghosts.
-- Основание: in-memory mutation control на существующем SeatingController: сломанное suppression проваливает промежуточный standing, хотя конечный standing восстанавливается.
-- Последствия: release по-прежнему обязан уйти до штатного3000ms timeout. Нет прямых pose writes, изменения lifecycle продукта или увеличения timeout.
-- Проверка: mutation control и строгие типы прошли; actual browser delivery/frame witness требует нового focused/full/X.
+## D-060 — 2026-10-31 — CI guard ограничивает jobs независимо
+- Граница core section не распознавала цифру в job ID e2e; валидный e2e скрывал повреждённый core. Исправлены только символы job ID в guard, workflow не меняется.
+- Прежние service/env/health/Node assertions сохранены; шесть изолированных controls core/e2e × env/image/Node отвергаются реальным positive callback при неизменном другом job. Старый boundary эти controls не проходит.
 
-## D-059 — 2026-10-31 — Независимая очистка и сохранение всех ошибок
+## D-061 — 2026-10-31 — Scene/connection entry не равен plugin startup
+- Отсчёт15s accepted до onboarding/scene включал заведомо предшествующие стадии.
+- **Заменено D-080:** одного переноса сразу после entry недостаточно. Отдельный startup60000 ждёт actual outgoing claim, и только claim начинает response15000. Entry20000/arrival5000 подтверждаются сохранённым page-clock pre-send фактом, не поздним snapshot.
 
-- Контекст: неуспешный enterPluginRoom мог не вернуть уже созданный context; первая ошибка cleanup могла пропустить другие contexts, внешний проект и удаление room.
-- Решение: enterPluginRoom закрывает собственный context при любом неуспехе. Общий test-only cleanupAll/withCleanup независимо пытается закрыть все ресурсы; при cleanup errors выбрасывает AggregateError с исходной ошибкой и cause. Owned actor всегда пытается удалить room; pending entries дожидаются завершения после закрытия contexts, их ошибки не теряются.
-- Основание: отдельные лёгкие tests на newPage/prepare/navigation/admission/scene failures, совместный primary+close failure, actor-close failure и независимость observer/contexts/author/room cleanup.
-- Последствия: закономерно уже закрытые pages не требуют повторного CDP/route close; другие cleanup failures не подавляются. Production и прежний sandbox/storage suite не меняются.
-- Проверка:11/11 helper tests,0 failed/skipped; строгая проверка типов пройдена. Финальный focused work-check после commit ещё обязателен; T16 остаётся NOT_READY.
+## D-062 — 2026-10-31 — Accepted status проверяется до следующего клиента
+- После загрузки третьего клиента поздняя VM может показывать отказ при уже used grant/сохранённой seat. Actual scaffold/SeatAdapter воспроизводят это различие; текст новой VM не является результатом первой заявки.
+- CurrentSeat/occupancy/accepted status/grant и correlated claim/result проверяются сразу после входа Member, до refusing entrant. Все opt-out/manual veto и независимый cleanup сохраняются; момент перезапуска исходного browser этим не устанавливается.
 
-## D-060 — 2026-10-31 — CI guard ограничивает каждый job независимо
+## D-063 — 2026-10-31 — Shared demo использует существующий functional frame budget
+- Context получает существующий100ms RAF budget и passive performance observation до страниц. Viewport/DPR/drawing buffer, сцена, PDF/audio, права и sandbox/product deadlines не меняются.
+- Основание: functional-frame-budget.ts и соседние multi-client suites. Frame starvation как причина старого host-unavailable остаётся гипотезой: исходный trace не доказывает единственную причину. Budget проверяется на первой странице, reload и новой странице; это не device/performance acceptance.
 
-- Контекст: граница секции core не распознавала e2e из-за цифры в имени; валидные настройки e2e скрывали повреждённые настройки core. Сам workflow настроен правильно.
-- Решение: применить минимальное исправление tools/ci-postgres-gate.test.mjs: корректные символы job ID, прежние пять assertions в общем helper и шесть изолированных отрицательных controls core/e2e × env/image/Node. Workflow и зависимости не менять.
-- Проверка: применённый файл совпадает с подготовленным исправлением; полный лёгкий набор24/24 прошёл. Независимая копия реального положительного callback отклоняет каждую из шести мутаций при неизменном другом job. Возврат только старой границы оставляет положительный callback зелёным, но ломает все шесть controls. Временная копия удалена.
-- Последствия: F06 исправлен; это не результат browser, полного local или published gates.
+## D-064 — 2026-10-31 — Stale CAS требует допустимый PUT, не read DTO
+- На a188d94 stale probe получал400 до CAS: read DTO содержит запрещённые bindingId/pluginId/generation/bindingRevision. Это штатный parser contract, не дефект CAS.
+- staleBindingUpdate явно проецирует допустимые поля; expectedRevision1,409 и unchanged-library hash обязательны. Actual parser/storage control достигает CAS, отдельные read-only field mutations отвергаются. Parser/permissions не меняются.
 
-## D-061 — 2026-10-31 — Pending-disable отсчитывает ожидание claim после нормального входа
+## D-065 — 2026-10-31 — Конечный release не устанавливает причину отмены
+- Retire и lost-answer3000 оба отменяют pending; HTTP completion не является временем применения manifest. Из одного release нельзя вывести причину или приписать её CPU/setup/polling.
+- Bounded passive timing хранит claim/accept/CAS/runtime/release phases и status/revision/enabled count, без URL/credentials/config/source. Release3200 control сохраняет строгий отказ; для причинности нужны settlement и accepted revision, дополненные D-081.
 
-- Контекст: завершившийся focused на3f1552c дал19 expected/3 unexpected/0 skipped/flaky за882.6s. В auto-seat accepted=false проверялось в течение15s, отсчитанных ещё до invite/onboarding/загрузки сцены. Их штатные отдельные deadlines больше этого интервала.
-- Решение: сначала дождаться enterPluginRoom с реальными scene/connection, затем начать прежнее15s ожидание server accept. Добавить очищенные факты при отказе: только readiness/running/grant и булевы признаки claim/release, без идентификаторов или frames.
-- Проверка: новый test исполняет реальный helper с задержанным entry; до его завершения claim poll не начинается, timeout15000/interval50 неизменны. Независимое удаление entry-first ожидания ломает этот test. Строгие типы прошли.
-- Последствия: release до штатных3000ms, реальный intermediate occupied/accepted delivery, два кадра standing/unchanged pose, current-generation exact authority и отсутствие ghosts остаются обязательными. Единственность этой причины исходного browser failure требует узкого повторения; исходный failed receipt сохранён.
+## D-066 — 2026-10-31 — Skipped/interrupted PG tests не закрывают обязательный набор
+- HTTP/storage запуск без PG пропустил PG-проверку; повтор с PG прерван до terminal результата. Отдельные успешные subtests не подтверждают весь набор.
+- Нужен полный завершённый PG-backed результат; при прерывании очищается только доказанно owned fixture schema. Чужие схемы/контейнеры не используются для уборки.
 
-## D-062 — 2026-10-31 — Статус подтверждённой посадки проверяется до загрузки следующего клиента
+## D-067 — 2026-10-31 — Persistent socket init требует Page.enable
+- Actual transformed helper в Chromium без Page.enable не устанавливал hook ни на navigation, ни на reload. Включение Page domain той же CDP session до регистрации init script устраняет это; script/parser/CAS/permissions не меняются.
+- Actual-helper control закрепляет enable→register и remove/detach/cleanup; OLD denial/fresh media assertions сохраняются.
 
-- Контекст: room-plugin-seating упал на тексте отказа, хотя currentSeat/occupancy assertions прошли и диагностический grant=used, running=1, failed=0. Между входом Member и проверкой его принятой заявки сценарий полностью загружал третьего клиента.
-- Решение: проверить прежние currentSeat/occupancy/accepted status/grant сразу после входа Member, дополнительно потребовать correlated seat_claim/result из его существующего socket. Затем вводить refusing клиента и выполнять все прежние opt-out/manual veto assertions. Observer и оба contexts закрываются независимо, включая неуспешный третий вход.
-- Основание: исполнены настоящий bundled scaffold и SeatAdapter: первая VM показывает принятую заявку; новая VM при том же used grant показывает точно наблюдавшийся отказ, не снимая уже подтверждённое место. Текст поздней VM не является результатом первой заявки.
-- Последствия: не заменять accepted status одной конечной посадкой и не ослаблять opt-out/manual checks. Browser должен подтвердить исправленный порядок; из имеющегося отчёта нельзя установить конкретный момент перезапуска VM.
+## D-068 — 2026-10-31 — Удерживать voluntary OLD close, не полномочия
+- main.ts:applyAccessDebug вызывает roomStateClient.close при смене роли; сохранённая ссылка сама по себе не сохраняет открытый транспорт. OLD-closed не доказывает denied реальную команду.
+- Test-only hold откладывает только client close выбранного OLD socket. Runtime reconnect/server close/fresh API authority/expiry не подавляются; новых sockets hold не создаёт. Denial привязан к pre-demotion scope/generation, release восстанавливает close в finally.
 
-## D-063 — 2026-10-31 — Shared demo использует существующий функциональный frame budget
+## D-069 — 2026-10-31 — Closed без history не определяет arrival причину
+- На c0837de все четыре VM были running/ready/online, grant closed/candidates0/claims[]. Это не busy/rejected/release timeout: claim не начинался. Node barrier timing нельзя вычитать из page-clock firstReady.
+- Нужны bounded monotonic переходы и room.ready delivery facts, а не неподтверждённый product timing fix. Один успешный поздний run не устанавливает причину этого неполного trace.
 
-- Контекст: public-demo дошёл до loaded/connected, но VM status остался Stopped/host-unavailable, running=0/failed=1; исходная performance observation отсутствовала. У соседнего seating отказа зафиксированы длинные задачи357–1041ms. В shared demo, в отличие от других multi-client meeting tests, functional frame budget не устанавливался.
-- Решение: установить тот же100ms RAF budget и пассивную performance observation на BrowserContext до создания его страниц. Сигнатуры двух init helpers принимают общий addInitScript интерфейс; viewport640×400/DPR0.5 и drawing buffer320×200, сцена, PDF/audio, права, deadlines и sandbox не меняются. Новый browser test проверяет budget на первой странице, после reload и на новой странице.
-- Основание: existing functional-frame-budget.ts и setup соседних presenter/tool suites. Frame starvation как причина public-demo host-unavailable остаётся гипотезой: исходный отчёт не содержит достаточных timing facts для доказательства единственной причины.
-- Последствия: необходим узкий повтор трёх исходных failures и нового context-budget test в одном worker с новым report. Его успех не закрывает обязательный focused/full/package/review/CI/G/X контракт. До нового ревью общий package/full не запускать; T16 NOT_READY.
+## D-070 — 2026-10-31 — Причина closed сохраняется независимо от final state
+- Identity-free diagnostics ограничены восемью grant transitions/ready deliveries, содержат monotonic время и причины. Условия переходов/порядок вызовов сохранены, без новых таймеров/API/планирования.
+- Entry20000/window5000/claim3000 и initial60000 неизменны. Наблюдательность не является исправлением поведения и не заменяет browser elapsed proof.
 
-## D-064 — 2026-10-31 — Stale CAS требует допустимый PUT, а не копию read DTO
+## D-071 — 2026-10-31 — Delivery observer устанавливается до claim
+- На80c24aa setup/read/hook работа заняла более2s до disable, release3339.3ms правильно отклонён. Близкий requestfinished не доказывает момент принятия revision.
+- Passive hook устанавливается до navigation; pending/current читаются одним снимком, а pre-send proof далее сохраняется по D-079. Не меняются delivery/PUT/refresh/deadlines; intermediate actual delivery/two-RAF/pose остаётся обязательным.
 
-- Контекст: завершившийся narrow на a188d94 дал2 expected/2 unexpected/0 skipped/flaky за434.5s. Shared demo прошёл v1/v2 VM assertions и упал на stale CAS: expected409, received400. Context-budget и new-entry seating прошли; это не полный focused и не browser-приёмка T16.
-- Основание: public-demo-plugins.ts передавал spread всей прочитанной binding. roomPluginBindingHttpDto добавляет bindingId/pluginId/generation/bindingRevision; parseRoomPluginBindingHttpBody запрещает все четыре поля до вызова author.putBinding. Следовательно этот запрос не достигал проверки revision. Отказ соответствует продуктовому HTTP-контракту, а не дефекту CAS или разрешений.
-- Решение: формировать stale PUT явной проекцией разрешённых полей текущей binding. Сохранить expectedRevision1, обязательный409 и полное unchanged-library hash assertion; parser/permissions не менять. Regression использует настоящий helper, source parser и storage CAS; отрицательные controls возвращают read-only поля по одному.
-- Проверка: исходный narrow failure сохранён. Лёгкий набор26/26,0 skipped и строгие типы прошли; отдельный synthetic in-memory HTTP probe получил исходный400/plugin_invalid_binding, исправленный409/plugin_revision_conflict с unchanged state и current-revision positive200. Это не browser/PG приёмка; source review a188d94 не объявляется review нового diff. Полный focused/package/full и CI/G/X остаются обязательны.
+## D-072 — 2026-10-31 — Успешный initial не объясняет прежний closed
+- Traces80c24aa/8349419 прошли initial armed/open/used и correlated claims, но release3339.3/3004.5ms оба нарушили<3000. Сокращение тестовой работы до disable само по себе не исправило witness.
+- Это не воспроизведение c0837de. Причину lost-answer/retire надо различать явно; совпадение elapsed с3000 не устанавливает callback-причину. Управляемые actual components дополняют, но не заменяют реальный browser.
 
-## D-065 — 2026-10-31 — Для release fence не приписывать причину без времени отдельных фаз
+## D-073 — 2026-10-31 — Управлять веткой pending-disable, не сроками продукта
+- Actual Controller/Broker/SeatAdapter/KernelClient/QuickJS tests различают dispatch0/consumption800/completion1800. Empty manifest1200 даёт retired1200; manifest3100 проигрывает lost-answer3000. Hint/Host mutation/HTTP completion не равны runtime accepted revision.
+- Pending CAS запускается непосредственно на real correlated accepted с заранее прочитанной revision; без GET/UI/poll в3000ms окне и без подмены ответов. Settlement reason/time bounded и не содержит identity.
+- Прежний startup discovery hold заменён D-080; CAS-ordering уточнён D-079. Activate/retire/stale-revision mutation controls сохраняются. Fake clock не является browser elapsed proof или заменой watchdog tests.
 
-- Контекст: тот же narrow прошёл accepted/pending/current=null, running0 и correlated release ACK, но releaseAt−claimAt не выполнил строгую границу <3000ms. Само значение и длительности onboarding/проверок/PUT/runtime refresh в отчёте отсутствуют; intermediate replay/frame/pose assertions ещё не достигнуты.
-- Основание: в RoomPluginSeatAdapter одновременно существуют cancel при retire и штатный claimResponseMs3000; RoomPluginController получает изменения через leased HTTP snapshot с bounded refresh. Из одного конечного release нельзя установить, какой путь сработал и сколько времени занял тест до disable. CPU/starvation, setup delay и поздний runtime refresh остаются альтернативами, не выводом.
-- Решение: не менять продукт, порядок, таймауты и assertions по догадке. Добавить только bounded passive timing: относительные фазы entry/accept/pending/hook/disable/stop/release и до восьми runtime response observations с status/revision/числом enabled bindings. Listener и незавершённые чтения очищаются независимо; URL/token/identity/config/source/raw frames не сохраняются.
-- Проверка: новый узкий run должен сохранить эти факты даже при падении на исходном fence. Regression намеренно воспроизводит release3200ms, требует прежний failure и проверяет очищенный timeline/listener cleanup. Такой тест проверяет наблюдение, а не устанавливает причину browser failure. Auto-seat root cause остаётся открытой до реального timing evidence; T16 NOT_READY.
+## D-074 — 2026-10-31 — Lost-answer отличается от отказа без claim
+- На9e8519f initial claim завершился lost-answer33637.4 и window-expired34322.8; другая поздняя instance получила arrivalAllowed=false. Это не trace c0837de с claims[]. Поздний accepted не оживляет grant и не даёт второй claim, что закреплено actual-component control.
+- Ready promise failure не означает время начала handler, а новый running VM не доказывает здоровье прежней instance. Node/CDP/page clocks не смешиваются; физическая причина задержки из этого trace не установлена.
 
-## D-066 — 2026-10-31 — Прерванная дополнительная PG-проверка не считается успешной
+## D-075 — 2026-10-31 — Native receive не равен app delivery
+- Playwright1.58.2 connectToServer оставляет WebSocketRoute в постоянном native→binding→Node→mock proxy, не native passthrough. CDP видит upstream endpoint, не callback RoomStateClient.
+- Passive page-clock observer различает outgoing/native send/native receive/mock dispatch/app callback/return/release с current generation/attempt; adapter отмечает requested/answer/settlement непосредственно в компоненте. Actual injected mock control native400/app3500 закрепляет различие, без изменения bytes/delegation или deadlines.
 
-- Контекст: отдельный HTTP/storage-contract запуск без PG дал45 passed/1 skipped. Повтор с собственным PG был прерван внешним60s лимитом после13 завершённых PG subtests; terminal полного набора отсутствует. Оба исходных лога сохранены, skipped/interrupted не превращены в passed.
-- Решение: не повторять тяжёлый набор в этом узком этапе. После прерывания отдельно завершить очистку только своей schema, которую штатный t.after не успел удалить. Владение установлено по одному совпавшему окну создания package records и времени запуска; другая ранее существовавшая schema сохранена.
-- Проверка: своих процессов этого запуска не осталось; своя schema удалена, набор ранее существовавших schema неизменен, выделенный PG сохранён. Отдельные HTTP tests прошли23/23 без skips. Эти проверки не закрывают обязательный focused-unit/package/full.
+## D-076 — 2026-10-31 — Normal initial transport должен оставаться нативным
+- На8626b37 proxy crossings добавляли1.34–2.36s при callback<1ms и current correlation. Это доказанный дефект test setup, не единственная причина всех прежних failures; отдельный ready failure не воспроизводит D-074 lost-answer.
+- Initial WS не маршрутизируется. Промежуточный post-ready HTTP barrier **заменён D-078**: после admission нормальные discovery/startup тоже не удерживаются. Managed pending replay и обычный author UI lifecycle остаются отдельными.
 
-## D-067 — 2026-10-31 — Existing-socket init требует Page.enable собственной CDP session
+## D-077 — 2026-10-31 — Entry expiry не является claim-response timeout
+- На2862254 native gaps0–0.1ms и три actual correlated accepts подтвердили устранение proxy crossings. Четвёртый firstReady18497.7→entry-expired39528.2→activate39582.2 не сделал claim: entry20000 истёк, claim3000 не начинался.
+- Это подтверждает expiry только данного run, не c0837de. Discovery hold, artifact/startup и worker/renderer scheduling старый trace не разделял; startupTiming не является всем этим интервалом. D-078 устраняет post-ready gate, не продлевая entry.
 
-- Контекст: terminal narrow на6d4f448:0 expected/2 unexpected/0 skipped/flaky. Demo уже прошёл stale409 и упал на отсутствии __t16HoldSocket. Auto-seat упал раньше pending-disable, на начальной посадке четырёх entrants; pending timeline в этом run отсутствует.
-- Основание: настоящий Playwright-transformed installExistingSocketControl в установленном Chromium без Page.enable не создаёт hook ни после navigation, ни после reload. Единственное добавление Page.enable в ту же session даёт function в обоих случаях. Исходный script валиден, __name не содержит; это не CAS/permission failure.
-- Решение: включить Page domain до регистрации persistent init script; сохранить прежние old-socket commands/denial/barrier/cleanup. Actual-helper regression закрепляет enable→register и cleanup/remove/detach. Для отдельного initial auto-seat failure добавить только пассивные allowlisted arrival phase/command/startup facts, не менять порядок или продукт по догадке.
-- Последствия: прежний release<3000ms дефект ещё требует actual timeline; новое наблюдение не является его исправлением. Узкие terminal исходы фиксируются отдельно, все13 обязательных критериев, full и новое review сохранены. T16 NOT_READY.
+## D-078 — 2026-10-31 — Синхронизировать формы до admission
+- Четыре заполненные actionable normal onboarding формы ждут перед настоящими UI clicks. После release admission/scene/native WS/discovery/SDK startup не удерживаются. Admission response wait начинается перед click.
+- firstReady запускает entry20000. Actual-component control отличает post-ready discovery hold20001 (expiry/claim0) от ожидания25000 до admission/readiness (полный budget/accepted).
+- Отдельно проверяются trusted clicks/admissions/correlated claims/четыре distinct seats/exact authority. Passive page-clock discovery/worker/ready phases не раскрывают URLs/source/action IDs; handler-generated request не объявляется точным handler start/completion.
 
-## D-068 — 2026-10-31 — Удерживать только добровольное закрытие OLD transport, не полномочия
+## D-079 — 2026-10-31 — Pending refresh следует настоящему Host CAS
+- Enabled runtime read, начавшийся до завершения disable CAS, может занять poll slot и привести к lost-answer вместо retirement. Только managed pending refresh продолжается после actual CAS200; HTTP body/revision штатные, без fulfillment/kick.
+- Hook до entry сохраняет actual pending/standing непосредственно перед неизменённым send. Node/page round trip перед upstream claim не нужен; поздний pending не исправляет отсутствующий pre-send факт.
+- Initial normal clients полностью без routing. Ровно один claim/release<3000 и intermediate occupied+accepted→2RAF standing/pending-null/unchanged pose до empty/release обязательны; это не обещание arbitrary disable propagation<3000 при любой фазе polling.
 
-- Контекст: первая доказательная итерация наebad509 завершилась1 expected/1 unexpected/0 skipped/flaky за610s. Auto-seat прошёл все исходные assertions: claim/release по одному, server accept465ms, pending verified1258ms, disable requested1286ms/ack1538ms, release2607ms, далее intermediate late ACK/standing/pose и exact authority. Demo прошёл hook и UI revoke, но OLD command получил closed, не sent. Прежние failures сохранены; случайный auto-seat PASS не объясняет предыдущие initial-seat/release failures.
-- Основание: main.ts:applyAccessDebug при смене роли явно вызывает roomStateClient.close и штатный reconnect; room-state-client.ts:close вызывает socket.close. Hook сохранял лишь ссылку на сокет. Room-state допускает несколько сокетов одного PID без создания нового participant; все эффекты v2 повторно проверяют свежую API authority. Runtime callbacks старого поколения уже игнорируются.
-- Решение: test-only hold откладывает только вызов close у выбранного уже открытого OLD socket. Нормальный runtime reconnect, server-initiated close, permissions/expiry и fresh authority не меняются. Тест не открывает сокеты и не меняет server state. После denied WS и fresh ordered media barrier release в finally восстанавливает close и завершает отложенное закрытие. Denial теперь дополнительно привязан к scope/generation, снятым ДО UI revoke/transfer, а не просто к совпадению sent/result на произвольном новом соединении.
-- Проверка: лёгкий набор29/29 без skips; actual-helper regressions проверяют OLD-not-new target, отсутствие создания транспорта самим hold, обычный close nonheld, непрепятствование server close, restore/cleanup при failure. Строгие типы прошли. Отдельный Chromium+native WS mechanics probe подтвердил real send именно на OLD transport после voluntary close, release retirement и server close; это synthetic transport proof, не authority acceptance. Второй и последний доказательный browser run должен завершиться на новом точном SHA; его исход не предрешён. Никаких продуктовых timing fixes по auto-seat не внесено.
-- Последствия: сохранить release3000ms, intermediate/two-RAF/pose, normal onboarding/Guest403/external SDK и весь13-required/full контракт. Новый substantive review и общий focused/package/full/CI/G/X ещё обязательны; T16 NOT_READY.
+## D-080 — 2026-10-31 — Разделить entry, startup и ответ claim
+- enterPluginRoom подтверждает scene+connection, не discovery/artifact/Worker prepare/init. Pending retirement — отдельный export для одинаковых local/X wrappers; external build/ordinary Host CAS общие, Host renderer закрыт, один3D pending entrant. Initial four-client race/lifecycle сохранён отдельно.
+- Normal startup без discovery hold bounded60000 после entry; response15000 начинается при actual outgoing claim. Saved page-clock pre-send readiness/correlation/online, activation≤entry20000/claim<arrival5000 обязательны. Роли/права/sandbox/pose/deadlines неизменны.
+- На504e4fa separate pending1/1 и весь auto-seat spec4/4 завершены PASS без skips/retries. Это не общий focused/full, не объяснение старых failures и не замена дополнительных причинных assertions D-081–D-082.
 
-## D-069 — 2026-10-31 — Остановить узкую стабилизацию на доказанном initial grant blocker
+## D-081 — 2026-10-31 — Retired требует sticky no-failure proof
+- failEntry тоже вызывает SeatAdapter.retire. Последующий настоящий empty manifest удаляет failed entry и очищает lastFailure, поэтому retired/failed0/revision disabled/release<3000 допускают VM-failure cancellation до disable.
+- Fresh single-binding pending witness требует lastInstanceFailure=null и exact runtime revision из обычного Host CAS; sticky поле не сбрасывается empty manifest. Ready failure после уже выполненного retire может отражать прекращённый lifecycle, поэтому один final failed-ready сам по себе не назначает причину отмены.
+- Actual-helper/component negative control отвергает ready failure→реальный failEntry/retire→cancel→empty refresh, сохраняя retired, оба elapsed fences и все intermediate assertions. Продукт не меняется.
 
-- Контекст: вторая и последняя разрешённая доказательная итерация наc0837ded958e9e577704a2808bd0112d35c34177 завершена, не оставлена в очереди:1 expected/1 unexpected/0 skipped/flaky,475.8s. Shared public demo passed целиком, включая pre-demotion OLD-scope correlated denial/fresh unchanged media barrier и normal UI grant/revoke/transfer. Auto-seat снова упал на исходном initial-seat timeout60000ms, до pending-disable.
-- Факты: barrier открыт через25506ms от начала four-entry setup; entriesComplete26239ms. Все4 clients loaded/connected=true, VM running1/failure=null, seating ready/correlation/online=true; grant=closed, candidates0, inFlight=false, pending/seated=false, observed commands пусты. Это не busy race, rejected claim или release timeout: claim не начат. VM failure не объясняет этот run.
-- Граница вывода: конечные diagnostics не сохраняют причину и момент closed, а openedAtMs при closed всегда null. Поэтому они не различают окно entry/arrival, manual/offline veto и доставку room.ready. Нельзя заключить, что barrier25506ms превысил entryMs: entry отсчитывается от реальной platform readiness, не от начала Node setup. Успешный release2607ms первой итерации не закрывает причины прежних failures.
-- Решение: не вносить неподтверждённый timing/product fix и не делать третью browser итерацию. Для отдельного следующего этапа нужны bounded переходы waiting/armed/open/closed с monotonic временем, причиной закрытия и фактом доставки room.ready; authority/permissions/3000ms и normal onboarding остаются неизменны. Наблюдательная диагностика явно не объявлена решением auto-seat.
-- Проверка/очистка: оба узких запуска terminal. На втором точном SHA порты4416/25676/4417 свободны, fixture schema set неизменен2,38 прежних artifacts unchanged, git clean. Собственный PG сохранён главному потоку. Внешний план/source checkout/T17, sandbox/storage и product source не менялись; push/deploy/lease/общий focused/package/full не выполнялись. T16 NOT_READY; source review после executable изменений ещё открыт.
-
-## D-070 — 2026-10-31 — Причину закрытия arrival grant сохранять до исправления поведения
-
-- Контекст: отдельно согласован причинный разбор initial-seat failure после D-069; конечный closed не различает manual/offline veto, entry/window expiry и доставку room.ready.
-- Решение: добавить в существующий diagnostics ограниченные восемью записями identity-free переходы grant с monotonic временем/причиной и room.ready dispatch/completion. Сохранить условия переходов и порядок вызовов, не добавлять таймеры, API или изменение планирования. Сначала воспроизвести исходный сценарий с этими фактами, затем выбирать минимальное исправление.
-- Ограничения: 3000/5000/20000ms и initial60000ms неизменны; старые failures сохраняются. Не более двух новых доказательных browser итераций. Общие focused/package/full и публикация в этом этапе не выполняются; все13 обязательных критериев остаются открыты.
-
-## D-071 — 2026-10-31 — Наблюдатель late ACK устанавливается до claim, не внутри cancel deadline
-
-- Факты: первая причинная итерация на80c24aa завершена с одним failure, без skips/retries. Все4 initial clients прошли waiting→armed→open→used и correlated claims; прежний initial closed не воспроизведён. Его причину этим прогоном установить нельзя.
-- Отдельная подтверждённая проблема проверки: server accept830ms, pending verified1673ms, установка delivery hook/disable2353ms от claim; release3339ms. До disable потрачено более двух секунд, включая два последовательных browser read и позднюю установку наблюдателя. Исходный строгий <3000ms fence правильно отверг этот run; вид runtime refresh около3345ms не доказывает время применения ответа.
-- Решение: только test-only passive delivery hook установить до навигации/claims; pending и current читать одним снимком. Не менять задержку ответов, transport delivery, PUT/refresh продукта, deadlines или intermediate assertions. Сохранять именно первый correlated claim/release и actual occupied/accepted delivery, затем два RAF/standing/null pending/unchanged pose до empty/release.
-- Проверка: лёгкий actual-helper control должен ловить возврат поздней установки и двух чтений; отрицательная release3200ms проверка остаётся failed. Вторая причинная browser итерация ещё требуется. Прежний initial grant blocker остаётся открытым, продуктовый behavior fix не обоснован.
-
-## D-072 — 2026-10-31 — Два причинных прогона не воспроизвели initial closed и не прошли release fence
-
-- Результаты:80c24aaf9e9be99970ed279900ea0e7a25cd5a1a —0 expected/1 unexpected/0 skipped/flaky,156.4s;8349419d78fa6dc002960a474be92f8c84131983 —0 expected/1 unexpected/0 skipped/flaky,206.0s. Оба foreground завершены самостоятельно, не прерваны по timeout. Во всех восьми initial entries наблюдались platform-ready→armed→room-ready/open→accepted/used, по одной correlated claim; ни closed, ни VM failure в этой фазе нет. Начальная рассадка и последующие authority/protocol/lifecycle assertions до pending-disable пройдены.
-- Факты отмены: первый release3339.3ms при disable2352.6ms; после D-071 release3004.5ms при disable1206.9ms. Оба правильно отвергнуты исходной границей <3000ms. Установка наблюдателя до entry и единый pending/current read проверены, но это недостаточное исправление всего сценария. Intermediate late ACK/два RAF/standing/unchanged pose в этих двух runs не достигнуты; прошлый успешный run их не заменяет.
-- Граница RCA: старый initial closed не объяснён. Новые monotonic traces исключают entry expiry/manual/offline/window closure только для этих успешных initial entries, не для c0837de. Для причины старого отказа нужен trace именно его воспроизведения. Совпадение нового release с3000ms само по себе также не различает lost-answer cancel и retire; callback-причины в этом pending trace нет.
-- Решение: исчерпать согласованный лимит двумя завершёнными итерациями; не добавлять третий запуск или неподтверждённый product/timing fix. Передать причинные traces, failed receipts и минимальные наблюдательные/test-only изменения. Варианты продолжения — управляемый тест очереди room.ready с настоящими controller/adapter либо отдельное воспроизведение со сбором cancel/retire причины; выбирать после согласования границ, не ослабляя deadlines.
-- Проверки: runtime build и1515/1515 tests, лёгкие helpers18/18 и strict e2e types прошли. Эти результаты не являются общими focused/package/full. Оба runs освободили4416/25676/4417, fixture schema set0→0;55/59 прежних файлов артефактов сохранены. Конечная проверка: своих test Node/Chromium процессов0, временных author/demo каталогов0;6 прежних процессов не тронуты, исходные HEAD/status/контрольные суммы совпадают. Свой healthy Postgres16 оставлен для последующих local проверок. Все13 required=true, full без исключений и T16 NOT_READY сохранены; push/CI/staging/lease не выполнялись.
-
-## D-073 — 2026-10-31 — Управлять причинной веткой pending-disable, не расширять продуктовые сроки
-
-- Контекст: продолжение RCA согласовано; прежнее ограничение двух случайных тяжёлых повторов не является запретом детерминированных проверок. Нового воспроизведения c0837de нет, его неполный trace не позволяет ретроспективно установить причину closed.
-- Проверка: arrival-causality.test исполняет настоящие Controller/Broker/SeatAdapter/PluginKernelClient и scaffold в QuickJS. Управляется только worker boundary; handler consumption отмечается непосредственно у vm.event, отдельно от dispatch и promise completion. Fake monotonic clock не является реальным browser elapsed proof и не заменяет независимые kernel watchdog tests. Dispatch0, consume800, accepted/completion1800 различаются; поздний старт после entry20000 даёт entry-expired без claim; новое поколение/старая revision не оживляют старый ready.
-- Причинное различие: применение пустого manifest на1200 даёт settlement retired1200; тот же ответ на3100 даёт сначала lost-answer3000, затем retire3100, по одному cancel. Host mutation/hint при pending HTTP request ещё не означает принятую runtime revision. Retirement отменяет pending, но сам по себе не закрывает page grant; после5000 он закрывается window-expired. Три мутации настоящего compiled source (activate, retire cancel, stale-revision fence) обнаружены; исходные compiled bytes восстановлены.
-- Решение: неподтверждённый product queue fix не вносить. Узкий protocol witness запускает настоящую discovery только после normal entry; проверяет actual pending/current до передачи claim настоящему серверу; запускает обычный Host CAS PUT сразу в correlated accepted callback. Library revision готовится до гонки и обновляется из успешных PUT, без GET/UI/poll между accepted и disable. Это не замена author UI acceptance общего demo. Никакие HTTP/server ответы не подменяются; четырёхклиентный normal UI вход и все authoritative/pose/intermediate assertions сохраняются.
-- Наблюдаемость: до8 identity-free settlement reason/time различают retired/owner-cancel/lost-answer/accepted и остальные существующие причины. Наблюдение не меняет сроки/очереди/права/условия гранта; browser итог сохраняет применённую revision и grant/settlement trace.
-- Локальный результат: runtime build,46/46 узких compiled tests,19/19 actual-helper tests и строгие e2e types прошли; ранний build с ошибками типов и неверное ожидание отсутствия уже отправленного connection handler сохранены как failures. Разрешён ровно один последующий browser run с ожидаемым retired и release<3000, actual occupied+accepted→два RAF standing до empty/release; он ещё не выполнен. Общие review/focused/package/full/CI/G/X остаются обязательны, все13 required=true, T16 NOT_READY.
-
-## D-074 — 2026-10-31 — Новый полный trace отличает initial lost-answer от старого отказа без claim
-
-- Terminal: единственный разрешённый реальный browser run на9e8519fff788ab21e4bc9379f810e65fa9eeb23a завершён failed,0 expected/1 unexpected/0 skipped/flaky,137.2s, без timeout. До запуска неверно указанный полный SHA был отклонён preflight без создания marker/runner; это не дополнительный browser run. Прежние63 артефакта неизменны.
-- Симптом: initial four-seat снова не прошёл60000ms. Три клиента armed→open→used, по одному accepted claim; четвёртый сделал claim и получил server accepted, но его adapter уже завершил попытку через lost-answer. Pending-disable не достигнут: новый scheduling, release<3000 и intermediate delivery/pose в browser этим run не приняты.
-- Почему1: у отказавшего клиента firstReady24718, open29189.8, lost-answer settlement33637.4, closed/window-expired34322.8 — monotonic время одной страницы. ready dispatch29190, failed34404; у следующей instance dispatch38763/arrivalAllowed=false/completed40099.5. Последующий closed соответствует завершённому arrival window, а не отсутствию activate.
-- Почему2: correlated accepted не завершил активную попытку до штатного3000ms timer; trace явно помечает lost-answer, не retired. В raw protocol были claim/accepted/release/release-result, поэтому новый отказ НЕ повторяет старый c0837de с candidates0/claims[]. Не сравнивать часы страницы с Node observation как единый clock и не назначать callback-причину только по их близости.
-- Почему3: ожидание четырёх confirmed seats не гарантирует, что реальная доставка каждой попытки уложится в её более короткий3000ms deadline. Длинное ожидание initial60000 не должно оживлять отменённый claim или продлевать grant.
-- Почему4: текущий trace локализует отказ до claim-response/arrival boundaries, но не отделяет сетевую/потоковую задержку от нагрузки browser и исполнения callback. Это альтернативы, не доказанная физическая первопричина или product queue defect. В частности, failed ready promise не является временем старта handler, а новый running VM не доказывает здоровье прежнего поколения.
-- Почему5: прежний конечный closed терял причинную историю; bounded grant/settlement trace устраняет этот пробел детектирования. Физическая причина задержки нового run и причина старого неполного trace различаются и не установлены задним числом.
-- Действия: оставить product deadlines/права/pose/queue поведение неизменными; сохранить управляемый pending scheduling и actual-component/mutation controls. Дополнительная реальная-component regression подаёт accepted после lost-answer: один cancel, window-expired5000, поздняя новая instance получает arrivalAllowed=false и не делает второй claim. Финальный runtime build и47/47 узких tests passed; helper19/19/strict types passed до browser. Это согласованный с новым trace counterexample, не browser PASS и не полная модель kernel watchdog/restart.
-- Cleanup: своих Node/Chromium test процессов0,4416/25676/4417 свободны, schema0→0, external author dirs0, healthy собственный Postgres оставлен. Семь заранее работавших MCP процессов не тронуты; первая cleanup-классификация ошибочно посчитала их тестовыми, отдельный исправленный receipt учитывает время запуска и сохраняет исходный. Source checkout HEAD/status/шесть baseline files unchanged. Никаких push/CI/deploy/lease/full/package/общего focused не было; все13 required=true/full без исключений, новое substantive review и exact-SHA G/X остаются обязательны. T16 NOT_READY.
-
-## D-075 — 2026-10-31 — Разделить нативный приём и фактическую доставку через тестовый WS-прокси
-
-- Source review: initial barrier сохраняет четыре WebSocketRoute до загрузки сцен, затем вызывает connectToServer. Это НЕ переключение на native passthrough: Playwright1.58.2 WebSocketRoute.connectToServer вызывает connect, _apiConnect оставляет _passthrough=false. Каждое направление продолжает native→binding→Node→sendToPage/sendToServer→mock.dispatchEvent. Неустановленные onMessage handlers используют тот же Node round trip. До connect mock уже может получить ensureOpened/open; authoritative occupancy ещё отсутствует. CDP capture наблюдает native endpoint, не фактический callback RoomStateClient. После barrier snapshots намеренно не удерживаются, но все frames продолжают proxy.
-- Гипотеза: лишние task/protocol очереди при четырёх renderers задерживают actual accepted за3000ms. Альтернативы: native/network receive delay, page event loop/rendering, stale socket generation, несовпавший commandId или retirement. Устройство цепочки доказано исходниками, причинность конкретного D-074 timeout ещё нет. Старый c0837de без claims остаётся отдельным неполным trace, в том числе возможен entry expiry.
-- Наблюдение: test-only pre-navigation hook сохраняет до96 фаз восьми attempts на performance.now одной страницы: outgoing claim/native send/native message/mock dispatch/actual app callback/return/release. Correlation keys и socket references остаются только в closure; наружу выходят порядковые поколения/attempts/current и времена. Existing adapter diagnostics добавляет до32 requested/answer с accepted/busy/no-flight/different-command; это выполняется непосредственно в реальном adapter, без изменения условий, таймеров, очередей или нового debug API. Settlements сохраняют cancel/retire причину и время. Никаких CDP timestamp/Node вычитаний из page clock.
-- Предварительные проверки: runtime build,48/48 domain tests,20/20 helper tests и strict e2e types passed. Actual injected Playwright mock в лёгком regression различает native400 и delayed app3500 при неизменных bytes/delegation; privacy/copy/bounds adapter проверены. Первое helper ожидание неверно вызывало generated export wrapper; сохранён failed log и исправлен только вызов fixture.
-- Проверка: initial claim phases должны отличить native transport от test-owned delivery.3000/5000/20000/60000, четыре normal UI entrants, authority/race/no ghosts и pending-disable managed replay/intermediate two-RAF/pose/retired остаются неизменны. До browser PASS T16 NOT_READY; общий review/focused/package/full/CI/G/X не заменяются этим этапом.
-
-## D-076 — 2026-10-31 — Initial clients используют native WS, барьер переносится перед HTTP discovery
-
-- Instrumented browser на8626b37: failed initial60000,0 expected/1 unexpected/0 skipped/flaky,146s. Три seated/current-generation correlated attempts прошли actual adapter accepted. Их page-clock outgoing→native-send + native-receive→app-delivery:619.7+718.2=1337.9ms,54.2+1543.1=1597.3ms,1460+895.6=2355.6ms. Callback→adapter/return менее1ms; нет другого socket/command mismatch. Native-send→native-receive1422.4/1312.3/773.4ms включает server и receiver scheduling, это не чистая сетевая задержка.
-- Симптом четвёртого клиента иной: open34303.9, ready dispatch34304.7/failed35607.9, claims0, затем window-expired40602.6; позднее другое ready arrivalAllowed=false/running1. Этот run не воспроизвёл D-074 lost-answer и не устанавливает причину ready failure или старого c0837de. Одна успешная попытка принята через3134.1ms от adapter requested раньше задержанного timer: elapsed3000 сам по себе не означает, что timer уже исполнился.
-- Почему1–2: normal clients всё время проходят ненужные асинхронные proxy crossings, дающие в измеренных attempts1.34–2.36s сверх native send/receive. Почему3: native CDP ACK не покрывает real app delivery, длинный initial timeout маскирует более короткие deadlines. Почему4–5: readiness barrier был реализован перехватом живого transport и оставлял mock/proxy после release; фазовое различие не проверялось. Это подтверждённый дефект test setup, а не доказанная единственная физическая причина всех прежних failures.
-- Исправление: четыре обычных UI entrants одновременно проходят entry/scene/native connection с настоящими snapshots. Вместе освобождается только исходная authenticated HTTP discovery request, без fulfillment/substitution. WS initial clients вообще не маршрутизируется. Все normal correlated claims, exact current-generation authority/sets/occupancy/no ghosts/race/reload/reconnect и прежние deadlines сохраняются. Managed route pending-disable и его intermediate replay не меняются; UI author acceptance не заменяется.
-- Ожидаемый завершающий trace: initial outgoing/native-send и native-receive/native-app-delivery совпадают в одной task, mock-dispatch отсутствует; actual adapter accepted на текущих attempts. Затем pending witness settlement retired/release<3000 и actual occupied+accepted→два RAF standing/pending-null/unchanged pose до empty/release. Результат ещё требуется. Ports free/schema0→0/195 прежних файлов unchanged после instrumented run; прочие T16 критерии остаются открыты.
-
-## D-077 — 2026-10-31 — Native ACK исправлен, complete auto-seat остаётся failed по entry expiry
-
-- Terminal на28622540e95ca9662c06e2d8738195b04494599f:0 expected/1 unexpected/0 skipped/flaky,136s. Initial native trace совпал с ожиданием: outgoing/native-send0–0.1ms, native-receive/native-app-delivery0ms, mock-dispatch отсутствует. Три реальных correlated attempts приняты текущим adapter через1140.4/16.8/935.5ms от requested, без lost-answer/retirement/mismatch. Это проверяет устранение proxy latency, но не является complete PASS и не объясняет D-074 задним числом.
-- Четвёртый клиент: firstReady18497.7, entry-expired39528.2, activate39582.2, ready dispatch39582.6/completed41091.9/arrivalAllowed=false. Все значения — один page monotonic clock; никакого claim/settlement/native ACK этого клиента не было. Ready пришёл через21084.5ms после firstReady: entry20000 действительно истёк, а3000ms claim timer вообще не запускался. Этот trace прямо подтверждает entry expiry только текущего run, не старого c0837de.
-- Остаточная причинная граница: HTTP discovery barrier расположен после platform readiness ранних entrants и может тратить их entry budget; затем ещё выполняются discovery/artifact verification/worker startup. Сколько именно заняли удержание discovery, дальнейший startup, worker queue и renderer scheduling, текущий page trace не разделяет. Нельзя вычитать Node barrierOpened из page firstReady либо объявлять startupTiming полным временем всех этих фаз. Следующее недостающее наблюдение — page-clock request start/gate release/response completion/принятие manifest/startup dispatch/actual handler consumption, рядом с firstReady; для ready failure предыдущего run нужна причина именно первой instance, не lastFailure поздней.
-- Корректирующее действие выполнено только для доказанного постоянного WS proxy. Его предотвращающий regression исполняет настоящий injected mock и native/current-vs-old generation, а исходный authenticated HTTP barrier проверен без fulfill/WS route.22/22 helpers,48/48 domain и runtime build/strict types passed; elapsed3000/entry20000 и остальные права/sandbox/pose semantics не менялись. Полный scenario всё ещё failed до pending-disable; retire/release<3000/intermediate replay в новом browser не подтверждены. Следующая развилка — pre-readiness UI/admission barrier против измеренного startup bottleneck, а не увеличение deadline.
-- Cleanup обоих runs:4416/25676/4417 free, fixture schema0→0,195/202 старых файлов неизменны; собственных test Node/Chromium и external author dirs0. Собственный PG healthy сохранён; source checkout HEAD/status/шесть baseline файлов unchanged,7 прежних MCP процессов не тронуты. Stage/lease/CI/Docker/full не выполнялись; все13 required=true/full без исключений, T16 NOT_READY.
-
-## D-078 — 2026-10-31 — Синхронизировать обычные входы до admission, а не discovery после readiness
-
-- Решение: четыре заполненные и доступные формы штатного onboarding ждут перед реальными UI-действиями входа. После общего открытия барьера admission, scene loading, native WS, discovery и SDK startup выполняются без удержания запросов. Общий enterPluginRoom сохраняет прежний путь приглашения и получает необязательный callback перед submit; ожидание admission response начинается непосредственно перед click.
-- Основание: firstReady запускает entry20000 независимо от discovery. Actual Controller/SeatAdapter/QuickJS regression с управляемыми часами отличает удержание discovery после readiness за20001ms (entry-expired, ни одного claim/timer) от25000ms до admission/readiness (полный entry budget, accepted). Это подтверждает возможность дефекта барьера, не объясняет задним числом неполные прежние traces.
-- Проверяемые границы: готовность всех четырёх форм, реальные trusted clicks и admission requests, correlated server claims, четыре разных confirmed seats и current-generation exact authority. Пассивное наблюдение сохраняет page-clock discovery start/response/body end, worker/init/ready dispatch и получение запроса реального ready handler; последнее не является точным временем начала handler или завершением lifecycle. URLs/source/action IDs остаются внутри bounded closure.
-- Ограничения: pending-disable managed replay, ordinary Host CAS при actual accepted, retired/release<3000, occupied+accepted→два RAF standing/pending-null/unchanged pose до empty/release неизменны.3000/5000/20000/initial60000, права, sandbox и pose ownership не меняются. Полный T16 контракт остаётся обязательным независимо от исхода узкого сценария.
-
-## D-079 — 2026-10-31 — В управляемом pending witness упорядочить refresh относительно настоящего Host CAS
-
-- Основание: после четырёх успешных normal entries pending trace получил server accepted на1396ms, CAS200 на2242ms, но промежуточный runtime read ещё вернул enabled revision на2050ms; disabled revision применена после lost-answer, release3309.7ms. Controller назначает следующий poll от начала предыдущего; ранний enabled read не является наблюдением завершённого disable.
-- Решение: только в управляемом cancellation witness discovery, начавшаяся при held claim, продолжается после настоящего CAS200. Ответы по-прежнему читает штатный HTTP client; body/revision не подменяются и runtime kick не вызывается. Initial four normal entrants остаются полностью без HTTP/WS routing. Это проверка retirement, не обещание распространить произвольный disable быстрее3000ms при любой фазе polling.
-- Убрать дополнительный Node/page round trip перед передачей claim: preinstalled hook сохраняет actual pending seat/standing непосредственно перед неизменённым send; сохранённый boolean обязательно проверяется позднее. request_seat_claim в runtime-command-bridge синхронизирует debug до send_seat_claim. Нынешнее состояние после гонки не заменяет этот pre-send факт.
-- Границы: Host CAS запускается только на correlated real accepted, допускается только settlement retired и release<3000; intermediate occupied/accepted→два RAF standing/pending-null/unchanged pose до empty/release остаётся обязательным. Отрицательные controls сохраняют отказ late release3200 и не позволяют позднему pending исправить отсутствовавший pre-send witness. Продуктовые polling, deadlines, authority и локальная pose не меняются.
-
-## D-080 — 2026-10-31 — Разделить normal entry, startup и ответ pending claim
-
-- Основание: enterPluginRoom подтверждает loaded scene и connected room-state, но не завершение discovery/artifact verification/Worker prepare/init. Platform readiness отдельно запускает entry20000; instance ready ещё не означает consumption очереди room.ready. Начало ожидания accepted сразу после entry включало эти предшествующие стадии. Закрытие четырёх initial contexts уже предусмотрено; CPU-причина задержки из этого не следует.
-- Решение: pending retirement — отдельный экспортируемый сценарий с одинаковыми local/X wrappers. Общий внешний SDK/build и обычный Host CAS переиспользуются, Host renderer закрыт до entrant. Initial four-client race, stand/reload/reconnect/disabled late/no-ghost lifecycle остаётся полным самостоятельным сценарием, без HTTP/WS routing после admission.
-- Startup pending entrant проходит без initial discovery hold и имеет отдельное ограниченное ожидание actual outgoing claim60000 после normal entry. Прежние15000 наблюдения accepted начинаются непосредственно при outgoing claim. Сохранённый перед send page-clock факт обязан подтвердить readiness/correlation/online, activation в пределах entry20000 и claim в пределах arrival5000. Поздняя instance не может исправить этот факт. Управляемые часы лёгких regressions не являются browser elapsed proof.
-- Response chain не ослаблена: ordinary Host CAS только при real correlated accepted; pending refresh после CAS200 читает настоящий manifest200 с disabled bindings0/revision runtime; settlement только retired; ровно один claim/release, release от actual claim<3000. Actual occupied+accepted доставляются до двух RAF standing/pending-null/unchanged root pose, затем empty/release. Fresh exact authority проверяется у entrant, после его закрытия — новым disabled late client без ghosts. Во время pending жив только один3D client, роли/права/sandbox/pose/product deadlines не меняются. Это не замена author UI lifecycle общего demo.
-- Последствия: прежняя startup discovery gate из D-073 заменена, CAS-ordering D-079 сохранён. Все13 критериев T16 required=true, full без исключений и итоговая поставка остаются обязательными; узкая auto-seat проверка сама по себе не завершает T16.
+## D-082 — 2026-10-31 — Late zero effects проверяются после disabled discovery
+- Scene+connection и свежий room_state приходят независимо от HTTP plugin discovery. Workers0/standing/authority допускают requests.plugin0 и не доказывают disabled binding.
+- До zero-effects assertions нужен настоящий runtime HTTP200 с exact CAS revision/empty bindings и принятая runtime state=empty/revision/instances0/running0/failed0. Затем workers0/wasm0/claims0/current+pending=null и exact single-participant authoritative empty occupancy, лишь затем context close.
+- Actual-helper positive и negative controls различают завершённую discovery, незавершённую discovery и непринятую revision. Без sleep/увеличения сроков; independent cleanup сохраняется. Final focused/package/full и exact-SHA DoD остаются обязательными.

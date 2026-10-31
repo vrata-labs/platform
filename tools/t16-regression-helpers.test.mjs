@@ -15,7 +15,7 @@ function loadHelper(relative, overrides = {}, append = "", globals = {}) {
   const filename = resolve(root, relative), module = { exports: {} };
   const localRequire = name => {
     if (Object.hasOwn(overrides, name)) return overrides[name];
-    if (name.startsWith("./")) return loadHelper(resolve(dirname(filename), `${name}.ts`), overrides, "", globals);
+    if (name.startsWith("./")) return loadHelper(resolve(dirname(filename), `${name.replace(/\.js$/, "")}.ts`), overrides, "", globals);
     return createRequire(filename)(name);
   };
   // ESM imports are hoisted even when the source places them below a constant;
@@ -354,7 +354,7 @@ for (const [startupAt, releaseDelta] of [[16_000, 1200], [100, 3200], [21_050, 1
   page.addInitScript = async () => { installed = true; };
   page.evaluate = async callback => {
     if (callback.toString().includes("localPose")) throw afterFence;
-    if (callback.toString().includes("readyDeliveries")) return { revision: 9, readyDeliveries: [], pendingBeforeSend: true, releaseDeltaMs: releaseDelta,
+    if (callback.toString().includes("readyDeliveries")) return { revision: 9, lastInstanceFailure: null, readyDeliveries: [], pendingBeforeSend: true, releaseDeltaMs: releaseDelta,
       startup: { ready: true, correlation: true, online: true, firstReadyAtMs: 10, openedAtMs: startupAt - 20, claimAtMs: startupAt },
       entry: { joinClicks: [{ trusted: true }], admissionStarts: [1], discovery: [{ status: 200 }] },
       seating: { settlements: [{ reason: "retired" }] } };
@@ -401,7 +401,8 @@ for (const [startupAt, releaseDelta] of [[16_000, 1200], [100, 3200], [21_050, 1
       response: async () => ({ status: () => 200, json: async () => ({ revision: 9, bindings: [], token: "must-not-log", config: { private: "must-not-log" } }) }) });
     mutationCommitted = true;
     now = startupAt + releaseDelta; fromClient(JSON.stringify({ type: "seat_release", commandId: releaseId }));
-    now += 20; fromServer(JSON.stringify({ type: "seat_release_result", seatReleaseResult: { commandId: releaseId } }));
+     now += 20; fromServer(JSON.stringify({ type: "seat_release_result", seatReleaseResult: { commandId: releaseId } }));
+     return 9;
   };
   const observations = new Map();
    await assert.rejects(helper.disablePendingClaim({}, {}, roomId, put, [], observations, async () => ({})),
@@ -424,6 +425,159 @@ for (const [startupAt, releaseDelta] of [[16_000, 1200], [100, 3200], [21_050, 1
   for (const privateValue of [roomId, claimId, releaseId, "private-participant", "example.invalid", "must-not-log"]) {
     assert.equal(logs[0][1].includes(privateValue), false);
   }
+});
+
+// The VM/network/page boundaries are controlled; cancellation and sticky failure
+// come from the actual Controller/SeatAdapter, including real empty refresh.
+async function pendingCausalityFixture(earlyFailure = false, lateDiscovery = "complete") {
+  const { RoomPluginController } = loadHelper("apps/runtime-web/src/plugins/controller.ts");
+  const { RoomPluginSeatAdapter } = loadHelper("apps/runtime-web/src/plugins/seat-adapter.ts");
+  const { expectExactRoomAuthority } = loadHelper("tests/e2e/room-state-observation.ts");
+  const actualExpect = require("@playwright/test").expect;
+  const expect = (...args) => actualExpect(...args);
+  // Deterministic single evaluation: an unfinished discovery or unapplied
+  // revision must fail, not spend 15s on a fake browser boundary.
+  expect.poll = callback => ({ async toBe(value) { await Promise.resolve(); actualExpect(await callback()).toBe(value); },
+    async toEqual(value) { await Promise.resolve(); actualExpect(await callback()).toEqual(value); } });
+  let now = 10, fromClient, fromServer, runtimeRoute, readyResolve, readyReject, flight;
+  let snapshot = { revision: 1, bindings: [] }, enters = 0, intermediateFrames = 0, pendingClosed = 0, lateClosed = 0;
+  const commands = [], logs = [], cancelledAt = [], discoveryCalls = [];
+  const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+  const world = { ready: true, correlation: true, online: true, xr: false, selfId: "pending",
+    seats: [{ id: "seat-01", yaw: 0 }], occupancy: {}, currentSeatId: null, pendingSeatId: null };
+  const sendClient = payload => { commands.push({ ...payload }); fromClient(JSON.stringify(payload)); };
+  const sendServer = payload => {
+    const inner = payload.seatClaimResult ?? payload.seatReleaseResult;
+    if (inner) commands.push({ type: payload.type, ...inner });
+    fromServer(JSON.stringify(payload));
+  };
+  const adapter = new RoomPluginSeatAdapter({ world: () => world, optedOut: () => false, clock: () => now, random: () => "alias",
+    claim(seatId, commandId) {
+      world.pendingSeatId = seatId;
+      const seating = adapter.diagnostics();
+      Object.assign(window.__t16SeatDelivery, { pendingBeforeSend: true, startup: { ready: true, correlation: true, online: true,
+        firstReadyAtMs: seating.firstReadyAtMs, openedAtMs: seating.openedAtMs, claimAtMs: now } });
+      sendClient({ type: "seat_claim", commandId, seatId });
+    },
+    cancel(commandId) {
+      cancelledAt.push(now); world.pendingSeatId = null;
+      window.__t16SeatDelivery.releaseDeltaMs = now - 100;
+      sendClient({ type: "seat_release", commandId, seatId: "seat-01" });
+      sendServer({ type: "room_state", room: { seatOccupancy: {} } });
+      sendServer({ type: "seat_release_result", seatReleaseResult: { commandId } }); return true;
+    } });
+  const controller = new RoomPluginController({ apiBaseUrl: "https://example.invalid", roomId: "owned", clock: () => now,
+    context: () => ({ active: true, ready: true, online: true, visible: true, connection: "connected" }),
+    proof: () => ({ token: "unit-only", deadlineMs: 900_000 }), render() {}, start: async () => assert.fail("VM boundary is already running"),
+    timers: { schedule: () => ({}), cancel() {} }, http: { snapshot: async () => snapshot },
+    seating: { ready: () => true, supported: () => true, activate: () => adapter.activate(),
+      snapshot: (owner, seating) => adapter.snapshot(owner, seating), retire: owner => adapter.retire(owner) } });
+  const debug = { participantId: "pending", roomStateConnected: true, remoteParticipants: [], seatOccupancy: {},
+    currentSeatId: null, pendingSeatId: null, locomotionMode: "desktop", localPose: { root: { x: 0, y: 0, z: 0 } },
+    get plugins() { return { ...controller.diagnostics(), seating: adapter.diagnostics() }; } };
+  const window = { __VRATA_DEBUG__: debug, __t16SeatDelivery: { accepted: 0, occupied: 0, released: 0 },
+    __t16SeatEntryFacts: () => ({ joinClicks: [{ trusted: true }], admissionStarts: [1], discovery: [{ status: 200 }] }) };
+  function pageFor(ownWindow, closed) {
+    const context = { close: async () => { closed(); } }, page = new EventEmitter();
+    page.context = () => context; page.isClosed = () => false; page.addInitScript = async () => {};
+    page.evaluate = async (callback, arg) => vm.runInNewContext(`(${callback.toString()})(arg)`, {
+      window: ownWindow, arg, requestAnimationFrame: callback => { intermediateFrames++; callback(0); }, Promise, JSON });
+    return { page, context };
+  }
+  const pending = pageFor(window, () => { pendingClosed++; });
+  const lateDebug = { participantId: "late", roomStateConnected: true, remoteParticipants: [], seatOccupancy: {}, currentSeatId: null, pendingSeatId: null,
+    plugins: { state: lateDiscovery === "unapplied" ? "off" : "empty", revision: lateDiscovery === "unapplied" ? null : 2,
+      instances: 0, running: 0, failed: 0, lastInstanceFailure: null } };
+  const late = { ...pageFor({ __VRATA_DEBUG__: lateDebug }, () => { lateClosed++; }),
+    session: { participantId: "late" }, requests: { plugin: lateDiscovery === "pending" ? 0 : 1, workers: 0, wasm: 0 } };
+  const discoveryTimeout = new Error("late_discovery_unfinished");
+  late.page.waitForResponse = (predicate, options) => {
+    discoveryCalls.push(options); const response = { url: () => "https://example.invalid/api/rooms/owned/plugins/runtime", status: () => 200,
+      json: async () => ({ revision: 2, bindings: [] }) };
+    assert.equal(predicate(response), true);
+    return lateDiscovery === "pending" ? Promise.reject(discoveryTimeout) : Promise.resolve(response);
+  };
+  const authority = { commands: () => commands, snapshot: () => ({ participants: ["pending"], occupancy: {}, generation: 1 }) };
+  const lateAuthority = { commands: () => [], snapshot: () => ({ participants: ["late"], occupancy: {}, generation: 1 }) };
+  const upstream = { onMessage(callback) { fromServer = callback; }, send(bytes) {
+    const payload = JSON.parse(bytes); if (payload.type !== "seat_claim") return;
+    now = 110;
+    sendServer({ type: "room_state", room: { seatOccupancy: { "seat-01": "pending" } } });
+    sendServer({ type: "seat_claim_result", seatClaimResult: { commandId: payload.commandId, seatId: "seat-01", accepted: true } });
+  } };
+  const socket = { connectToServer: () => upstream, onMessage(callback) { fromClient = callback; }, close() {}, send(bytes) {
+    const message = JSON.parse(bytes), state = window.__t16SeatDelivery;
+    if (message.type === "room_state" && message.room.seatOccupancy["seat-01"]) state.occupied++;
+    if (message.type === "seat_claim_result") state.accepted++;
+    if (message.type === "seat_release_result") state.released++;
+  } };
+  pending.page.route = async (_, callback) => { runtimeRoute = callback; };
+  pending.page.routeWebSocket = async (_, callback) => callback(socket);
+  const helper = loadHelper("tests/e2e/room-plugin-auto-seat-scenarios.ts", {
+    "@playwright/test": { expect }, "./plugin-author-scenarios": { pluginPath: (room, suffix) => `/api/rooms/${room}/plugins/${suffix}` },
+    "./room-plugin-fixture": { async enterPluginRoom(_browser, _origin, _room, _role, _name, prepare) {
+      if (++enters === 2) { await prepare(late.context, late.page); return late; }
+      await prepare(pending.context, pending.page); await runtimeRoute({ continue: async () => {} });
+      controller.start(2); await flush();
+      const entry = { binding: { bindingId: "binding", approvedCapabilities: ["seating.claimSelfOnEntry"] }, generation: 1,
+        key: "unit", state: "running", abort: new AbortController(), starting: false, starts: [], instance: {
+          state: "ready", busy: true, terminate() {}, event() { return new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; }); }
+        } };
+      controller.entries.set("binding", entry);
+      now = 90; controller.notifySeating(entry, false); // Actual ready record and failure callback.
+      now = 100; flight = adapter.claim("seat-01", "binding:1");
+      return { ...pending, session: { participantId: "pending" } };
+    } }, "./room-state-observation": { expectExactRoomAuthority }, "./room-seat-protocol-race": {}, "./staging-identity": {}, "./scene-bundle-fixtures": {}
+  }, "\nexport { disablePendingClaim };\n", { performance: { now: () => now }, console: { info: (...args) => logs.push(args), warn() {} } });
+  const put = async () => {
+    now = 1100;
+    if (earlyFailure) {
+      readyReject(new Error("VM lifecycle failed before disable")); await flush();
+      assert.deepEqual(adapter.diagnostics().settlements, [{ atMs: 1100, reason: "retired" }]);
+      assert.equal(controller.diagnostics().failed, 1);
+      assert.equal(controller.diagnostics().readyDeliveries[0].failedAtMs, 1100);
+      now = 1200;
+    }
+    snapshot = { revision: 2, bindings: [] }; controller.kick(); await flush();
+    readyResolve(); await flush();
+    // Actual empty manifest removes failed entries and clears lastFailure. Only
+    // lastInstanceFailure still distinguishes the failure-retirement control.
+    assert.equal(controller.diagnostics().state, "empty"); assert.equal(controller.diagnostics().failed, 0);
+    assert.equal(controller.diagnostics().lastFailure, null); assert.equal(controller.diagnostics().revision, 2);
+    pending.page.emit("requestfinished", { url: () => "https://example.invalid/api/rooms/owned/plugins/runtime",
+      response: async () => ({ status: () => 200, json: async () => snapshot }) });
+    return 2;
+  };
+  return { async run() { return helper.disablePendingClaim({}, {}, "owned", put, [], new Map(), async page => page === pending.page ? authority : lateAuthority); },
+    close() { controller.stop(); adapter.stop(); },
+    facts: () => ({ enters, intermediateFrames, pendingClosed, lateClosed, discoveryCalls, cancelledAt, diagnostics: controller.diagnostics(),
+      settlements: adapter.diagnostics().settlements, logs, listeners: pending.page.listenerCount("requestfinished"), flight }) };
+}
+
+test("actual helper rejects actual VM failure retirement before disable even after empty refresh hides failed entries", async () => {
+  const f = await pendingCausalityFixture(true);
+  try {
+    await assert.rejects(f.run(), /toBeNull[\s\S]*host-unavailable/);
+    const facts = f.facts();
+    assert.equal(facts.diagnostics.lastInstanceFailure, "host-unavailable"); assert.equal(facts.diagnostics.failed, 0);
+    assert.deepEqual(facts.settlements, [{ atMs: 1100, reason: "retired" }]);
+    assert.deepEqual(await facts.flight, { result: "cancelled" });
+    assert.equal(facts.enters, 1); assert.equal(facts.intermediateFrames, 0); assert.equal(facts.listeners, 0);
+  } finally { f.close(); }
+});
+
+for (const discovery of ["complete", "pending", "unapplied"]) test(`actual pending helper requires completed disabled late discovery and accepted empty revision: ${discovery}`, async () => {
+  const f = await pendingCausalityFixture(false, discovery);
+  try {
+    if (discovery === "complete") await f.run();
+    else await assert.rejects(f.run(), discovery === "pending" ? /late_discovery_unfinished/ : /Expected/);
+    const facts = f.facts();
+    assert.equal(facts.enters, 2); assert.equal(facts.intermediateFrames, 4, "both intermediate and final two-RAF checks remain");
+    assert.equal(facts.diagnostics.lastInstanceFailure, null); assert.deepEqual(facts.cancelledAt, [1100]);
+    assert.equal(facts.discoveryCalls.length, 1); assert.equal(facts.discoveryCalls[0].timeout, 15000);
+    assert.equal(facts.listeners, 0); assert.equal(facts.pendingClosed > 0, true);
+    if (discovery === "complete") assert.equal(facts.lateClosed, 1);
+  } finally { f.close(); }
 });
 
 test("preinstalled seat-delivery observer counts only actual correlated replay and restores native methods", async () => {

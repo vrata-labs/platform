@@ -20,7 +20,7 @@ const capabilities = ["seating.claimSelfOnEntry", "seating.cancelPendingOwnClaim
 /** External SDK build and ordinary Host CAS shared by the two integration witnesses.
  * Closing the Host renderer does not elevate or replace its admitted session. */
 async function withAutoSeatRoom(browser: Browser, value: RoomPluginOrigin,
-  run: (roomId: string, put: (enabled: boolean) => Promise<void>) => Promise<void>) {
+  run: (roomId: string, put: (enabled: boolean) => Promise<number>) => Promise<void>) {
   expect(await identityProtocolAt(value.origin)).toBe(2);
   const author = await createExternalAuthorProject(await downloadPublicSdk(value.origin, "0.2.0"), "0.2.0");
   await withCleanup(async () => {
@@ -36,6 +36,7 @@ async function withAutoSeatRoom(browser: Browser, value: RoomPluginOrigin,
           enabled, config: {}, approvedCapabilities: capabilities, capabilityApproval: { artifactSha256: pkg.artifactSha256, capabilities } });
         expect(response.status).toBe(200);
         revision = response.json<{ revision: number }>().revision;
+        return revision;
       };
       await put(true);
       await host.context.close();
@@ -177,7 +178,7 @@ export async function runPendingAutoSeatScenario(browser: Browser, value: RoomPl
     () => { captures.length = 0; contexts.length = 0; observations.clear(); }]);
 }
 
-async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, roomId: string, put: (enabled: boolean) => Promise<void>,
+async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, roomId: string, put: (enabled: boolean) => Promise<number>,
   contexts: Array<{ close(): Promise<void> }>,
   observations: Map<Page, RoomAuthorityCapture>, observe: (page: Page) => Promise<RoomAuthorityCapture>) {
   let held = false, accepted = false, releaseAck = false, claimAt = 0, releaseAt = 0;
@@ -191,6 +192,7 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
   const mutationGate = new Promise<void>(resolve => { finishMutation = resolve; });
   const protocolTasks = new Set<Promise<void>>();
   let protocolError: unknown, disableTask: Promise<void> | undefined;
+  let disabledRevision: number | undefined;
   const track = (task: Promise<void>) => {
     protocolTasks.add(task);
     void task.catch(error => { protocolError ??= error; }).finally(() => protocolTasks.delete(task));
@@ -199,7 +201,7 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
   const mark = (phase: string) => { phases[phase] = performance.now(); };
   const runtimeReads: Array<{ at: number; status: number | null; revision: number | null; enabledBindings: number | null }> = [];
   const runtimeReadsPending = new Set<Promise<void>>();
-  let runtime: { revision: number | null; readyDeliveries: unknown; pendingBeforeSend: boolean; startup: any; entry: any; releaseDeltaMs: number | null;
+  let runtime: { revision: number | null; lastInstanceFailure: unknown; readyDeliveries: unknown; pendingBeforeSend: boolean; startup: any; entry: any; releaseDeltaMs: number | null;
     seating: { settlements?: Array<{ reason: string }> } | null } | null = null;
   // Passive timing only: never intercept or replace runtime authority. Keep no
   // URLs, credentials, binding identities, config, source or raw response bytes.
@@ -275,7 +277,7 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
           if (!accepted && payload.type === "seat_claim_result" && payload.seatClaimResult?.commandId === claimId && payload.seatClaimResult?.accepted === true) {
             accepted = true; mark("serverAccepted");
             mark("disableRequested");
-            disableTask = put(false).then(() => { mark("disableAck"); finishMutation(); });
+            disableTask = put(false).then(revision => { disabledRevision = revision; mark("disableAck"); finishMutation(); });
             track(disableTask);
           }
           if (!releaseAck && payload.type === "seat_release_result" && payload.seatReleaseResult?.commandId === releaseId) {
@@ -324,7 +326,8 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     expect(claimCount).toBe(1); expect(releaseCount).toBe(1);
     runtime = await member.page.evaluate(() => {
       const plugins = (window as any).__VRATA_DEBUG__?.plugins;
-      return { revision: plugins?.revision ?? null, readyDeliveries: plugins?.readyDeliveries ?? null,
+      return { revision: plugins?.revision ?? null, lastInstanceFailure: plugins?.lastInstanceFailure,
+        readyDeliveries: plugins?.readyDeliveries ?? null,
         pendingBeforeSend: (window as any).__t16SeatDelivery?.pendingBeforeSend === true,
         startup: (window as any).__t16SeatDelivery?.startup ?? null, entry: (window as any).__t16SeatEntryFacts?.() ?? null,
         releaseDeltaMs: (window as any).__t16SeatDelivery?.releaseDeltaMs ?? null,
@@ -341,6 +344,12 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     expect(runtime.entry?.joinClicks.length === 1 && runtime.entry.joinClicks[0].trusted
       && runtime.entry.admissionStarts.length === 1 && runtime.entry.discovery.some((row: any) => row.status === 200)).toBe(true);
     expect(runtime.seating?.settlements?.map(row => row.reason)).toEqual(["retired"]);
+    // This fresh page has one binding/claim instance. failEntry also retires
+    // seating, and empty discovery clears failed entries/lastFailure, but NOT
+    // this sticky signal. retired plus failed=0 alone is not disable causality.
+    expect(runtime.lastInstanceFailure, "pending instance must not fail before disabled revision").toBeNull();
+    expect(Number.isSafeInteger(disabledRevision)).toBe(true);
+    expect(runtime.revision).toBe(disabledRevision);
     await Promise.all(runtimeReadsPending);
     expect(runtimeReads.some(row => row.status === 200 && row.enabledBindings === 0 && row.revision === runtime!.revision)).toBe(true);
     // Deliver ONLY occupied/accepted first. A later correct empty snapshot must
@@ -381,11 +390,30 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     expect(state.currentSeatId === null && state.pendingSeatId === null && Object.keys(actor.authority.snapshot()!.occupancy).length === 0).toBe(true);
     expect(actor.authority.commands().some(command => command.type === "seat_claim_result" && command.commandId === claimId && command.accepted)).toBe(true);
     await member.context.close();
+    let lateDiscovery!: Promise<{ revision: number; bindings: unknown[] }>;
     const late = await enterPluginRoom(browser, value, roomId, "member", "Pending disabled late member", async (context, page) => {
       contexts.push(context); observations.set(page, await observe(page));
+      // Register before navigation: entryComplete is only scene+connection.
+      // Neither an authority snapshot nor workers=0 proves HTTP discovery.
+      lateDiscovery = page.waitForResponse(response => new URL(response.url()).pathname === pluginPath(roomId, "runtime")
+        && response.status() === 200, { timeout: 15_000 }).then(response => response.json());
+      void lateDiscovery.catch(() => undefined);
     });
-    await expectExactRoomAuthority([{ ...late, participantId: late.session.participantId, authority: observations.get(late.page)! }]);
-    expect((await seatState(late.page)).currentSeatId).toBeNull(); expect(late.requests.workers).toBe(0);
+    const disabled = await lateDiscovery;
+    expect(disabled.revision).toBe(disabledRevision); expect(disabled.bindings).toEqual([]);
+    await expect.poll(() => late.page.evaluate(() => {
+      const plugins = (window as any).__VRATA_DEBUG__?.plugins;
+      return { state: plugins?.state, revision: plugins?.revision, instances: plugins?.instances,
+        running: plugins?.running, failed: plugins?.failed, failure: plugins?.lastInstanceFailure };
+    }), { timeout: 15_000 }).toEqual({ state: "empty", revision: disabledRevision, instances: 0, running: 0, failed: 0, failure: null });
+    const lateActor = { ...late, participantId: late.session.participantId, authority: observations.get(late.page)! };
+    await expectExactRoomAuthority([lateActor]);
+    const lateState = await seatState(late.page);
+    expect(lateState.currentSeatId === null && lateState.pendingSeatId === null).toBe(true);
+    expect(late.requests.plugin > 0).toBe(true); expect(late.requests.workers).toBe(0); expect(late.requests.wasm).toBe(0);
+    expect(lateActor.authority.commands().some(command => command.type === "seat_claim")).toBe(false);
+    expect(lateActor.authority.snapshot()!.occupancy).toEqual({});
+    mark("lateDisabledDiscoveryVerified");
     await late.context.close();
   }, () => [() => { finishMutation(); }, () => responseAwaited ? undefined : acceptedObservation, async () => {
     await Promise.allSettled(protocolTasks);
@@ -395,7 +423,8 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     await Promise.allSettled(runtimeReadsPending);
     const finalRuntime = runtime ?? (pendingPage && !pendingPage.isClosed() ? await pendingPage.evaluate(() => {
       const plugins = (window as any).__VRATA_DEBUG__?.plugins;
-      return { revision: plugins?.revision ?? null, readyDeliveries: plugins?.readyDeliveries ?? null,
+      return { revision: plugins?.revision ?? null, lastInstanceFailure: plugins?.lastInstanceFailure,
+        readyDeliveries: plugins?.readyDeliveries ?? null,
         pendingBeforeSend: (window as any).__t16SeatDelivery?.pendingBeforeSend === true,
         startup: (window as any).__t16SeatDelivery?.startup ?? null, entry: (window as any).__t16SeatEntryFacts?.() ?? null,
         releaseDeltaMs: (window as any).__t16SeatDelivery?.releaseDeltaMs ?? null,
