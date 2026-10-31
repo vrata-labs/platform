@@ -208,3 +208,19 @@ test("a stale manifest cannot restore a disabled generation or consume its queue
   assert.equal(h.clients.length, 1); assert.equal(h.claims.length, 0);
   assert.equal(h.consumed.some(row => row.type === "room.ready"), false);
 });
+
+test("late accepted answer after lost-answer cannot use the grant or reopen it for a later instance", async t => {
+  const h = harness(t); await h.start(); await h.workers[0].drain();
+  await h.advance(3000);
+  assert.deepEqual(h.adapter.diagnostics().settlements, [{ atMs: 3000, reason: "lost-answer" }]);
+  await h.advance(1); h.adapter.settleClaim({ seatId: "seat-a", accepted: true, commandId: h.claims[0].id });
+  await h.workers[0].drain();
+  assert.equal(h.adapter.diagnostics().grant, "open", "late ACK is not an accepted active claim");
+  await h.advance(1999);
+  assert.equal(h.adapter.diagnostics().transitions.at(-1)?.reason, "window-expired");
+  await h.config(2, true); await until(() => h.clients.length === 2 && h.controller.diagnostics().running === 1);
+  await h.workers[1].drain();
+  assert.equal(h.controller.diagnostics().readyDeliveries[1].arrivalAllowed, false);
+  assert.equal(h.adapter.diagnostics().grant, "closed");
+  assert.equal(h.claims.length, 1); assert.equal(h.cancels.length, 1);
+});

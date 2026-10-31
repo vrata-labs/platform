@@ -92,6 +92,12 @@
 - Удаление activate, retire cancellation и stale-revision fence в реальном compiled source отвергается тестами. Runtime build и46/46 узких compiled,19/19 actual-helper tests/strict types passed. Новый bounded settlement trace хранит причину/время, не идентификаторы.
 - Pending protocol race теперь откладывает реальную discovery до normal entry, проверяет pending/current перед отправкой claim серверу и запускает обычный Host CAS PUT прямо на server accepted с заранее подготовленной revision. Ответы не заменяются; author UI lifecycle общего demo не меняется. Положительный1200ms helper control доходит до intermediate pose, отрицательный3200ms правильно отказывает на прежнем fence. Нового browser результата ещё нет; разрешён один узкий реальный run. Все13 required/full/новое review сохранены.
 
+### Terminal управляемого этапа — D-074
+
+- Единственный browser run на9e8519fff788ab21e4bc9379f810e65fa9eeb23a: failed,0 expected/1 unexpected/0 skipped/flaky,137.2s, timed_out=false. Три initial entrants used/accepted; один имел claim и lost-answer settlement33637.4, затем closed/window-expired34322.8 (page monotonic). Новая instance получает arrivalAllowed=false. Это конкретный отменённый initial claim, а не старый c0837de с claims[]/candidates0; физическая причина задержки и первоначальная причина c0837de не приписываются по аналогии.
+- Pending-disable не достигнут, поэтому новый Host scheduling/retired/release<3000/intermediate standing в browser ещё не доказан. Никаких дополнительных тяжёлых повторов не было. Новый actual-component late-accepted control воспроизводит lost-answer→window-expired и отказ новой instance без второго claim; итоговый build и47/47 узких tests passed. Это не browser elapsed/PASS.
+- Порты свободны, schema0→0,63 прежних artifacts unchanged, собственный healthy PG сохранён. Процессы/внешний source checkout/план/T17 не менялись; all13 required=true, full без исключений, substantive review/focused/package/full/CI/G/X открыты. **T16 NOT_READY**.
+
 ## Минимальные изменения после проверки матрицы
 
 1. **Shared demo.** Явный isolated floor2 local; расширение `runPublicDemoScenario` авторскими UI-фазами R03–R06. Переиспользовать внешний build и UI операции, не запускать существующий самостоятельный UI test из test. Admin нужен setup/invites/cleanup, не author/upload/bind или role transitions. Два нынешних admin GET lock-state (`public-demo-scenarios.ts:1381,1390`) можно заменить чтением обычного Host session.
