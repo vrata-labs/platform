@@ -94,7 +94,8 @@ export function createRoomPluginPackageService(storage: RoomPluginStorage, blobs
 }
 
 export async function deleteRoomWithPluginCleanup(storage: Storage, scope: RoomPluginScope,
-  getBlobs: () => RoomPluginBlobStorage, documentStorageKeys?: string[]): Promise<boolean> {
+  getBlobs: () => RoomPluginBlobStorage, documentStorageKeys?: string[],
+  deleteDocument?: (storageKey: string) => Promise<void>): Promise<boolean> {
   scope = { tenantId: scope.tenantId, roomId: scope.roomId };
   // Resolve configuration lazily: ordinary legacy rooms must not need object-storage credentials to delete.
   let resolved: RoomPluginBlobStorage | undefined;
@@ -104,5 +105,15 @@ export async function deleteRoomWithPluginCleanup(storage: Storage, scope: RoomP
     put: (...args) => backend().put(...args), read: (...args) => backend().read(...args), delete: (...args) => backend().delete(...args)
   };
   const intent = await createRoomPluginPackageService(storage.roomPlugins, lazy).cleanupRoom(scope);
-  return storage.deleteRoom(scope.roomId, { tenantId: scope.tenantId, deletionId: intent.deletionId }, documentStorageKeys);
+  // Keep document rows (including previous tombstones) until every blob deletion is acknowledged.
+  // No storage IO inside the parent fence. A concurrent upload is detected by the final locked key check;
+  // its row survives for a retry, and late fenced publishers retain their ordinary compensation path.
+  const documents = await storage.prepareRoomDocumentCleanup(scope.roomId, scope.tenantId, intent.deletionId);
+  const cleanedDocumentKeys: string[] = [];
+  for (const document of documents) {
+    if (!deleteDocument) throw new RoomPluginStorageError("room_plugin_cleanup_pending");
+    await deleteDocument(document.storageKey);
+    cleanedDocumentKeys.push(document.storageKey);
+  }
+  return storage.deleteRoom(scope.roomId, { tenantId: scope.tenantId, deletionId: intent.deletionId, cleanedDocumentKeys }, documentStorageKeys);
 }

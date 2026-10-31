@@ -80,8 +80,14 @@ function createFakeApi(options = {}) {
     room: null,
     note: null,
     documents: new Map(),
+    packages: new Map(),
+    bindings: new Map(),
+    pluginRevision: 0,
+    pluginDeleteFailures: options.pluginDeleteFailures ?? 0,
     invites: new Map(),
     calls: [],
+    blobDeletes: [],
+    deleting: false,
     mutationCount: 0,
     roomCreateResponseLost: options.roomCreateResponseLost === true,
     documentDeleteFailures: options.documentDeleteFailures ?? 0,
@@ -142,6 +148,13 @@ function createFakeApi(options = {}) {
       return store.room && path === `/api/rooms/${store.room.roomId}` ? response(store.room) : response({ error: "room_not_found" }, 404);
     }
     if (method === "DELETE" && store.room && path === `/api/rooms/${store.room.roomId}`) {
+      store.deleting = true;
+      for (const key of store.packages.keys()) {
+        if (store.pluginDeleteFailures-- > 0) return response({ error: "room_plugin_cleanup_unavailable" }, 503);
+        store.packages.delete(key); store.blobDeletes.push("plugin");
+      }
+      if (store.documentDeleteFailures-- > 0) return response({ error: "room_document_cleanup_unavailable" }, 503);
+      if (store.documents.size) store.blobDeletes.push("document");
       store.room = null;
       store.note = null;
       store.invites.clear();
@@ -151,6 +164,22 @@ function createFakeApi(options = {}) {
     if (method === "DELETE" && /^\/api\/rooms\/[^/]+$/.test(path)) return response({ error: "room_not_found" }, 404);
 
     const roomId = store.room?.roomId;
+    if (method === "GET" && path === `/api/rooms/${roomId}/plugins/packages`) {
+      if (store.deleting) return response({ error: "room_plugin_cleanup_pending" }, 503);
+      return response({ packages: [...store.packages.values()], bindings: [...store.bindings.values()], revision: store.pluginRevision });
+    }
+    const pluginBinding = path.match(/^\/api\/rooms\/[^/]+\/plugins\/bindings\/([^/]+)$/);
+    if (pluginBinding && ["PUT", "DELETE"].includes(method)) {
+      if (body.expectedRevision !== store.pluginRevision) return response({ error: "plugin_revision_conflict" }, 409);
+      if (method === "PUT") store.bindings.set(pluginBinding[1], { ...body, pluginId: pluginBinding[1] });
+      else store.bindings.delete(pluginBinding[1]);
+      return response({ revision: ++store.pluginRevision });
+    }
+    const pluginPackage = path.match(/^\/api\/rooms\/[^/]+\/plugins\/packages\/([^/]+)$/);
+    if (pluginPackage && method === "DELETE") {
+      if (store.pluginDeleteFailures-- > 0) return response({ error: "plugin_operation_pending" }, 503);
+      store.packages.delete(pluginPackage[1]); store.blobDeletes.push("plugin"); return response({ deleted: true });
+    }
     if (method === "PUT" && path === `/api/rooms/${roomId}/notes/shared`) {
       store.note = { noteId: `${roomId}:shared`, roomId, scope: "shared", content: body.content, updatedAt: fixedDate.toISOString(), deletedAt: null };
       return response({ note: store.note }, 201);
@@ -224,6 +253,7 @@ function createFakeApi(options = {}) {
     }
     if (method === "POST" && path === `/api/rooms/${roomId}/session-control/end`) {
       if (!store.room) return response({ error: "room_not_found" }, 404);
+      if (store.deleting) return response({ error: "room_plugin_cleanup_pending" }, 503);
       if (store.cleanupReturns404) return response({ error: "room_not_found" }, 404);
       store.room.sessionControl.endedAt = fixedDate.toISOString();
       return response({ state: store.room.sessionControl });
@@ -514,7 +544,7 @@ test("partial state refuses seed rerun and cleanup discovers resources after a l
   assert.equal(api.store.tenant, null);
 });
 
-test("cleanup revokes invites, ends session, deletes documents, room, then tenant and retries from redacted record", async (t) => {
+test("cleanup revokes invites, ends session, sweeps room, then tenant and retries from redacted record", async (t) => {
   const { stateFile, api } = await seedFixture(t);
   const cleanupStart = api.store.calls.length;
   const result = await cleanupPublicDemo({ stateFile, adminToken, fetcher: api.fetcher, now: fixedNow, sleep: async () => undefined });
@@ -528,7 +558,6 @@ test("cleanup revokes invites, ends session, deletes documents, room, then tenan
   assert.deepEqual(mutations.map((call) => `${call.method} ${call.path}`), [
     ...[1, 2, 3, 4].map((index) => `POST /api/rooms/${record.roomId}/invites/invite-${index}/revoke`),
     `POST /api/rooms/${record.roomId}/session-control/end`,
-    `DELETE /api/rooms/${record.roomId}/documents/document-1`,
     `DELETE /api/rooms/${record.roomId}`,
     `DELETE /api/tenants/${record.tenantId}`
   ]);
@@ -539,11 +568,119 @@ test("cleanup revokes invites, ends session, deletes documents, room, then tenan
   assert.equal(api.store.mutationCount, mutationsBeforeRetry);
 });
 
-test("cleanup failure stops before room deletion and retains retryable private and redacted files", async (t) => {
+test("plugin cleanup disables, unbinds and retries blobs before documents; records contain no config", async t => {
+  const { stateFile, api } = await seedFixture(t, { pluginDeleteFailures: 1 });
+  const roomPath = `/api/rooms/${api.store.room.roomId}`;
+  api.store.packages.set("owned-package", { packageId: "owned-package", state: "ready" });
+  api.store.bindings.set("owned-plugin", { pluginId: "owned-plugin", packageId: "owned-package", version: "1.0.0",
+    artifactSha256: "a".repeat(64), enabled: true, config: { greeting: "private-config-marker" }, approvedCapabilities: ["status.set"] });
+  const start = api.store.calls.length;
+  const options = { stateFile, adminToken, fetcher: api.fetcher, now: fixedNow, sleep: async () => undefined };
+  await assert.rejects(cleanupPublicDemo(options), error => error.code === "demo_cleanup_incomplete" && error.step === "cleanup-delete-plugin");
+  assert.equal(api.store.bindings.size, 0);
+  assert.equal(api.store.documents.size, 1);
+  assert.ok(api.store.room);
+  assert.equal((await readFile(publicDemoCleanupRecordPath(stateFile), "utf8")).includes("private-config-marker"), false);
+  await cleanupPublicDemo({ ...options, stateFile: publicDemoCleanupRecordPath(stateFile) });
+  await assert.rejects(readFile(stateFile), { code: "ENOENT" });
+  const calls = api.store.calls.slice(start).filter(call => call.method !== "GET");
+  const index = predicate => calls.findIndex(predicate);
+  assert.ok(index(call => call.method === "PUT" && call.body.enabled === false) < index(call => call.method === "DELETE" && call.path.includes("/bindings/")));
+  assert.ok(index(call => call.path.includes("/packages/")) < index(call => call.method === "DELETE" && call.path === roomPath));
+  assert.deepEqual(api.store.blobDeletes, ["plugin", "document"]);
+  assert.equal(api.store.packages.size, 0);
+});
+
+test("failed End checkpoint cannot bypass the durable plugin sweep on retry", async t => {
+  const { stateFile, api } = await seedFixture(t);
+  const roomPath = `/api/rooms/${api.store.room.roomId}`;
+  let failEnd = true;
+  const fetcher = async (url, request) => {
+    if (new URL(url).pathname === `${roomPath}/session-control/end` && failEnd) {
+      failEnd = false;
+      return response({ error: "room_state_unavailable" }, 503);
+    }
+    return api.fetcher(url, request);
+  };
+  const options = { stateFile, adminToken, fetcher, now: fixedNow, getRetries: 0, sleep: async () => undefined };
+  await assert.rejects(cleanupPublicDemo(options), { step: "cleanup-end-session" });
+  assert.equal((await readPublicDemoState(stateFile)).cleanup.pluginsCleaned, true);
+  api.store.packages.set("late-package", { packageId: "late-package", state: "ready" });
+  api.store.pluginDeleteFailures = 1;
+  const retry = { ...options, stateFile: publicDemoCleanupRecordPath(stateFile) };
+  await assert.rejects(cleanupPublicDemo(retry), { step: "cleanup-delete-room" });
+  assert.equal(api.store.deleting, true);
+  assert.equal(api.store.documents.size, 1);
+  assert.equal(api.store.packages.size, 1);
+  assert.deepEqual(api.store.blobDeletes, []);
+  assert.equal(api.store.calls.some(call => call.method === "DELETE" && call.path.includes("/documents/")), false);
+  await cleanupPublicDemo(retry);
+  assert.deepEqual(api.store.blobDeletes, ["plugin", "document"]);
+  assert.equal(api.store.calls.filter(call => call.path === `${roomPath}/session-control/end`).length, 1);
+  assert.equal(api.store.room, null);
+  assert.equal(api.store.tenant, null);
+});
+
+test("publication between empty library and End is swept by room DELETE before documents", async t => {
+  const { stateFile, api } = await seedFixture(t);
+  const fetcher = async (url, request) => {
+    if (new URL(url).pathname.endsWith("/session-control/end")) {
+      api.store.packages.set("racing-package", { packageId: "racing-package", state: "ready" });
+    }
+    return api.fetcher(url, request);
+  };
+  await cleanupPublicDemo({ stateFile, adminToken, fetcher, now: fixedNow, sleep: async () => undefined });
+  assert.deepEqual(api.store.blobDeletes, ["plugin", "document"]);
+});
+
+test("cleanup resumes the room DELETE lifecycle for a specific pending deletion intent", async (t) => {
+  const { stateFile, api } = await seedFixture(t);
+  const roomPath = `/api/rooms/${api.store.room.roomId}`;
+  const fetcher = async (url, request) => {
+    if (new URL(url).pathname === `${roomPath}/plugins/packages`) {
+      api.store.calls.push({ method: "GET", path: `${roomPath}/plugins/packages` });
+      return response({ error: "room_plugin_cleanup_pending" }, 503);
+    }
+    return api.fetcher(url, request);
+  };
+  const start = api.store.calls.length;
+  const result = await cleanupPublicDemo({ stateFile, adminToken, fetcher, now: fixedNow, getRetries: 0, sleep: async () => undefined });
+  assert.equal(result.cleaned, true);
+  assert.equal(api.store.room, null);
+  assert.equal(api.store.tenant, null);
+  const calls = api.store.calls.slice(start);
+  const deleteRoom = calls.findIndex(call => call.method === "DELETE" && call.path === roomPath);
+  assert.ok(deleteRoom > calls.findIndex(call => call.path === `${roomPath}/plugins/packages`));
+  assert.ok(deleteRoom < calls.findIndex(call => call.path === `${roomPath}/session-control/end`));
+  await assert.rejects(readFile(stateFile), { code: "ENOENT" });
+  assert.equal((await readPublicDemoState(result.cleanupRecord, { allowCleanupRecord: true })).lifecycle.cleanup.phase, "completed");
+});
+
+test("cleanup never deletes a room for an unrelated or malformed plugin discovery 503", async (t) => {
+  for (const error of ["identity_authority_unavailable", "plugin_blob_delete_failed", "room_document_cleanup_unavailable", "room_plugin_cleanup_pending_extra", null]) {
+    await t.test(String(error), async t => {
+      const { stateFile, api } = await seedFixture(t);
+      const roomPath = `/api/rooms/${api.store.room.roomId}`;
+      const fetcher = async (url, request) => new URL(url).pathname === `${roomPath}/plugins/packages`
+        ? response({ error }, 503)
+        : api.fetcher(url, request);
+      const start = api.store.calls.length;
+      await assert.rejects(cleanupPublicDemo({ stateFile, adminToken, fetcher, now: fixedNow, getRetries: 0, sleep: async () => undefined }),
+        error => error.code === "demo_cleanup_incomplete" && error.step === "cleanup-discover-plugins" && error.status === 503);
+      assert.ok(api.store.room);
+      assert.ok(api.store.tenant);
+      assert.equal(api.store.documents.size, 1);
+      assert.equal(api.store.calls.slice(start).some(call => call.method === "DELETE" || call.path.endsWith("/session-control/end")), false);
+      assert.equal((await readPublicDemoState(stateFile)).cleanup.pluginsCleaned, false);
+    });
+  }
+});
+
+test("cleanup document failure retains room deletion intent and retryable private and redacted files", async (t) => {
   const { stateFile, api } = await seedFixture(t, { documentDeleteFailures: 1 });
   await assert.rejects(() => cleanupPublicDemo({ stateFile, adminToken, fetcher: api.fetcher, now: fixedNow, sleep: async () => undefined }), (error) => {
     assert.equal(error.code, "demo_cleanup_incomplete");
-    assert.equal(error.step, "cleanup-delete-document");
+    assert.equal(error.step, "cleanup-delete-room");
     assert.equal(error.reason, "demo_request_failed");
     return true;
   });
@@ -555,7 +692,7 @@ test("cleanup failure stops before room deletion and retains retryable private a
   assert.equal(failedRecord.lifecycle.cleanup.phase, "failed");
   assert.equal(JSON.stringify(failedRecord).includes(adminToken), false);
   const mutationPaths = api.store.calls.filter((call) => call.method === "DELETE").map((call) => call.path);
-  assert.equal(mutationPaths.some((path) => path === `/api/rooms/${failedRecord.roomId}`), false);
+  assert.equal(mutationPaths.some((path) => path === `/api/rooms/${failedRecord.roomId}`), true);
   assert.equal(mutationPaths.some((path) => path === `/api/tenants/${failedRecord.tenantId}`), false);
 
   const retried = await cleanupPublicDemo({ stateFile, adminToken, fetcher: api.fetcher, now: fixedNow, sleep: async () => undefined });

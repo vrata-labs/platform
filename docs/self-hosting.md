@@ -2,6 +2,8 @@
 
 This document describes the target self-host path for Vrata `0.1` beta.
 
+For pinned same-origin sandbox assets, plugin/document restart/restore checks and retryable room cleanup, see [Storage lifecycle](plugin-storage-lifecycle.md).
+
 Until `v0.1.0` is released, public GHCR images may not exist. From a source checkout, use `--build` to build images locally.
 
 ## Requirements
