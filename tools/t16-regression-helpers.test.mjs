@@ -294,10 +294,15 @@ test("public-demo stale write projects the read DTO into valid PUT fields and re
 
 test("pending-disable timing stays observational, preserves the 3000ms failure and cleans its response listener", async () => {
   let now = 1, fromClient, fromServer, closed = 0;
+  let installed = false, pendingReads = 0;
   const logs = [], page = new EventEmitter(), context = { close: async () => { closed++; } };
   page.context = () => context; page.isClosed = () => false;
-  page.evaluate = async callback => callback.toString().includes("__VRATA_DEBUG__")
-    ? { participantId: "private-participant", pendingSeatId: "seat-01", currentSeatId: null, running: 0 } : undefined;
+  page.addInitScript = async () => { installed = true; };
+  page.evaluate = async callback => {
+    if (!callback.toString().includes("__VRATA_DEBUG__")) return;
+    pendingReads++;
+    return { participantId: "private-participant", pendingSeatId: "seat-01", currentSeatId: null, running: 0 };
+  };
   const server = { onMessage(callback) { fromServer = callback; }, send() {} };
   const socket = { connectToServer: () => server, onMessage(callback) { fromClient = callback; }, send() {}, close() {} };
   page.routeWebSocket = async (_match, handler) => handler(socket);
@@ -306,6 +311,7 @@ test("pending-disable timing stays observational, preserves the 3000ms failure a
     "./plugin-author-scenarios": { pluginPath: (room, suffix) => `/api/rooms/${room}/plugins/${suffix}` },
     "./room-plugin-fixture": { async enterPluginRoom(_browser, _value, _room, _role, _name, prepare) {
       await prepare(context, page);
+      assert.equal(installed, true, "delivery observation is installed before navigation and the first claim");
       now = 100; fromClient(JSON.stringify({ type: "seat_claim", commandId: claimId, seatId: "seat-01" }));
       now = 120; fromServer(JSON.stringify({ type: "seat_claim_result", seatClaimResult: { commandId: claimId, accepted: true } }));
       now = 3200; return { page, context, session: { participantId: "private-participant" } };
@@ -313,7 +319,7 @@ test("pending-disable timing stays observational, preserves the 3000ms failure a
     "./room-state-observation": {}, "./room-seat-protocol-race": {}, "./staging-identity": {}, "./scene-bundle-fixtures": {}
   }, "\nexport { disablePendingClaim };\n", { performance: { now: () => now }, console: { info: (...args) => logs.push(args), warn() {} } });
   const put = async enabled => {
-    assert.equal(enabled, false); now = 3250;
+    assert.equal(enabled, false); assert.equal(pendingReads, 1, "pending/current are verified in one read before disable"); now = 3250;
     page.emit("requestfinished", { url: () => `https://example.invalid/api/rooms/${roomId}/plugins/runtime`,
       response: async () => ({ status: () => 200, json: async () => ({ revision: 9, bindings: [], token: "must-not-log", config: { private: "must-not-log" } }) }) });
     now = 3300; fromClient(JSON.stringify({ type: "seat_release", commandId: releaseId }));
@@ -335,4 +341,42 @@ test("pending-disable timing stays observational, preserves the 3000ms failure a
   for (const privateValue of [roomId, claimId, releaseId, "private-participant", "example.invalid", "must-not-log"]) {
     assert.equal(logs[0][1].includes(privateValue), false);
   }
+});
+
+test("preinstalled seat-delivery observer counts only actual correlated replay and restores native methods", async () => {
+  const { installSeatDeliveryObservation } = loadHelper("tests/e2e/room-plugin-auto-seat-scenarios.ts", {
+    "./plugin-author-scenarios": {}, "./room-plugin-fixture": {}, "./room-state-observation": {},
+    "./room-seat-protocol-race": {}, "./staging-identity": {}, "./scene-bundle-fixtures": {}
+  }, "\nexport { installSeatDeliveryObservation };\n");
+  const sent = [], delivered = [];
+  class Target { dispatchEvent(event) { delivered.push(event); return true; } }
+  class Socket extends Target { send(data) { sent.push(data); } }
+  class Message { constructor(data) { this.data = JSON.stringify(data); } }
+  const originalSend = Socket.prototype.send, originalDispatch = Target.prototype.dispatchEvent;
+  const window = { __VRATA_DEBUG__: { participantId: "private-self" } };
+  await installSeatDeliveryObservation({ addInitScript: async callback => vm.runInNewContext(`(${callback.toString()})()`, {
+    window, WebSocket: Socket, EventTarget: Target, MessageEvent: Message
+  }) });
+  const socket = new Socket(), state = window.__t16SeatDelivery;
+  const send = message => socket.send(JSON.stringify(message));
+  const deliver = message => socket.dispatchEvent(new Message(message));
+  try {
+    send({ type: "seat_claim", commandId: "plugin-seat:first", seatId: "seat-01" });
+    send({ type: "seat_claim", commandId: "plugin-seat:unrelated", seatId: "seat-02" });
+    send({ type: "seat_release", commandId: "plugin-release:first" });
+    assert.equal(sent.length, 3, "all native sends are unchanged");
+    assert.equal(state.accepted + state.occupied + state.released, 0, "captured or sent bytes are not delivery");
+    deliver({ type: "seat_claim_result", seatClaimResult: { commandId: "plugin-seat:unrelated", accepted: true } });
+    deliver({ type: "seat_release_result", seatReleaseResult: { commandId: "plugin-release:other" } });
+    assert.equal(state.accepted + state.released, 0);
+    deliver({ type: "room_state", room: { seatOccupancy: { "seat-01": "private-self" } } });
+    deliver({ type: "seat_claim_result", seatClaimResult: { commandId: "plugin-seat:first", accepted: true } });
+    assert.deepEqual([state.accepted, state.occupied, state.released], [1, 1, 0], "intermediate delivery is distinct from the final empty/release");
+    deliver({ type: "room_state", room: { seatOccupancy: {} } });
+    deliver({ type: "seat_release_result", seatReleaseResult: { commandId: "plugin-release:first" } });
+    assert.deepEqual([state.accepted, state.occupied, state.released], [1, 1, 1]);
+    assert.equal(delivered.length, 6);
+  } finally { window.__t16SeatDeliveryCleanup(); }
+  assert.equal(Socket.prototype.send, originalSend); assert.equal(Target.prototype.dispatchEvent, originalDispatch);
+  assert.equal(window.__t16SeatDelivery, undefined); assert.equal(window.__t16SeatDeliveryCleanup, undefined);
 });

@@ -148,7 +148,7 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
   witness: { page: Page; participantId: string; authority: RoomAuthorityCapture }, contexts: Array<{ close(): Promise<void> }>,
   observations: Map<Page, RoomAuthorityCapture>, observe: (page: Page) => Promise<RoomAuthorityCapture>) {
   let held = false, accepted = false, releaseAck = false, claimAt = 0, releaseAt = 0;
-  let claimId = "", claimedSeat = "", releaseId = "";
+  let claimId = "", releaseId = "";
   let claimCount = 0, releaseCount = 0;
   const beganAt = performance.now(), phases: Record<string, number> = {};
   const mark = (phase: string) => { phases[phase] = performance.now(); };
@@ -180,6 +180,7 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
   const entering = enterPluginRoom(browser, value, roomId, "member", "Auto-seat pending disable", async (context, page) => {
     pendingPage = page;
     contexts.push(context); observations.set(page, await observe(page));
+    await installSeatDeliveryObservation(page);
     page.on("requestfinished", onRuntimeFinished);
     await page.routeWebSocket(url => url.searchParams.has("roomId"), socket => {
       transport = socket;
@@ -187,7 +188,7 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
       socket.onMessage(message => {
         let payload: any; try { payload = JSON.parse(String(message)); } catch { server.send(message); return; }
         if (payload.type === "seat_claim" && String(payload.commandId).startsWith("plugin-seat:")) {
-          held = true; claimAt = performance.now(); claimId = payload.commandId; claimedSeat = payload.seatId;
+          held = true; claimAt = performance.now(); claimId = payload.commandId;
           claimCount++; phases.firstClaim ??= claimAt;
           mark("claim");
         }
@@ -237,32 +238,10 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
       throw error;
     }
     mark("acceptedObserved");
-    expect(Boolean((await seatState(pendingPage!)).pendingSeatId)).toBe(true);
-    expect((await seatState(pendingPage!)).currentSeatId).toBeNull();
+    const pendingState = await seatState(pendingPage!);
+    expect(Boolean(pendingState.pendingSeatId)).toBe(true);
+    expect(pendingState.currentSeatId).toBeNull();
     mark("pendingVerified");
-    // A transport capture sees server ACKs before this deliberate delay. Count
-    // actual replay delivery as well, so pre-replay standing cannot pass.
-    await pendingPage!.evaluate(({ claimId, claimedSeat }) => {
-      const dispatch = EventTarget.prototype.dispatchEvent;
-      const state = { accepted: 0, released: 0, occupied: 0, releaseId: "" };
-      EventTarget.prototype.dispatchEvent = function (event) {
-        if (this instanceof WebSocket && event instanceof MessageEvent && typeof event.data === "string" && event.data.length < 262_144) {
-          try {
-            const message = JSON.parse(event.data);
-            if (message.type === "seat_claim_result" && message.seatClaimResult?.commandId === claimId && message.seatClaimResult.accepted === true) state.accepted++;
-            if (message.type === "seat_release_result" && message.seatReleaseResult?.commandId === state.releaseId) state.released++;
-            if (message.type === "room_state" && message.room?.seatOccupancy?.[claimedSeat] === (window as any).__VRATA_DEBUG__?.participantId) state.occupied++;
-          } catch { /* Only allowlisted counters, no raw messages. */ }
-        }
-        return dispatch.call(this, event);
-      };
-      (window as any).__t16SeatDelivery = state;
-      (window as any).__t16SeatDeliveryCleanup = () => {
-        EventTarget.prototype.dispatchEvent = dispatch;
-        delete (window as any).__t16SeatDelivery; delete (window as any).__t16SeatDeliveryCleanup;
-      };
-    }, { claimId, claimedSeat });
-    mark("deliveryHookInstalled");
     mark("disableRequested");
     await put(false);
     mark("disableAck");
@@ -272,7 +251,6 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     await expect.poll(() => releaseAck, { timeout: 15_000 }).toBe(true);
     mark("releaseAckObserved");
     expect(releaseAt > claimAt && releaseAt - claimAt < 3000).toBe(true); // Not the adapter's lost-answer timeout.
-    await member.page.evaluate(releaseId => { (window as any).__t16SeatDelivery.releaseId = releaseId; }, releaseId);
     // Deliver ONLY occupied/accepted first. A later correct empty snapshot must
     // not conceal even one frame of applying the cancelled seating attempt.
     const acceptedIndex = queue.findIndex(message => message.type === "seat_claim_result"
@@ -325,6 +303,43 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     () => pendingPage && !pendingPage.isClosed() ? pendingPage.evaluate(() => (window as any).__t16SeatDeliveryCleanup?.()) : undefined,
     () => pendingPage && !pendingPage.isClosed() ? transport?.close() : undefined, () => member?.context.close(),
     () => pendingPage?.context().close(), () => entering]);
+}
+
+/** Observe actual replay before navigation/claims, not inside the 3000ms cancellation window.
+ * The hook only reads traffic of the runtime's own socket and delegates every call unchanged. */
+async function installSeatDeliveryObservation(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const dispatch = EventTarget.prototype.dispatchEvent, send = WebSocket.prototype.send;
+    const state = { accepted: 0, released: 0, occupied: 0, claimId: "", claimedSeat: "", releaseId: "" };
+    WebSocket.prototype.send = function (data) {
+      if (typeof data === "string" && data.length < 262_144) {
+        try {
+          const message = JSON.parse(data);
+          if (message.type === "seat_claim" && String(message.commandId).startsWith("plugin-seat:") && !state.claimId) {
+            state.claimId = message.commandId; state.claimedSeat = message.seatId;
+          }
+          if (message.type === "seat_release" && String(message.commandId).startsWith("plugin-release:") && !state.releaseId) state.releaseId = message.commandId;
+        } catch { /* Never alter transport delivery. */ }
+      }
+      return send.call(this, data);
+    };
+    EventTarget.prototype.dispatchEvent = function (event) {
+      if (this instanceof WebSocket && event instanceof MessageEvent && typeof event.data === "string" && event.data.length < 262_144) {
+        try {
+          const message = JSON.parse(event.data);
+          if (state.claimId && message.type === "seat_claim_result" && message.seatClaimResult?.commandId === state.claimId && message.seatClaimResult.accepted === true) state.accepted++;
+          if (state.releaseId && message.type === "seat_release_result" && message.seatReleaseResult?.commandId === state.releaseId) state.released++;
+          if (state.claimedSeat && message.type === "room_state" && message.room?.seatOccupancy?.[state.claimedSeat] === (window as any).__VRATA_DEBUG__?.participantId) state.occupied++;
+        } catch { /* Only correlated counters; no raw messages retained. */ }
+      }
+      return dispatch.call(this, event);
+    };
+    (window as any).__t16SeatDelivery = state;
+    (window as any).__t16SeatDeliveryCleanup = () => {
+      WebSocket.prototype.send = send; EventTarget.prototype.dispatchEvent = dispatch;
+      delete (window as any).__t16SeatDelivery; delete (window as any).__t16SeatDeliveryCleanup;
+    };
+  });
 }
 
 /** One tiny owned inline scene, not a catalog/scene-package change. */
