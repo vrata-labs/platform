@@ -11,14 +11,14 @@ const require = createRequire(import.meta.url);
 const ts = require("typescript");
 const root = fileURLToPath(new URL("../", import.meta.url));
 // Execute the actual test helpers without launching browsers or importing service entry points.
-function loadHelper(relative, overrides = {}) {
+function loadHelper(relative, overrides = {}, append = "") {
   const filename = resolve(root, relative), module = { exports: {} };
   const localRequire = name => {
     if (Object.hasOwn(overrides, name)) return overrides[name];
     if (name.startsWith("./")) return loadHelper(resolve(dirname(filename), `${name}.ts`), overrides);
     return createRequire(filename)(name);
   };
-  const output = ts.transpileModule(readFileSync(filename, "utf8"), {
+  const output = ts.transpileModule(readFileSync(filename, "utf8") + append, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
   }).outputText;
   vm.runInNewContext(output, { exports: module.exports, module, require: localRequire,
@@ -156,4 +156,28 @@ test("unchanged-media barrier requires the exact post-denial presence marker on 
     f.snapshot("new", 123456, { changed: true }); assert.notEqual(barrier.snapshot().mediaHash, before.mediaHash);
     barrier.close(); assert.equal(barrier.snapshot(), null);
   }, () => [() => f.capture.close()]);
+});
+
+test("pending-disable claim observation starts only after normal scene/connection entry completes", async () => {
+  let completeEntry;
+  const entering = new Promise(resolve => { completeEntry = resolve; });
+  const sentinel = new Error("stop_after_claim_observation"), polls = [];
+  const expect = { poll(_callback, options) {
+    polls.push(options);
+    return { async toBe() { throw sentinel; } };
+  } };
+  const helper = loadHelper("tests/e2e/room-plugin-auto-seat-scenarios.ts", {
+    "@playwright/test": { expect },
+    "./plugin-author-scenarios": {}, "./room-plugin-fixture": { enterPluginRoom: () => entering },
+    "./room-state-observation": {}, "./room-seat-protocol-race": {}, "./staging-identity": {}, "./scene-bundle-fixtures": {}
+  }, "\nexport { disablePendingClaim };\n");
+  const result = helper.disablePendingClaim({}, {}, "owned", async () => {}, {}, [], new Map(), async () => {});
+  void result.catch(() => undefined);
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(polls.length, 0, "claim observation cannot consume its deadline during onboarding or scene loading");
+  completeEntry({ page: { evaluate: async () => ({ synthetic: true }) }, context: { close: async () => {} } });
+  await assert.rejects(result, error => error === sentinel);
+  assert.equal(polls.length, 1);
+  assert.equal(polls[0].timeout, 15000, "the original claim-observation deadline is unchanged");
+  assert.deepEqual(Array.from(polls[0].intervals), [50]);
 });

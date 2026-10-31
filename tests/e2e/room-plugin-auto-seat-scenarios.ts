@@ -161,7 +161,21 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
   void entering.catch(() => undefined);
   let member: Awaited<ReturnType<typeof enterPluginRoom>> | undefined;
   await withCleanup(async () => {
-    await expect.poll(() => accepted, { timeout: 15_000, intervals: [50] }).toBe(true);
+    // Scene loading and normal onboarding have their own entry deadlines. The
+    // claim deadline must not start while the new participant is still entering.
+    member = await entering;
+    try { await expect.poll(() => accepted, { timeout: 15_000, intervals: [50] }).toBe(true); }
+    catch (error) {
+      const facts = await member.page.evaluate(() => {
+        const debug = (window as any).__VRATA_DEBUG__;
+        return { sceneLoaded: debug?.sceneBundleState === "loaded", connected: debug?.roomStateConnected === true,
+          running: debug?.plugins?.running ?? null, failure: debug?.plugins?.lastFailure ?? null,
+          grant: debug?.plugins?.seating?.grant ?? null, pending: Boolean(debug?.pendingSeatId), seated: Boolean(debug?.currentSeatId) };
+      }).catch(() => ({ unavailable: true }));
+      console.warn("t16_pending_claim_failed", JSON.stringify({ claimObserved: Boolean(claimId), acceptedObserved: accepted,
+        releaseObserved: Boolean(releaseId), queuedTypes: queue.map(message => message.type), facts }));
+      throw error;
+    }
     expect(Boolean((await seatState(pendingPage!)).pendingSeatId)).toBe(true);
     expect((await seatState(pendingPage!)).currentSeatId).toBeNull();
     // A transport capture sees server ACKs before this deliberate delay. Count
@@ -187,7 +201,6 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
       };
     }, { claimId, claimedSeat });
     await put(false);
-    member = await entering;
     const actor = { ...member, participantId: member.session.participantId, authority: observations.get(member.page)! };
     await expect.poll(async () => (await seatState(actor.page)).running, { timeout: 15_000 }).toBe(0);
     await expect.poll(() => releaseAck, { timeout: 15_000 }).toBe(true);

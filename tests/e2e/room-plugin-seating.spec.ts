@@ -1,7 +1,9 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { bearer, pluginPath, privateHttp, type ExternalArtifact } from "./plugin-author-scenarios";
 import { enterOwnedPluginRoom, enterPluginRoom, expectPluginStatus, installPluginArtifact, startRoomPluginFixture, useOwnedActor } from "./room-plugin-fixture";
+import { captureRoomAuthority, type RoomAuthorityCapture } from "./room-state-observation";
+import { withCleanup } from "./test-cleanup";
 
 // Room invitations, RS2 and private config must never enter trace/video/snapshots.
 test.use({ trace: "off", screenshot: "off", video: "off" });
@@ -33,17 +35,27 @@ test("isolated v2 auto-seat seats only a newly entering participant through corr
       await expectPluginStatus(host.page, "host-late-enable", "Автопосадка не разрешена", 45_000);
       expect((await seatState(host.page)).currentSeatId).toBeNull();
 
-      const member = await enterPluginRoom(browser, value, host.roomId, "member", "Owned plugin runtime Member");
-      const refusing = await enterPluginRoom(browser, value, host.roomId, "member", "Owned plugin runtime Refusal", async context => {
-        await context.addInitScript(roomId => sessionStorage.setItem(`vrata.autoSeatOptOut.${roomId}`, "1"), host.roomId);
-      });
-      try {
+      let authority: RoomAuthorityCapture | undefined;
+      let memberContext: BrowserContext | undefined;
+      let refusing: Awaited<ReturnType<typeof enterPluginRoom>> | undefined;
+      await withCleanup(async () => {
+        const member = await enterPluginRoom(browser, value, host.roomId, "member", "Owned plugin runtime Member", async (context, page) => {
+          memberContext = context; authority = await captureRoomAuthority(page);
+        });
+        // Observe the entry result before booting another real 3D client. A
+        // later VM generation legitimately receives a closed arrival grant.
         await expect.poll(async () => (await seatState(member.page)).currentSeatId, { timeout: 45_000 }).not.toBeNull();
         const seated = await seatState(member.page);
         expect(seated.occupancy[seated.currentSeatId!]).toBe(seated.participantId);
         await expect.poll(async () => (await seatState(host.page)).occupancy[seated.currentSeatId!], { timeout: 15_000 }).toBe(seated.participantId);
         await expectPluginStatus(member.page, "member-seated", "Заявка принята");
         expect(seated.seating?.grant).toBe("used");
+        expect(authority!.commands().some(result => result.type === "seat_claim_result" && result.accepted && result.seatId === seated.currentSeatId
+          && authority!.commands().some(sent => sent.type === "seat_claim" && sent.commandId === result.commandId && sent.seatId === result.seatId))).toBe(true);
+
+        refusing = await enterPluginRoom(browser, value, host.roomId, "member", "Owned plugin runtime Refusal", async context => {
+          await context.addInitScript(roomId => sessionStorage.setItem(`vrata.autoSeatOptOut.${roomId}`, "1"), host.roomId);
+        });
 
         // A refusal stored for this tab keeps the participant standing; the choice is visible to them.
         await expectPluginStatus(refusing.page, "refusal", "Автопосадка не разрешена", 45_000);
@@ -59,7 +71,7 @@ test("isolated v2 auto-seat seats only a newly entering participant through corr
         expect([after.currentSeatId, after.pendingSeatId]).toEqual([null, null]);
         expect(Object.values(after.occupancy)).not.toContain(after.participantId);
         expect((await seatState(refusing.page)).currentSeatId).toBeNull();
-      } finally { await member.context.close(); await refusing.context.close(); }
+      }, () => [() => authority?.close(), () => memberContext?.close(), () => refusing?.context.close()]);
     });
   } finally { await value.close(); }
 });

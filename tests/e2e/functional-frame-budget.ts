@@ -3,7 +3,7 @@ import type { Page } from "@playwright/test";
 /** Functional multi-client coverage renders real scenes, but does not measure
  * scene frame rate. Keep four software-rendered rooms from starving RTC/WS
  * tasks. Normal-DPR visual and locomotion/performance checks do not use this. */
-export async function installFunctionalFrameBudget(page: Page): Promise<void> {
+export async function installFunctionalFrameBudget(page: Pick<Page, "addInitScript">): Promise<void> {
   await page.addInitScript(() => {
     const nativeRequest = window.requestAnimationFrame.bind(window), nativeCancel = window.cancelAnimationFrame.bind(window);
     const pending = new Map<number, FrameRequestCallback>();

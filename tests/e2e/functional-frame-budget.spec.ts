@@ -20,7 +20,7 @@ test("functional frame budget can cancel a later callback in the same batch", as
   await installFunctionalFrameBudget(page); await page.goto("/health");
   const result = await page.evaluate(() => new Promise<{ events: string[]; windowThis: boolean }>(resolve => {
     const events: string[] = []; let later = 0, windowThis = false;
-    requestAnimationFrame(function () { windowThis = this === window; events.push("first"); cancelAnimationFrame(later); });
+    requestAnimationFrame(function (this: Window) { windowThis = this === window; events.push("first"); cancelAnimationFrame(later); });
     later = requestAnimationFrame(() => events.push("cancelled"));
     requestAnimationFrame(() => { events.push("last"); resolve({ events, windowThis }); });
   }));
@@ -46,4 +46,24 @@ test("functional frame budget reports an exception without losing the remaining 
     requestAnimationFrame(() => resolve(["remaining-callback-ran"]));
   }))).toEqual(["remaining-callback-ran"]);
   expect((await reported).message).toBe("owned_frame_callback_error");
+});
+
+test("functional context budget covers new pages and reloads", async ({ browser }) => {
+  const context = await browser.newContext();
+  try {
+    await installFunctionalFrameBudget(context);
+    const page = await context.newPage();
+    const frameGap = () => page.evaluate(() => new Promise<number>(resolve => {
+      requestAnimationFrame(first => requestAnimationFrame(second => resolve(second - first)));
+    }));
+    await page.goto("/health");
+    expect(await frameGap()).toBeGreaterThanOrEqual(90);
+    await page.reload();
+    expect(await frameGap()).toBeGreaterThanOrEqual(90);
+    const second = await context.newPage();
+    await second.goto("/health");
+    expect(await second.evaluate(() => new Promise<number>(resolve => {
+      requestAnimationFrame(first => requestAnimationFrame(next => resolve(next - first)));
+    }))).toBeGreaterThanOrEqual(90);
+  } finally { await context.close(); }
 });

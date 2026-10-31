@@ -8,7 +8,7 @@ export async function meetingRequest<T>(operation: () => Promise<T>): Promise<T>
 }
 
 /** Passive timing observation; never replaces render/input/media work. */
-export async function installMeetingPerformanceObservation(page: Page) {
+export async function installMeetingPerformanceObservation(page: Pick<Page, "addInitScript">) {
   await page.addInitScript(() => {
     const state = { frames: [] as number[], longTasks: [] as Array<{ at: number; ms: number }>,
       statsStarted: 0, statsPending: 0, statsPeak: 0, statsMaxMs: 0, diagnosticRequests: 0, diagnosticMaxMs: 0 };

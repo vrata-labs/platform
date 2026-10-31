@@ -10,7 +10,8 @@ import { createAudioProgressTracker, hasLiveAudio } from "./audio-progress";
 import { identityProtocolAt } from "./staging-identity";
 import { captureRoomAuthority, expectExactRoomAuthority, installExistingSocketControl, type RoomAuthorityCapture } from "./room-state-observation";
 import { publicDemoPluginLifecycle, publicDemoAuthorityChanges } from "./public-demo-plugins";
-import { chooseMeetingPanel } from "./meeting-tools-acceptance";
+import { chooseMeetingPanel, installMeetingPerformanceObservation } from "./meeting-tools-acceptance";
+import { installFunctionalFrameBudget } from "./functional-frame-budget";
 
 type DemoRole = "host" | "member" | "guest";
 type JsonRecord = Record<string, any>;
@@ -702,6 +703,10 @@ async function reloadClientThroughInvite(client: DemoClient): Promise<void> {
 
 async function createTrackedContext(browser: Browser): Promise<BrowserContext> {
   const context = await browser.newContext({ viewport, deviceScaleFactor });
+  // Use the same real-scene functional frame budget as the other multi-client
+  // meeting suites, on every page/reload without stacking RAF wrappers.
+  await installFunctionalFrameBudget(context);
+  await installMeetingPerformanceObservation(context);
   await installFreshAudioObservation(context);
   context.setDefaultTimeout(120_000);
   return context;

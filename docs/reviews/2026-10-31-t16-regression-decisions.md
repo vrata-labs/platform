@@ -99,3 +99,31 @@
 - Основание: отдельные лёгкие tests на newPage/prepare/navigation/admission/scene failures, совместный primary+close failure, actor-close failure и независимость observer/contexts/author/room cleanup.
 - Последствия: закономерно уже закрытые pages не требуют повторного CDP/route close; другие cleanup failures не подавляются. Production и прежний sandbox/storage suite не меняются.
 - Проверка:11/11 helper tests,0 failed/skipped; строгая проверка типов пройдена. Финальный focused work-check после commit ещё обязателен; T16 остаётся NOT_READY.
+
+## D-060 — 2026-10-31 — CI guard ограничивает каждый job независимо
+
+- Контекст: граница секции core не распознавала e2e из-за цифры в имени; валидные настройки e2e скрывали повреждённые настройки core. Сам workflow настроен правильно.
+- Решение: применить минимальное исправление tools/ci-postgres-gate.test.mjs: корректные символы job ID, прежние пять assertions в общем helper и шесть изолированных отрицательных controls core/e2e × env/image/Node. Workflow и зависимости не менять.
+- Проверка: применённый файл совпадает с подготовленным исправлением; полный лёгкий набор24/24 прошёл. Независимая копия реального положительного callback отклоняет каждую из шести мутаций при неизменном другом job. Возврат только старой границы оставляет положительный callback зелёным, но ломает все шесть controls. Временная копия удалена.
+- Последствия: F06 исправлен; это не результат browser, полного local или published gates.
+
+## D-061 — 2026-10-31 — Pending-disable отсчитывает ожидание claim после нормального входа
+
+- Контекст: завершившийся focused на3f1552c дал19 expected/3 unexpected/0 skipped/flaky за882.6s. В auto-seat accepted=false проверялось в течение15s, отсчитанных ещё до invite/onboarding/загрузки сцены. Их штатные отдельные deadlines больше этого интервала.
+- Решение: сначала дождаться enterPluginRoom с реальными scene/connection, затем начать прежнее15s ожидание server accept. Добавить очищенные факты при отказе: только readiness/running/grant и булевы признаки claim/release, без идентификаторов или frames.
+- Проверка: новый test исполняет реальный helper с задержанным entry; до его завершения claim poll не начинается, timeout15000/interval50 неизменны. Независимое удаление entry-first ожидания ломает этот test. Строгие типы прошли.
+- Последствия: release до штатных3000ms, реальный intermediate occupied/accepted delivery, два кадра standing/unchanged pose, current-generation exact authority и отсутствие ghosts остаются обязательными. Единственность этой причины исходного browser failure требует узкого повторения; исходный failed receipt сохранён.
+
+## D-062 — 2026-10-31 — Статус подтверждённой посадки проверяется до загрузки следующего клиента
+
+- Контекст: room-plugin-seating упал на тексте отказа, хотя currentSeat/occupancy assertions прошли и диагностический grant=used, running=1, failed=0. Между входом Member и проверкой его принятой заявки сценарий полностью загружал третьего клиента.
+- Решение: проверить прежние currentSeat/occupancy/accepted status/grant сразу после входа Member, дополнительно потребовать correlated seat_claim/result из его существующего socket. Затем вводить refusing клиента и выполнять все прежние opt-out/manual veto assertions. Observer и оба contexts закрываются независимо, включая неуспешный третий вход.
+- Основание: исполнены настоящий bundled scaffold и SeatAdapter: первая VM показывает принятую заявку; новая VM при том же used grant показывает точно наблюдавшийся отказ, не снимая уже подтверждённое место. Текст поздней VM не является результатом первой заявки.
+- Последствия: не заменять accepted status одной конечной посадкой и не ослаблять opt-out/manual checks. Browser должен подтвердить исправленный порядок; из имеющегося отчёта нельзя установить конкретный момент перезапуска VM.
+
+## D-063 — 2026-10-31 — Shared demo использует существующий функциональный frame budget
+
+- Контекст: public-demo дошёл до loaded/connected, но VM status остался Stopped/host-unavailable, running=0/failed=1; исходная performance observation отсутствовала. У соседнего seating отказа зафиксированы длинные задачи357–1041ms. В shared demo, в отличие от других multi-client meeting tests, functional frame budget не устанавливался.
+- Решение: установить тот же100ms RAF budget и пассивную performance observation на BrowserContext до создания его страниц. Сигнатуры двух init helpers принимают общий addInitScript интерфейс; viewport640×400/DPR0.5 и drawing buffer320×200, сцена, PDF/audio, права, deadlines и sandbox не меняются. Новый browser test проверяет budget на первой странице, после reload и на новой странице.
+- Основание: existing functional-frame-budget.ts и setup соседних presenter/tool suites. Frame starvation как причина public-demo host-unavailable остаётся гипотезой: исходный отчёт не содержит достаточных timing facts для доказательства единственной причины.
+- Последствия: необходим узкий повтор трёх исходных failures и нового context-budget test в одном worker с новым report. Его успех не закрывает обязательный focused/full/package/review/CI/G/X контракт. До нового ревью общий package/full не запускать; T16 NOT_READY.
