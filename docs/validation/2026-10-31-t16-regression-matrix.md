@@ -62,6 +62,13 @@
 - Shared demo получает существующий функциональный100ms RAF budget на context и пассивные timing facts; viewport/DPR/drawing buffer и product/sandbox deadlines не меняются. Причина host-unavailable требует узкого browser подтверждения, frame starvation пока гипотеза.
 - Подготовлен один узкий повтор трёх failures плюс нового context-budget test, workers=1, отдельный report. Его terminal результат фиксируется отдельно после коммита. Это не весь focused и не final full: все13 criteria required=true, новый full без исключений по-прежнему обязателен после окончательных executable edits и нового ревью. T16 NOT_READY.
 
+### Разбор terminal narrow на a188d94
+
+- Узкий повтор завершён:2 expected/2 unexpected/0 skipped/flaky,434.5s. Context-budget и new-entry seating прошли; public demo теперь упал на stale409→400 после успешного v1/v2, auto-seat — на release<3000ms после accepted/release ACK. Ранние failures/reports/receipts сохранены.
+- Подтверждённая причина текущего public-demo failure — ошибочный spread read DTO в строгий PUT. Явная проекция полей исправляет запрос, не parser/CAS/permissions;409 и unchanged-library hash остаются обязательными (D-064).
+- Текущий auto-seat failure ещё не объяснён конкретным наблюдаемым интервалом: отчёт не сохранил значения claim/release и время до/после disable. Добавлен только ограниченный пассивный timeline/allowlisted runtime-response signal с независимой очисткой, без изменения порядка, authority или3000ms fence (D-065). Продуктовый fix по гипотезе не вносится.
+- Следующий narrow выбирает только эти два исходных cases одним worker и с новым report. Он не заменяет focused22/package/final full/новое итоговое review/CI/G/X; scope=[.], все13required=true, full без исключений.
+
 ## Минимальные изменения после проверки матрицы
 
 1. **Shared demo.** Явный isolated floor2 local; расширение `runPublicDemoScenario` авторскими UI-фазами R03–R06. Переиспользовать внешний build и UI операции, не запускать существующий самостоятельный UI test из test. Admin нужен setup/invites/cleanup, не author/upload/bind или role transitions. Два нынешних admin GET lock-state (`public-demo-scenarios.ts:1381,1390`) можно заменить чтением обычного Host session.

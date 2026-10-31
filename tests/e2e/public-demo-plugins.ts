@@ -11,6 +11,13 @@ type Actor = { page: Page; participantId: string; sessionToken: string; authorit
 type Library = { revision: number; packages: Array<{ packageId: string; pluginId: string; version: string; artifactSha256: string }>;
   bindings: Array<{ pluginId: string; packageId: string; version: string; artifactSha256: string; enabled: boolean; approvedCapabilities: string[] }> };
 
+function staleBindingUpdate(binding: Library["bindings"][number]) {
+  // The read DTO also carries server-owned identity/generation fields. Those
+  // must not turn this valid stale write into a malformed-body (400) probe.
+  return { packageId: binding.packageId, version: binding.version, artifactSha256: binding.artifactSha256,
+    enabled: binding.enabled, expectedRevision: 1, config: { greeting: "stale" }, approvedCapabilities: ["status.set"] };
+}
+
 export async function publicDemoPluginLifecycle(origin: string, roomId: string, host: Actor, member: Actor, guest: Actor) {
   const author = await createExternalAuthorProject(await downloadPublicSdk(origin, "0.2.0"), "0.2.0");
   let authorRequests = 0, documentUploads = 0, invalidAuthority = false;
@@ -66,8 +73,8 @@ export async function publicDemoPluginLifecycle(origin: string, roomId: string, 
     library = await read(); expect(library.revision).toBe(2); exactBinding(library, second, true);
     await expectPluginStatus(member.page, "public-demo-v2", "Public demo v2");
     await expect(member.page.locator("#room-plugin-status-list")).not.toContainText("Public demo v1");
-    const stale = await privateHttp(origin, pluginPath(roomId, `bindings/${pluginId}`), "PUT", bearer(host.sessionToken), {
-      ...library.bindings[0], expectedRevision: 1, config: { greeting: "stale" }, approvedCapabilities: ["status.set"] });
+    const stale = await privateHttp(origin, pluginPath(roomId, `bindings/${pluginId}`), "PUT", bearer(host.sessionToken),
+      staleBindingUpdate(library.bindings.find(binding => binding.pluginId === pluginId)!));
     expect(stale.status).toBe(409);
     expect(sha256(Buffer.from(JSON.stringify(await read()))) === sha256(Buffer.from(JSON.stringify(library)))).toBe(true);
     await act(host.page, entry, "disable", "Behavior disabled");

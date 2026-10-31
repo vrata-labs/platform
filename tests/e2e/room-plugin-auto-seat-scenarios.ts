@@ -1,4 +1,4 @@
-import { expect, type Browser, type Page, type WebSocketRoute } from "@playwright/test";
+import { expect, type Browser, type Page, type Request, type WebSocketRoute } from "@playwright/test";
 import { bearer, createExternalAuthorProject, downloadPublicSdk, pluginPath, privateHttp } from "./plugin-author-scenarios";
 import { deleteOwnedPluginRoom, enterOwnedPluginRoom, enterPluginRoom, expectPluginStatus, installPluginArtifact, useOwnedActor, type RoomPluginOrigin } from "./room-plugin-fixture";
 import { captureRoomAuthority, expectExactRoomAuthority, type RoomAuthorityCapture } from "./room-state-observation";
@@ -124,12 +124,38 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
   observations: Map<Page, RoomAuthorityCapture>, observe: (page: Page) => Promise<RoomAuthorityCapture>) {
   let held = false, accepted = false, releaseAck = false, claimAt = 0, releaseAt = 0;
   let claimId = "", claimedSeat = "", releaseId = "";
+  let claimCount = 0, releaseCount = 0;
+  const beganAt = performance.now(), phases: Record<string, number> = {};
+  const mark = (phase: string) => { phases[phase] = performance.now(); };
+  const runtimeReads: Array<{ at: number; status: number | null; revision: number | null; enabledBindings: number | null }> = [];
+  const runtimeReadsPending = new Set<Promise<void>>();
+  // Passive timing only: never intercept or replace runtime authority. Keep no
+  // URLs, credentials, binding identities, config, source or raw response bytes.
+  const onRuntimeFinished = (request: Request) => {
+    if (!held || runtimeReads.length >= 8 || new URL(request.url()).pathname !== pluginPath(roomId, "runtime")) return;
+    const row = { at: performance.now(), status: null as number | null, revision: null as number | null, enabledBindings: null as number | null };
+    runtimeReads.push(row);
+    // requestfinished means the body is already complete: diagnostic cleanup
+    // must never wait for a live network response before it can close a page.
+    const pending = (async () => {
+      try {
+        const response = await request.response(); if (!response) return;
+        row.status = response.status();
+        const body = await response.json();
+        row.revision = Number.isSafeInteger(body?.revision) ? body.revision : null;
+        row.enabledBindings = Array.isArray(body?.bindings) ? body.bindings.filter((binding: any) => binding?.enabled === true).length : null;
+      } catch { /* An unavailable diagnostic body remains null, never a success. */ }
+    })();
+    runtimeReadsPending.add(pending);
+    void pending.finally(() => runtimeReadsPending.delete(pending));
+  };
   const queue: Array<{ type: string; frame: string | Buffer }> = [];
   let transport: WebSocketRoute | undefined;
   let pendingPage: Page | undefined;
   const entering = enterPluginRoom(browser, value, roomId, "member", "Auto-seat pending disable", async (context, page) => {
     pendingPage = page;
     contexts.push(context); observations.set(page, await observe(page));
+    page.on("requestfinished", onRuntimeFinished);
     await page.routeWebSocket(url => url.searchParams.has("roomId"), socket => {
       transport = socket;
       const server = socket.connectToServer();
@@ -137,9 +163,13 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
         let payload: any; try { payload = JSON.parse(String(message)); } catch { server.send(message); return; }
         if (payload.type === "seat_claim" && String(payload.commandId).startsWith("plugin-seat:")) {
           held = true; claimAt = performance.now(); claimId = payload.commandId; claimedSeat = payload.seatId;
+          claimCount++; phases.firstClaim ??= claimAt;
+          mark("claim");
         }
         if (payload.type === "seat_release" && String(payload.commandId).startsWith("plugin-release:")) {
           releaseAt = performance.now(); releaseId = payload.commandId;
+          releaseCount++; phases.firstRelease ??= releaseAt;
+          mark("release");
         }
         server.send(message);
       });
@@ -152,8 +182,12 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
             if (queue.length >= 32) throw new Error("t16_pending_claim_capture_bound");
             queue.push({ type: payload.type, frame: message });
           }
-          accepted ||= payload.type === "seat_claim_result" && payload.seatClaimResult?.commandId === claimId && payload.seatClaimResult?.accepted === true;
-          releaseAck ||= payload.type === "seat_release_result" && payload.seatReleaseResult?.commandId === releaseId;
+          if (!accepted && payload.type === "seat_claim_result" && payload.seatClaimResult?.commandId === claimId && payload.seatClaimResult?.accepted === true) {
+            accepted = true; mark("serverAccepted");
+          }
+          if (!releaseAck && payload.type === "seat_release_result" && payload.seatReleaseResult?.commandId === releaseId) {
+            releaseAck = true; mark("serverReleaseAck");
+          }
         } else socket.send(message);
       });
     });
@@ -164,6 +198,7 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     // Scene loading and normal onboarding have their own entry deadlines. The
     // claim deadline must not start while the new participant is still entering.
     member = await entering;
+    mark("entryComplete");
     try { await expect.poll(() => accepted, { timeout: 15_000, intervals: [50] }).toBe(true); }
     catch (error) {
       const facts = await member.page.evaluate(() => {
@@ -176,8 +211,10 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
         releaseObserved: Boolean(releaseId), queuedTypes: queue.map(message => message.type), facts }));
       throw error;
     }
+    mark("acceptedObserved");
     expect(Boolean((await seatState(pendingPage!)).pendingSeatId)).toBe(true);
     expect((await seatState(pendingPage!)).currentSeatId).toBeNull();
+    mark("pendingVerified");
     // A transport capture sees server ACKs before this deliberate delay. Count
     // actual replay delivery as well, so pre-replay standing cannot pass.
     await pendingPage!.evaluate(({ claimId, claimedSeat }) => {
@@ -200,10 +237,15 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
         delete (window as any).__t16SeatDelivery; delete (window as any).__t16SeatDeliveryCleanup;
       };
     }, { claimId, claimedSeat });
+    mark("deliveryHookInstalled");
+    mark("disableRequested");
     await put(false);
+    mark("disableAck");
     const actor = { ...member, participantId: member.session.participantId, authority: observations.get(member.page)! };
     await expect.poll(async () => (await seatState(actor.page)).running, { timeout: 15_000 }).toBe(0);
+    mark("runningZeroObserved");
     await expect.poll(() => releaseAck, { timeout: 15_000 }).toBe(true);
+    mark("releaseAckObserved");
     expect(releaseAt > claimAt && releaseAt - claimAt < 3000).toBe(true); // Not the adapter's lost-answer timeout.
     await member.page.evaluate(releaseId => { (window as any).__t16SeatDelivery.releaseId = releaseId; }, releaseId);
     // Deliver ONLY occupied/accepted first. A later correct empty snapshot must
@@ -245,7 +287,16 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     expect(actor.authority.commands().some(command => command.type === "seat_claim_result" && command.commandId === claimId && command.accepted)).toBe(true);
     await member.context.close();
     await expectExactRoomAuthority([witness]);
-  }, () => [() => { held = false; queue.length = 0; },
+  }, () => [async () => {
+    pendingPage?.off("requestfinished", onRuntimeFinished);
+    await Promise.allSettled(runtimeReadsPending);
+    const offset = (at: number) => Math.round((at - (claimAt || beganAt)) * 10) / 10;
+    console.info("t16_pending_claim_timing", JSON.stringify({ claimCount, releaseCount, claimObserved: Boolean(claimId), acceptedObserved: accepted,
+      releaseObserved: Boolean(releaseId), releaseDeltaMs: claimAt && releaseAt ? Math.round((releaseAt - claimAt) * 10) / 10 : null,
+      phaseOffsetsMs: Object.fromEntries(Object.entries(phases).map(([phase, at]) => [phase, offset(at)])),
+      runtimeReads: runtimeReads.map(({ at, ...row }) => ({ offsetMs: offset(at), ...row })) }));
+    runtimeReads.length = 0; runtimeReadsPending.clear();
+  }, () => { held = false; queue.length = 0; },
     () => pendingPage && !pendingPage.isClosed() ? pendingPage.evaluate(() => (window as any).__t16SeatDeliveryCleanup?.()) : undefined,
     () => pendingPage && !pendingPage.isClosed() ? transport?.close() : undefined, () => member?.context.close(),
     () => pendingPage?.context().close(), () => entering]);

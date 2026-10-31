@@ -11,18 +11,26 @@ const require = createRequire(import.meta.url);
 const ts = require("typescript");
 const root = fileURLToPath(new URL("../", import.meta.url));
 // Execute the actual test helpers without launching browsers or importing service entry points.
-function loadHelper(relative, overrides = {}, append = "") {
+function loadHelper(relative, overrides = {}, append = "", globals = {}) {
   const filename = resolve(root, relative), module = { exports: {} };
   const localRequire = name => {
     if (Object.hasOwn(overrides, name)) return overrides[name];
-    if (name.startsWith("./")) return loadHelper(resolve(dirname(filename), `${name}.ts`), overrides);
+    if (name.startsWith("./")) return loadHelper(resolve(dirname(filename), `${name}.ts`), overrides, "", globals);
     return createRequire(filename)(name);
   };
-  const output = ts.transpileModule(readFileSync(filename, "utf8") + append, {
+  // ESM imports are hoisted even when the source places them below a constant;
+  // preserve that behavior when executing a source module as CommonJS here.
+  const source = ts.createSourceFile(filename, readFileSync(filename, "utf8"), ts.ScriptTarget.ES2022, true);
+  const imports = source.statements.filter(ts.isImportDeclaration), body = source.statements.filter(statement => !ts.isImportDeclaration(statement));
+  const text = [...imports, ...body].map(statement => statement.getFullText(source)).join("\n");
+  const output = ts.transpileModule(text + append, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
   }).outputText;
-  vm.runInNewContext(output, { exports: module.exports, module, require: localRequire,
-    URL, Buffer, console, process, Error, AggregateError }, { filename });
+  // Keep the real SDK's plain-object checks in the same realm, without leaking
+  // a module's variables. Browser callbacks still run only in Playwright.
+  const bindings = { exports: module.exports, module, require: localRequire,
+    URL, Buffer, console, process, Error, AggregateError, performance, structuredClone, ...globals };
+  vm.compileFunction(output, Object.keys(bindings), { filename })(...Object.values(bindings));
   return module.exports;
 }
 const { cleanupAll, withCleanup } = loadHelper("tests/e2e/test-cleanup.ts");
@@ -180,4 +188,88 @@ test("pending-disable claim observation starts only after normal scene/connectio
   assert.equal(polls.length, 1);
   assert.equal(polls[0].timeout, 15000, "the original claim-observation deadline is unchanged");
   assert.deepEqual(Array.from(polls[0].intervals), [50]);
+});
+
+test("public-demo stale write projects the read DTO into valid PUT fields and reaches real CAS without changing state", async () => {
+  const { staleBindingUpdate } = loadHelper("tests/e2e/public-demo-plugins.ts", {
+    "./plugin-author-scenarios": {}, "./plugin-author-ui": {}, "./room-plugin-fixture": {},
+    "./meeting-tools-acceptance": {}, "./room-state-observation": {}
+  }, "\nexport { staleBindingUpdate };\n");
+  const contracts = loadHelper("apps/api/src/plugins/contracts.ts");
+  const policy = loadHelper("apps/api/src/plugins/policy.ts");
+  const deps = { "./contracts.js": contracts, "./policy.js": policy };
+  const { parseRoomPluginBindingHttpBody } = loadHelper("apps/api/src/plugins/http-dto.ts", deps);
+  const { createRoomPluginStorage } = loadHelper("apps/api/src/plugins/storage.ts", deps);
+  const readBinding = { bindingId: "22222222-2222-4222-8222-222222222222", pluginId: "external.demo", generation: 2, bindingRevision: 2,
+    packageId: "11111111-1111-4111-8111-111111111111", version: "1.0.1", artifactSha256: "a".repeat(64), enabled: true,
+    config: { greeting: "Public demo" }, approvedCapabilities: ["status.set", "seating.cancelPendingOwnClaim"] };
+  const bytes = value => Buffer.from(JSON.stringify(value));
+  const beforeRead = JSON.stringify(readBinding);
+  assert.throws(() => parseRoomPluginBindingHttpBody(bytes({ ...readBinding, expectedRevision: 1,
+    config: { greeting: "stale" }, approvedCapabilities: ["status.set"] })), error => error.code === "plugin_invalid_binding");
+  const body = staleBindingUpdate(readBinding);
+  const parsed = parseRoomPluginBindingHttpBody(bytes(body));
+  assert.equal(parsed.expectedRevision, 1);
+  assert.equal(parsed.input.packageId, readBinding.packageId);
+  assert.equal(parsed.input.config.greeting, "stale");
+  for (const field of ["bindingId", "pluginId", "generation", "bindingRevision"]) {
+    assert.throws(() => parseRoomPluginBindingHttpBody(bytes({ ...body, [field]: readBinding[field] })),
+      error => error.code === "plugin_invalid_binding", `read-only ${field} must not sneak back into the stale probe`);
+  }
+  let transactions = 0;
+  const state = { revision: 2, deleting: false }, beforeState = JSON.stringify(state);
+  const storage = createRoomPluginStorage({ async transaction(_scope, operation) {
+    transactions++;
+    return operation({ state, getPackage() { assert.fail("stale CAS must fail before package mutation"); } });
+  } });
+  await assert.rejects(storage.putBinding({ tenantId: "owned", roomId: "owned" }, readBinding.pluginId, parsed.input, parsed.expectedRevision),
+    error => error.code === "plugin_revision_conflict");
+  assert.equal(transactions, 1, "the corrected request really reaches CAS, not the parser's 400 path");
+  assert.equal(JSON.stringify(state), beforeState);
+  assert.equal(JSON.stringify(readBinding), beforeRead);
+});
+
+test("pending-disable timing stays observational, preserves the 3000ms failure and cleans its response listener", async () => {
+  let now = 1, fromClient, fromServer, closed = 0;
+  const logs = [], page = new EventEmitter(), context = { close: async () => { closed++; } };
+  page.context = () => context; page.isClosed = () => false;
+  page.evaluate = async callback => callback.toString().includes("__VRATA_DEBUG__")
+    ? { participantId: "private-participant", pendingSeatId: "seat-01", currentSeatId: null, running: 0 } : undefined;
+  const server = { onMessage(callback) { fromServer = callback; }, send() {} };
+  const socket = { connectToServer: () => server, onMessage(callback) { fromClient = callback; }, send() {}, close() {} };
+  page.routeWebSocket = async (_match, handler) => handler(socket);
+  const roomId = "private-owned-room", claimId = "plugin-seat:private-claim", releaseId = "plugin-release:private-release";
+  const helper = loadHelper("tests/e2e/room-plugin-auto-seat-scenarios.ts", {
+    "./plugin-author-scenarios": { pluginPath: (room, suffix) => `/api/rooms/${room}/plugins/${suffix}` },
+    "./room-plugin-fixture": { async enterPluginRoom(_browser, _value, _room, _role, _name, prepare) {
+      await prepare(context, page);
+      now = 100; fromClient(JSON.stringify({ type: "seat_claim", commandId: claimId, seatId: "seat-01" }));
+      now = 120; fromServer(JSON.stringify({ type: "seat_claim_result", seatClaimResult: { commandId: claimId, accepted: true } }));
+      now = 3200; return { page, context, session: { participantId: "private-participant" } };
+    } },
+    "./room-state-observation": {}, "./room-seat-protocol-race": {}, "./staging-identity": {}, "./scene-bundle-fixtures": {}
+  }, "\nexport { disablePendingClaim };\n", { performance: { now: () => now }, console: { info: (...args) => logs.push(args), warn() {} } });
+  const put = async enabled => {
+    assert.equal(enabled, false); now = 3250;
+    page.emit("requestfinished", { url: () => `https://example.invalid/api/rooms/${roomId}/plugins/runtime`,
+      response: async () => ({ status: () => 200, json: async () => ({ revision: 9, bindings: [], token: "must-not-log", config: { private: "must-not-log" } }) }) });
+    now = 3300; fromClient(JSON.stringify({ type: "seat_release", commandId: releaseId }));
+    now = 3320; fromServer(JSON.stringify({ type: "seat_release_result", seatReleaseResult: { commandId: releaseId } }));
+  };
+  const observations = new Map();
+  await assert.rejects(helper.disablePendingClaim({}, {}, roomId, put, {}, [], observations, async () => ({})),
+    error => /Expected: true/.test(error.message), "a late release must still fail; diagnostics cannot turn it into PASS");
+  assert.equal(page.listenerCount("requestfinished"), 0);
+  assert.equal(closed, 2);
+  assert.equal(logs.length, 1); assert.equal(logs[0][0], "t16_pending_claim_timing");
+  const facts = JSON.parse(logs[0][1]);
+  assert.equal(facts.claimCount, 1); assert.equal(facts.releaseCount, 1);
+  assert.equal(facts.releaseDeltaMs, 3200);
+  assert.equal(facts.phaseOffsetsMs.entryComplete, 3100);
+  assert.equal(facts.phaseOffsetsMs.disableRequested, 3100);
+  assert.equal(facts.phaseOffsetsMs.serverReleaseAck, 3220);
+  assert.deepEqual(facts.runtimeReads, [{ offsetMs: 3150, status: 200, revision: 9, enabledBindings: 0 }]);
+  for (const privateValue of [roomId, claimId, releaseId, "private-participant", "example.invalid", "must-not-log"]) {
+    assert.equal(logs[0][1].includes(privateValue), false);
+  }
 });
