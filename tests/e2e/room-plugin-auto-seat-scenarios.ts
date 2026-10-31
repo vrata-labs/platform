@@ -38,30 +38,28 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
       await put(true);
       await host.context.close();
       const observe = async (page: Page) => { const capture = await captureRoomAuthority(page); captures.push(capture); return capture; };
-      const routes: Array<{ route: WebSocketRoute; page: Page }> = [], pages: Page[] = [];
-      let barrierOpen = false;
+      const pages: Page[] = [];
+      let startDiscovery!: () => void;
+      const discoveryGate = new Promise<void>(resolve => { startDiscovery = resolve; });
+      const discoveryRequests = new Set<Page>();
       const observations = new Map<Page, RoomAuthorityCapture>();
       const arrivalBeganAt = performance.now();
       const arrivalPhases: Record<string, number> = {};
       const entries = [1, 2, 3, 4].map(index => enterPluginRoom(browser, value, host.roomId, "member", `Auto-seat member ${index}`, async (context, page) => {
         contexts.push(context); pages.push(page); observations.set(page, await observe(page));
         await installSeatAckObservation(page);
-        // All four real clients finish scene loading before any gets the initial
-        // authoritative snapshot. No fabricated readiness, snapshots or claims.
-        await page.routeWebSocket(url => url.searchParams.has("roomId"), socket => {
-          if (barrierOpen) socket.connectToServer(); else routes.push({ route: socket, page });
-        });
+        await holdInitialSeatDiscovery(page, host.roomId, discoveryGate, () => discoveryRequests.add(page));
       }));
       const settled = Promise.all(entries); void settled.catch(() => undefined);
       await withCleanup(async () => {
-        await expect.poll(() => pages.length === 4 && routes.length === 4, { timeout: 90_000 }).toBe(true);
-        await Promise.all(pages.map(page => expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.sceneBundleState), { timeout: 90_000 }).toBe("loaded")));
-        arrivalPhases.scenesLoaded = performance.now();
-        barrierOpen = true;
-        for (const { route } of routes) route.connectToServer();
-        arrivalPhases.barrierOpened = performance.now();
         const members = (await settled).map(member => ({ ...member, participantId: member.session.participantId, authority: observations.get(member.page)! }));
+        arrivalPhases.scenesLoaded = performance.now();
         arrivalPhases.entriesComplete = performance.now();
+        await expect.poll(() => pages.length === 4 && discoveryRequests.size === 4, { timeout: 90_000 }).toBe(true);
+        // Four simultaneous normal entrants, with their REAL native snapshots.
+        // Release only HTTP discovery together; live WS frames never cross Node.
+        startDiscovery();
+        arrivalPhases.barrierOpened = performance.now();
         try {
           for (const member of members) await expect.poll(async () => Boolean((await seatState(member.page)).currentSeatId), { timeout: 60_000 }).toBe(true);
         } finally {
@@ -132,9 +130,8 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
         await disablePendingClaim(browser, value, host.roomId, put, lateActor, contexts, observations, observe);
         await author.assertNotExecuted();
       }, () => [
-        // Release a failed readiness barrier before closing pages; no pending routes remain.
-        () => { barrierOpen = true; },
-        ...routes.map(({ route, page }) => () => !page.isClosed() ? route.close() : undefined),
+        // Release a failed discovery barrier before closing its requests/pages.
+        () => { startDiscovery(); },
         // Closing entrants also settles failed pending admission waits before room deletion.
         () => cleanupAll(contexts.map(context => () => context.close())),
         async () => {
@@ -143,11 +140,19 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
           if (errors.length) throw new AggregateError(errors, "owned_test_entries_failed");
         },
         () => cleanupAll(contexts.map(context => () => context.close())),
-        () => { routes.length = 0; pages.length = 0; observations.clear(); }
+        () => { discoveryRequests.clear(); pages.length = 0; observations.clear(); }
       ]);
     });
   }, () => [...captures.map(capture => () => capture.close()), ...contexts.map(context => () => context.close()),
     () => { captures.length = 0; contexts.length = 0; }, () => author.close()]);
+}
+
+/** Barrier before plugin startup, never on live native room-state traffic.
+ * The original authenticated HTTP request/response is continued, not fulfilled. */
+export async function holdInitialSeatDiscovery(page: Page, roomId: string, gate: Promise<void>, reached: () => void) {
+  await page.route(url => url.pathname === pluginPath(roomId, "runtime"), async route => {
+    reached(); await gate; await route.continue();
+  });
 }
 
 async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, roomId: string, put: (enabled: boolean) => Promise<void>,

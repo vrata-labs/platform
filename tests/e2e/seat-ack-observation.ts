@@ -71,11 +71,13 @@ export async function installSeatAckObservation(page: Pick<Page, "addInitScript"
       }
       const socket = this as WebSocket, value = scope(socket);
       if (!value) return add.call(this, type, listener, options);
+      if (value.native) appGeneration = Math.max(appGeneration, value.generation);
       if (!value.native) {
         const send = socket.send;
         socket.send = function (data) { outgoing(socket, data, false); return send.call(socket, data); };
       }
       return add.call(socket, type, function (event) {
+        if (value.native) incoming(socket, event, "native-receive");
         const attempt = incoming(socket, event, value.native ? "native-app-delivery" : "app-delivery");
         try { return typeof listener === "function" ? listener.call(socket, event) : listener.handleEvent(event); }
         finally { if (attempt) mark("app-handler-return", attempt); }

@@ -445,3 +445,60 @@ test("actual Playwright mock keeps native receive distinct from delayed app disp
   assert(facts.rows.every(row => row.attempt === 1 && row.current === true));
   for (const secret of [claim.commandId, claim.seatId, "private-owned", "example.invalid"]) assert.equal(JSON.stringify(facts).includes(secret), false);
 });
+
+test("initial four-entry barrier continues original HTTP discovery together without registering a WS route", async () => {
+  const { holdInitialSeatDiscovery } = loadHelper("tests/e2e/room-plugin-auto-seat-scenarios.ts", {
+    "./plugin-author-scenarios": { pluginPath: (room, suffix) => `/api/rooms/${room}/plugins/${suffix}` },
+    "./room-plugin-fixture": {}, "./room-state-observation": {}, "./room-seat-protocol-race": {},
+    "./staging-identity": {}, "./scene-bundle-fixtures": {}
+  });
+  let release, reached = 0, continued = 0;
+  const gate = new Promise(resolve => { release = resolve; }), pending = [];
+  for (let i = 0; i < 4; i++) await holdInitialSeatDiscovery({
+    routeWebSocket() { assert.fail("normal live transport must remain native"); },
+    async route(match, handler) {
+      assert.equal(match(new URL("https://example.invalid/api/rooms/owned/plugins/runtime")), true);
+      assert.equal(match(new URL("https://example.invalid/elsewhere")), false);
+      pending.push(handler({ async continue() { continued++; }, fulfill() { assert.fail("no fabricated HTTP response"); } }));
+    }
+  }, "owned", gate, () => { reached++; });
+  assert.equal(reached, 4); assert.equal(continued, 0);
+  release(); await Promise.all(pending);
+  assert.equal(continued, 4);
+});
+
+test("native-only ACK observer preserves bytes and separates old-socket answers from current generation", async () => {
+  const { installSeatAckObservation } = loadHelper("tests/e2e/seat-ack-observation.ts");
+  let now = 0;
+  const context = vm.createContext({ URL, performance: { now: () => now } });
+  vm.runInContext(`class Target {
+    constructor() { this.listeners={}; }
+    addEventListener(type, fn) { (this.listeners[type]??=[]).push(fn); }
+    dispatchEvent(event) { for(const fn of this.listeners[event.type]??[]) fn.call(this,event); return true; }
+  }
+  class Native extends Target {
+    constructor(url) { super(); this.url=url; this.sent=[]; }
+    get [Symbol.toStringTag]() { return 'WebSocket'; }
+    send(data) { this.sent.push(data); }
+  }
+  globalThis.EventTarget=Target; globalThis.WebSocket=Native; globalThis.window=globalThis;
+  globalThis.originalDispatch=Target.prototype.dispatchEvent;`, context);
+  await installSeatAckObservation({ addInitScript: async callback => vm.runInContext(`(${callback.toString()})()`, context) });
+  const old = new context.WebSocket("ws://example.invalid/?roomId=private-room");
+  let deliveries = 0; old.addEventListener("message", () => { deliveries++; });
+  const bytes = JSON.stringify({ type: "seat_claim", commandId: "plugin-seat:private-old", seatId: "private-seat" });
+  now = 100; old.send(bytes); assert.deepEqual(Array.from(old.sent), [bytes]);
+  const current = new context.WebSocket("ws://example.invalid/?roomId=private-room");
+  current.addEventListener("message", () => { deliveries++; });
+  now = 150;
+  const accepted = { type: "message", data: JSON.stringify({ type: "seat_claim_result", seatClaimResult: { commandId: "plugin-seat:private-old", accepted: true } }) };
+  context.originalDispatch.call(current, accepted);
+  assert.equal(context.__t16SeatAckFacts().rows.length, 2, "matching ID on wrong socket cannot be attributed to the attempt");
+  now = 200; context.originalDispatch.call(old, accepted);
+  const facts = JSON.parse(JSON.stringify(context.__t16SeatAckFacts()));
+  assert.equal(deliveries, 2, "all app callbacks still execute unchanged");
+  assert.deepEqual(facts.rows.slice(2).map(row => [row.phase, row.atMs, row.current]), [
+    ["native-receive", 200, false], ["native-app-delivery", 200, false], ["app-handler-return", 200, false]
+  ]);
+  for (const secret of ["private-room", "private-old", "private-seat", "example.invalid"]) assert.equal(JSON.stringify(facts).includes(secret), false);
+});
