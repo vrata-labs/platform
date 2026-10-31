@@ -72,6 +72,7 @@ export class RoomPluginController {
   private frameworkFailed = false;
   private failedEntries = new Map<string, { key: string; code: Failure }>();
   private seatingTimer: unknown;
+  private readonly readyDeliveries: Array<{ sentAtMs: number; completedAtMs: number | null; failedAtMs: number | null; seating: boolean; arrivalAllowed: boolean }> = [];
   // The trusted QuickJS module can miss its load deadline on a busy device; it gets one more
   // attempt (reusing the running compile) before plugins are stopped for this page.
   private wasmLoadRetries = 0;
@@ -150,7 +151,8 @@ export class RoomPluginController {
       instances: this.entries.size, running: [...this.entries.values()].filter(entry => entry.state === "running").length,
       failed: [...this.entries.values()].filter(entry => entry.state === "failed").length,
       remainingLeaseMs: this.lease.diagnostics().remainingMs, lastFailure: this.lastFailure, lastInstanceFailure: this.lastInstanceFailure,
-      lastHostPhase: this.lastHostPhase, hostFailed: this.hostFailed, startupTiming: this.startupTiming };
+      lastHostPhase: this.lastHostPhase, hostFailed: this.hostFailed, startupTiming: this.startupTiming,
+      readyDeliveries: this.readyDeliveries.map(row => ({ ...row })) };
   }
 
   private available(): boolean {
@@ -316,8 +318,15 @@ export class RoomPluginController {
     } else if (changed && seatingCapable(entry.binding)) {
       event = { sdkApiVersion: 1, type: "seating.snapshot", snapshot: seating.snapshot(ownerOf(entry), true) };
     } else return;
+    const delivery = event.type === "room.ready" && this.readyDeliveries.length < 8
+      ? { sentAtMs: this.clock(), completedAtMs: null as number | null, failedAtMs: null as number | null,
+        seating: seatingCapable(entry.binding), arrivalAllowed: event.snapshot.arrivalAllowed } : null;
+    if (delivery) this.readyDeliveries.push(delivery);
     const generation = entry.generation;
-    void entry.instance.event(event).catch(error => {
+    void entry.instance.event(event).then(() => {
+      if (delivery) delivery.completedAtMs = this.clock();
+    }, error => {
+      if (delivery) delivery.failedAtMs = this.clock();
       if (this.entries.get(entry.binding.bindingId) !== entry || generation !== entry.generation || entry.state === "suspended") return;
       this.failEntry(entry, error instanceof SandboxError ? error.code : "host-unavailable");
     });

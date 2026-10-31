@@ -233,6 +233,8 @@ test("room.ready waits for platform readiness, is sent once per instance and sna
   await h.advance(100); await until(() => h.instances[0].events.length === 2);
   assert.deepEqual(h.instances[0].events.map(event => event.type), ["room.connection", "room.ready"]);
   assert.deepEqual(s.calls, ["snapshot:false"], "a status-only plugin gets no seat data");
+  await until(() => h.controller.diagnostics().readyDeliveries[0]?.completedAtMs !== null);
+  assert.deepEqual(h.controller.diagnostics().readyDeliveries, [{ sentAtMs: 100, completedAtMs: 100, failedAtMs: null, seating: false, arrivalAllowed: false }]);
   h.controller.seatingChanged(); await h.advance(200); await delay(5);
   assert.equal(h.instances[0].events.length, 2, "status-only plugins receive no seating snapshots");
   h.config(seatingSnapshot(2, false)); h.controller.kick(); await until(() => h.controller.diagnostics().instances === 0);

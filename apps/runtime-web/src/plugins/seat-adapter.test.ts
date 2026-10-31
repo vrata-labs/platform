@@ -99,3 +99,29 @@ test("snapshots use binding-scoped pseudonyms and minimize data for plugins with
   h.adapter.forget("binding-1");
   assert.notEqual(h.adapter.snapshot("binding-1", true).ownParticipantAlias, first.ownParticipantAlias, "a new instance gets new aliases");
 });
+
+test("arrival diagnostics retain causal monotonic transitions after closure without exposing world data", () => {
+  const h = harness({ ready: true }); h.advance(100); h.adapter.observe();
+  h.advance(250); h.adapter.activate();
+  h.advance(ROOM_PLUGIN_ARRIVAL.windowMs); const closed = h.adapter.diagnostics();
+  assert.equal(closed.grant, "closed"); assert.equal(closed.openedAtMs, null);
+  assert.equal(closed.firstReadyAtMs, 100);
+  assert.deepEqual(closed.activations, [350]);
+  assert.deepEqual(closed.transitions, [
+    { from: "waiting", to: "armed", reason: "platform-ready", atMs: 100 },
+    { from: "armed", to: "open", reason: "room-ready", atMs: 350 },
+    { from: "open", to: "closed", reason: "window-expired", atMs: 5350 }
+  ]);
+  closed.transitions.length = 0; closed.activations.length = 0;
+  for (let i = 0; i < 20; i++) { h.adapter.observe(); h.adapter.activate(); }
+  assert.equal(h.adapter.diagnostics().transitions.length, 3);
+  assert.equal(h.adapter.diagnostics().activations.length, 8);
+  assert.equal(JSON.stringify(h.adapter.diagnostics()).includes("self-private-id"), false);
+  const stale = harness({ ready: true }); stale.adapter.observe(); stale.advance(ROOM_PLUGIN_ARRIVAL.entryMs + 1); stale.adapter.activate();
+  assert.equal(stale.adapter.diagnostics().transitions.at(-1)?.reason, "entry-expired");
+  const manual = harness(); manual.adapter.manualIntent(); manual.world.ready = true;
+  assert.equal(manual.adapter.diagnostics().transitions.at(-1)?.reason, "manual-intent");
+  assert.equal(manual.adapter.diagnostics().firstReadyAtMs, 0);
+  const offline = harness({ ready: true }); offline.adapter.observe(); offline.adapter.stop("offline");
+  assert.equal(offline.adapter.diagnostics().transitions.at(-1)?.reason, "offline");
+});

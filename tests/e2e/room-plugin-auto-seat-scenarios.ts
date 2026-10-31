@@ -71,6 +71,7 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
                 pending: Boolean(debug?.pendingSeatId), seated: Boolean(debug?.currentSeatId),
                 state: plugins?.state ?? null, running: plugins?.running ?? null, failure: plugins?.lastFailure ?? null,
                 hostPhase: plugins?.lastHostPhase ?? null, startupTiming: plugins?.startupTiming ?? null,
+                readyDeliveries: plugins?.readyDeliveries ?? null,
                 seating: plugins?.seating ?? null };
             }).catch(() => ({ unavailable: true })),
             commands: member.authority.commands().map(command => ({ type: command.type, accepted: command.accepted,
