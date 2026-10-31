@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { bearer, pluginPath, privateHttp, type ExternalArtifact } from "./plugin-author-scenarios";
 import { enterOwnedPluginRoom, enterPluginRoom, installPluginArtifact, startRoomPluginFixture, useOwnedActor } from "./room-plugin-fixture";
-import { runAutoSeatScenario, runNoAnchorAutoSeatScenario } from "./room-plugin-auto-seat-scenarios";
+import { runAutoSeatScenario, runNoAnchorAutoSeatScenario, runPendingAutoSeatScenario } from "./room-plugin-auto-seat-scenarios";
 import { startNoAnchorRoomPluginFixture } from "./room-plugin-no-anchor-fixture";
 import { withCleanup } from "./test-cleanup";
 
@@ -19,6 +19,11 @@ const capabilities = ["seating.claimSelfOnEntry", "seating.cancelPendingOwnClaim
 test("isolated v2 auto-seat gives four simultaneous entries four confirmed seats; stand, reload and disable keep people's choices", async ({ browser }) => {
   test.setTimeout(600_000); const value = await startRoomPluginFixture(2);
   await withCleanup(() => runAutoSeatScenario(browser, value), () => [() => value.close()]);
+});
+
+test("isolated v2 auto-seat pending retirement suppresses intermediate late accept and leaves no ghosts", async ({ browser }) => {
+  test.setTimeout(300_000); const value = await startRoomPluginFixture(2);
+  await withCleanup(() => runPendingAutoSeatScenario(browser, value), () => [() => value.close()]);
 });
 
 test("isolated v2 external auto-seat with no scene anchors stays standing without a claim", async ({ browser }) => {

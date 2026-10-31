@@ -229,7 +229,7 @@ test("server closure is not suppressed and failed-test cleanup completes deferre
   assert.equal(f.window.__t16ReleaseSocket, undefined);
 });
 
-test("pending-disable claim observation starts only after normal scene/connection entry completes", async () => {
+test("pending startup has its own bound after normal entry; response observation cannot start without an outgoing claim", async () => {
   let completeEntry;
   const entering = new Promise(resolve => { completeEntry = resolve; });
   const sentinel = new Error("stop_after_claim_observation"), polls = [];
@@ -242,15 +242,61 @@ test("pending-disable claim observation starts only after normal scene/connectio
     "./plugin-author-scenarios": {}, "./room-plugin-fixture": { enterPluginRoom: () => entering },
     "./room-state-observation": {}, "./room-seat-protocol-race": {}, "./staging-identity": {}, "./scene-bundle-fixtures": {}
   }, "\nexport { disablePendingClaim };\n");
-  const result = helper.disablePendingClaim({}, {}, "owned", async () => {}, {}, [], new Map(), async () => {});
+  const result = helper.disablePendingClaim({}, {}, "owned", async () => {}, [], new Map(), async () => {});
   void result.catch(() => undefined);
   await Promise.resolve(); await Promise.resolve();
   assert.equal(polls.length, 0, "claim observation cannot consume its deadline during onboarding or scene loading");
   completeEntry({ page: { evaluate: async () => ({ synthetic: true }) }, context: { close: async () => {} } });
   await assert.rejects(result, error => error === sentinel);
   assert.equal(polls.length, 1);
-  assert.equal(polls[0].timeout, 15000, "the original claim-observation deadline is unchanged");
+  assert.equal(polls[0].timeout, 60000, "startup is separately bounded, not charged to the response window");
   assert.deepEqual(Array.from(polls[0].intervals), [50]);
+});
+
+test("local and published pending wrappers execute the same exported scenario without a skip", async () => {
+  const pending = [], fixture = { origin: "https://example.invalid", adminToken: "synthetic", close: async () => {} };
+  for (const published of [false, true]) {
+    const cases = [];
+    const test = (name, run) => cases.push({ name, run });
+    test.use = () => {}; test.setTimeout = () => {}; test.skip = () => assert.fail("mandatory case cannot skip");
+    loadHelper(`tests/e2e/room-plugin-auto-seat${published ? "-staging" : ""}.spec.ts`, {
+      "@playwright/test": { test },
+      "./plugin-author-scenarios": {}, "./room-plugin-fixture": { startRoomPluginFixture: async protocol => { assert.equal(protocol, 2); return fixture; } },
+      "./room-plugin-auto-seat-scenarios": { runPendingAutoSeatScenario: async (browser, value) => pending.push({ browser, value }) },
+      "./room-plugin-no-anchor-fixture": {}, "./public-demo-scenarios": { assertExactActivePublicDemoCatalog: async origin => assert.equal(origin, fixture.origin) }
+    }, "", { process: { env: { BASE_URL: fixture.origin, STAGING_ADMIN_TOKEN: fixture.adminToken, VRATA_REFERENCE_CATALOG_ACTIVE: "1" } } });
+    const selected = cases.filter(row => row.name.includes("pending retirement"));
+    assert.equal(selected.length, 1); assert.equal(selected[0].name.includes("@staging-extended"), published);
+    await selected[0].run({ browser: "same-browser" });
+  }
+  assert.equal(pending.length, 2);
+  assert(pending.every(row => row.browser === "same-browser" && row.value.origin === fixture.origin && row.value.adminToken === fixture.adminToken));
+});
+
+test("shared auto-seat setup closes its Host renderer before the scenario and uses only the ordinary admitted session for CAS", async () => {
+  const calls = [], host = { roomId: "owned", session: { token: "ordinary-session" },
+    context: { close: async () => calls.push("host-renderer-closed") } };
+  const helper = loadHelper("tests/e2e/room-plugin-auto-seat-scenarios.ts", {
+    "./plugin-author-scenarios": { downloadPublicSdk: async () => ({}), createExternalAuthorProject: async () => ({
+      buildAutoSeat: async () => { calls.push("external-build"); return {}; }, assertNotExecuted: async () => {}, close: async () => calls.push("author-closed")
+    }), bearer: token => ({ authorization: `Bearer ${token}` }), pluginPath: (_room, path) => path,
+    privateHttp: async (_origin, path, method, headers, body) => {
+      assert.deepEqual(headers, { authorization: "Bearer ordinary-session" });
+      assert.equal(Object.hasOwn(headers, "x-vrata-admin-token"), false);
+      if (method === "GET") return { status: 200, json: () => ({ revision: 0 }) };
+      assert.equal(path, "bindings/external.auto-seat"); assert.equal(body.expectedRevision, body.enabled ? 0 : 1);
+      calls.push(body.enabled ? "enable" : "disable");
+      return { status: 200, json: () => ({ revision: body.enabled ? 1 : 2 }) };
+    } },
+    "./room-plugin-fixture": { enterOwnedPluginRoom: async () => host, useOwnedActor: async (_host, run) => run(),
+      installPluginArtifact: async () => ({ pluginId: "external.auto-seat" }) },
+    "./room-state-observation": {}, "./room-seat-protocol-race": {}, "./staging-identity": { identityProtocolAt: async () => 2 }, "./scene-bundle-fixtures": {}
+  }, "\nexport { withAutoSeatRoom };\n");
+  await helper.withAutoSeatRoom({}, {}, async (_roomId, put) => {
+    assert.deepEqual(calls, ["external-build", "enable", "host-renderer-closed"]);
+    await put(false);
+  });
+  assert.deepEqual(calls, ["external-build", "enable", "host-renderer-closed", "disable", "author-closed"]);
 });
 
 test("public-demo stale write projects the read DTO into valid PUT fields and reaches real CAS without changing state", async () => {
@@ -292,9 +338,15 @@ test("public-demo stale write projects the read DTO into valid PUT fields and re
   assert.equal(JSON.stringify(readBinding), beforeRead);
 });
 
-for (const releaseDelta of [1200, 3200]) test(`controlled pending-disable keeps the real release fence at ${releaseDelta}ms and cleans its listener`, async () => {
+for (const [startupAt, releaseDelta] of [[16_000, 1200], [100, 3200], [21_050, 1200]]) test(`controlled pending-disable starts response at claim ${startupAt}ms, keeps release fence ${releaseDelta}ms and cleans its listener`, async () => {
   let now = 1, fromClient, fromServer, closed = 0;
   let installed = false, pendingReads = 0, entered = false, discoveryContinued = false, mutationCommitted = false;
+  const polls = [], actualExpect = require("@playwright/test").expect;
+  const expect = value => actualExpect(value);
+  expect.poll = (callback, options) => {
+    polls.push({ at: now, entered, ...structuredClone(options) });
+    return actualExpect.poll(callback, options);
+  };
   let runtimeRoute, pendingRefresh, refreshContinued = 0;
   const afterFence = new Error("positive_control_reached_intermediate_pose");
   const logs = [], page = new EventEmitter(), context = { close: async () => { closed++; } };
@@ -302,7 +354,10 @@ for (const releaseDelta of [1200, 3200]) test(`controlled pending-disable keeps 
   page.addInitScript = async () => { installed = true; };
   page.evaluate = async callback => {
     if (callback.toString().includes("localPose")) throw afterFence;
-    if (callback.toString().includes("readyDeliveries")) return { revision: 9, readyDeliveries: [], pendingBeforeSend: true, seating: { settlements: [{ reason: "retired" }] } };
+    if (callback.toString().includes("readyDeliveries")) return { revision: 9, readyDeliveries: [], pendingBeforeSend: true, releaseDeltaMs: releaseDelta,
+      startup: { ready: true, correlation: true, online: true, firstReadyAtMs: 10, openedAtMs: startupAt - 20, claimAtMs: startupAt },
+      entry: { joinClicks: [{ trusted: true }], admissionStarts: [1], discovery: [{ status: 200 }] },
+      seating: { settlements: [{ reason: "retired" }] } };
     if (!callback.toString().includes("__VRATA_DEBUG__")) return;
     pendingReads++;
     return { participantId: "private-participant", pendingSeatId: "seat-01", currentSeatId: null, running: 0 };
@@ -316,51 +371,53 @@ for (const releaseDelta of [1200, 3200]) test(`controlled pending-disable keeps 
     }, fulfill() { assert.fail("never fabricate runtime discovery"); } });
     assert.equal(refreshContinued, 0);
     fromServer(JSON.stringify({ type: "room_state", room: { seatOccupancy: { "seat-01": "private-participant" } } }));
-    now = 120; fromServer(JSON.stringify({ type: "seat_claim_result", seatClaimResult: { commandId: claimId, accepted: true } }));
+    now = startupAt + 20; fromServer(JSON.stringify({ type: "seat_claim_result", seatClaimResult: { commandId: claimId, accepted: true } }));
   } };
   const socket = { connectToServer: () => server, onMessage(callback) { fromClient = callback; }, send() {}, close() {} };
   page.routeWebSocket = async (_match, handler) => handler(socket);
   page.route = async (_match, handler) => {
     runtimeRoute = handler;
-    void handler({ async continue() {
-      assert.equal(entered, true, "runtime discovery cannot consume the claim deadline during entry");
-      discoveryContinued = true;
-      now = 100; fromClient(JSON.stringify({ type: "seat_claim", commandId: claimId, seatId: "seat-01" }));
-    } });
   };
   const roomId = "private-owned-room", claimId = "plugin-seat:private-claim", releaseId = "plugin-release:private-release";
   const helper = loadHelper("tests/e2e/room-plugin-auto-seat-scenarios.ts", {
+    "@playwright/test": { expect },
     "./plugin-author-scenarios": { pluginPath: (room, suffix) => `/api/rooms/${room}/plugins/${suffix}` },
     "./room-plugin-fixture": { async enterPluginRoom(_browser, _value, _room, _role, _name, prepare) {
       await prepare(context, page);
       assert.equal(installed, true, "delivery observation is installed before navigation and the first claim");
        assert.equal(discoveryContinued, false);
+       await runtimeRoute({ async continue() { discoveryContinued = true; }, fulfill() { assert.fail("no discovery substitution"); } });
+       assert.equal(discoveryContinued, true, "startup discovery is not held until entryComplete");
+       now = startupAt; fromClient(JSON.stringify({ type: "seat_claim", commandId: claimId, seatId: "seat-01" }));
        entered = true; return { page, context, session: { participantId: "private-participant" } };
     } },
     "./room-state-observation": {}, "./room-seat-protocol-race": {}, "./staging-identity": {}, "./scene-bundle-fixtures": {}
   }, "\nexport { disablePendingClaim };\n", { performance: { now: () => now }, console: { info: (...args) => logs.push(args), warn() {} } });
   const put = async enabled => {
     assert.equal(enabled, false); assert.equal(pendingReads, 0);
-    assert.equal(now, 120, "Host PUT begins in the real accepted callback, without poll/UI/read overhead");
-    now = 100 + releaseDelta - 50;
+    assert.equal(now, startupAt + 20, "Host PUT begins in the real accepted callback, without poll/UI/read overhead");
+    now = startupAt + releaseDelta - 50;
     page.emit("requestfinished", { url: () => `https://example.invalid/api/rooms/${roomId}/plugins/runtime`,
       response: async () => ({ status: () => 200, json: async () => ({ revision: 9, bindings: [], token: "must-not-log", config: { private: "must-not-log" } }) }) });
     mutationCommitted = true;
-    now = 100 + releaseDelta; fromClient(JSON.stringify({ type: "seat_release", commandId: releaseId }));
+    now = startupAt + releaseDelta; fromClient(JSON.stringify({ type: "seat_release", commandId: releaseId }));
     now += 20; fromServer(JSON.stringify({ type: "seat_release_result", seatReleaseResult: { commandId: releaseId } }));
   };
   const observations = new Map();
-  await assert.rejects(helper.disablePendingClaim({}, {}, roomId, put, {}, [], observations, async () => ({})),
-    error => releaseDelta < 3000 ? error === afterFence : /Expected: true/.test(error.message),
-    "only an early release reaches intermediate pose; a late release must still fail");
+   await assert.rejects(helper.disablePendingClaim({}, {}, roomId, put, [], observations, async () => ({})),
+     error => releaseDelta < 3000 && startupAt < 20_000 ? error === afterFence : /Expected: true/.test(error.message),
+     "only an early release with proven fresh startup reaches intermediate pose; late release or entry expiry must fail");
   await pendingRefresh; assert.equal(refreshContinued, 1);
+  assert.equal(polls[0].at, startupAt); assert.equal(polls[0].entered, false, "response window starts at outgoing claim, even before entryComplete");
+  assert.equal(polls[0].timeout, 15000); assert.deepEqual(Array.from(polls[0].intervals), [50]);
+  assert.equal(polls[1].timeout, 60000);
   assert.equal(page.listenerCount("requestfinished"), 0);
   assert.equal(closed, 2);
   assert.equal(logs.length, 1); assert.equal(logs[0][0], "t16_pending_claim_timing");
   const facts = JSON.parse(logs[0][1]);
   assert.equal(facts.claimCount, 1); assert.equal(facts.releaseCount, 1);
   assert.equal(facts.releaseDeltaMs, releaseDelta);
-  assert.equal(facts.phaseOffsetsMs.entryComplete, -99);
+  assert.equal(facts.phaseOffsetsMs.entryComplete, releaseDelta + 20);
   assert.equal(facts.phaseOffsetsMs.disableRequested, 20);
   assert.equal(facts.phaseOffsetsMs.serverReleaseAck, releaseDelta + 20);
   assert.deepEqual(facts.runtimeReads, [{ offsetMs: releaseDelta - 50, status: 200, revision: 9, enabledBindings: 0 }]);
@@ -375,22 +432,29 @@ test("preinstalled seat-delivery observer counts only actual correlated replay a
     "./room-seat-protocol-race": {}, "./staging-identity": {}, "./scene-bundle-fixtures": {}
   }, "\nexport { installSeatDeliveryObservation };\n");
   const sent = [], delivered = [];
+  let now = 100;
   class Target { dispatchEvent(event) { delivered.push(event); return true; } }
   class Socket extends Target { send(data) { sent.push(data); } }
   class Message { constructor(data) { this.data = JSON.stringify(data); } }
   const originalSend = Socket.prototype.send, originalDispatch = Target.prototype.dispatchEvent;
-  const window = { __VRATA_DEBUG__: { participantId: "private-self", pendingSeatId: "seat-01", currentSeatId: null } };
+  const window = { __VRATA_DEBUG__: { participantId: "private-self", pendingSeatId: "seat-01", currentSeatId: null,
+    plugins: { seating: { ready: true, correlation: true, online: true, firstReadyAtMs: 10, openedAtMs: 80 } } } };
   await installSeatDeliveryObservation({ addInitScript: async callback => vm.runInNewContext(`(${callback.toString()})()`, {
-    window, WebSocket: Socket, EventTarget: Target, MessageEvent: Message
+    window, WebSocket: Socket, EventTarget: Target, MessageEvent: Message, performance: { now: () => now }
   }) });
   const socket = new Socket(), state = window.__t16SeatDelivery;
   const send = message => socket.send(JSON.stringify(message));
   const deliver = message => socket.dispatchEvent(new Message(message));
   try {
     send({ type: "seat_claim", commandId: "plugin-seat:first", seatId: "seat-01" });
-    assert.equal(state.pendingBeforeSend, true, "pending and standing were captured before the unchanged send");
-    send({ type: "seat_claim", commandId: "plugin-seat:unrelated", seatId: "seat-02" });
-    send({ type: "seat_release", commandId: "plugin-release:first" });
+     assert.equal(state.pendingBeforeSend, true, "pending and standing were captured before the unchanged send");
+     assert.equal(state.startup.claimAtMs, 100); assert.equal(state.startup.firstReadyAtMs, 10);
+     window.__VRATA_DEBUG__.plugins.seating.firstReadyAtMs = 999;
+     assert.equal(state.startup.firstReadyAtMs, 10, "a later instance cannot repair the saved startup proof");
+     send({ type: "seat_claim", commandId: "plugin-seat:unrelated", seatId: "seat-02" });
+     now = 1300;
+     send({ type: "seat_release", commandId: "plugin-release:first" });
+     assert.equal(state.releaseDeltaMs, 1200, "elapsed release is measured at the actual browser sends on one clock");
     assert.equal(sent.length, 3, "all native sends are unchanged");
     assert.equal(state.accepted + state.occupied + state.released, 0, "captured or sent bytes are not delivery");
     deliver({ type: "seat_claim_result", seatClaimResult: { commandId: "plugin-seat:unrelated", accepted: true } });
@@ -407,7 +471,7 @@ test("preinstalled seat-delivery observer counts only actual correlated replay a
   assert.equal(Socket.prototype.send, originalSend); assert.equal(Target.prototype.dispatchEvent, originalDispatch);
   assert.equal(window.__t16SeatDelivery, undefined); assert.equal(window.__t16SeatDeliveryCleanup, undefined);
   await installSeatDeliveryObservation({ addInitScript: async callback => vm.runInNewContext(`(${callback.toString()})()`, {
-    window, WebSocket: Socket, EventTarget: Target, MessageEvent: Message
+    window, WebSocket: Socket, EventTarget: Target, MessageEvent: Message, performance: { now: () => 100 }
   }) });
   try {
     window.__VRATA_DEBUG__.pendingSeatId = null;

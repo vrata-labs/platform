@@ -17,11 +17,12 @@ export const seatState = (page: Page) => page.evaluate(() => {
 });
 const capabilities = ["seating.claimSelfOnEntry", "seating.cancelPendingOwnClaim", "status.set"];
 
-export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOrigin) {
+/** External SDK build and ordinary Host CAS shared by the two integration witnesses.
+ * Closing the Host renderer does not elevate or replace its admitted session. */
+async function withAutoSeatRoom(browser: Browser, value: RoomPluginOrigin,
+  run: (roomId: string, put: (enabled: boolean) => Promise<void>) => Promise<void>) {
   expect(await identityProtocolAt(value.origin)).toBe(2);
-  const captures: RoomAuthorityCapture[] = [];
   const author = await createExternalAuthorProject(await downloadPublicSdk(value.origin, "0.2.0"), "0.2.0");
-  const contexts: Array<{ close(): Promise<void> }> = [];
   await withCleanup(async () => {
     const host = await enterOwnedPluginRoom(browser, value);
     await useOwnedActor(host, async () => {
@@ -38,6 +39,16 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
       };
       await put(true);
       await host.context.close();
+      await run(host.roomId, put);
+      await author.assertNotExecuted();
+    });
+  }, () => [() => author.close()]);
+}
+
+export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOrigin) {
+  const captures: RoomAuthorityCapture[] = [];
+  const contexts: Array<{ close(): Promise<void> }> = [];
+  await withCleanup(() => withAutoSeatRoom(browser, value, async (roomId, put) => {
       const observe = async (page: Page) => { const capture = await captureRoomAuthority(page); captures.push(capture); return capture; };
       const pages: Page[] = [];
       let submitEntries!: () => void;
@@ -46,7 +57,7 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
       const observations = new Map<Page, RoomAuthorityCapture>();
       const arrivalBeganAt = performance.now();
       const arrivalPhases: Record<string, number> = {};
-      const entries = [1, 2, 3, 4].map(index => enterPluginRoom(browser, value, host.roomId, "member", `Auto-seat member ${index}`, async (context, page) => {
+      const entries = [1, 2, 3, 4].map(index => enterPluginRoom(browser, value, roomId, "member", `Auto-seat member ${index}`, async (context, page) => {
         contexts.push(context); pages.push(page); observations.set(page, await observe(page));
         await installSeatAckObservation(page);
         await installSeatEntryObservation(page);
@@ -102,7 +113,7 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
         for (const member of members) expect(member.authority.commands().some(command => command.type === "seat_claim_result" && command.accepted
           && member.authority.commands().some(sent => sent.type === "seat_claim" && sent.commandId === command.commandId && sent.seatId === command.seatId))).toBe(true);
         const free = Array.from({ length: 8 }, (_, index) => `seat-${String(index + 1).padStart(2, "0")}`).find(id => !seats.includes(id))!;
-        await runSeatProtocolRace(value, host.roomId, members.map(member => member.participantId), free);
+        await runSeatProtocolRace(value, roomId, members.map(member => member.participantId), free);
         await expectExactRoomAuthority(members); // Protocol contenders left; no ghosts.
         const [first] = members;
         await first.page.locator("#stand-up").click();
@@ -130,17 +141,14 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
         await expect.poll(async () => (await seatState(members[1].page)).running, { timeout: 15_000 }).toBe(0);
         for (const [index, member] of members.slice(1).entries()) expect((await seatState(member.page)).currentSeatId === seats[index + 1]).toBe(true);
         for (const member of members) await member.context.close();
-        const late = await enterPluginRoom(browser, value, host.roomId, "member", "Auto-seat disabled late member", async (context, page) => {
+        const late = await enterPluginRoom(browser, value, roomId, "member", "Auto-seat disabled late member", async (context, page) => {
           contexts.push(context); observations.set(page, await observe(page));
         });
         const lateActor = { ...late, participantId: late.session.participantId, authority: observations.get(late.page)! };
         await expectExactRoomAuthority([lateActor]);
         await late.page.waitForTimeout(6000);
         expect((await seatState(late.page)).currentSeatId).toBeNull(); expect(late.requests.workers).toBe(0);
-        // Keep one normal client to observe the server during cancellation.
-        await put(true);
-        await disablePendingClaim(browser, value, host.roomId, put, lateActor, contexts, observations, observe);
-        await author.assertNotExecuted();
+        await late.context.close();
       }, () => [
         () => { submitEntries(); },
         // Closing entrants also settles failed pending admission waits before room deletion.
@@ -153,22 +161,32 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
         () => cleanupAll(contexts.map(context => () => context.close())),
         () => { preparedForms.clear(); pages.length = 0; observations.clear(); }
       ]);
-    });
-  }, () => [...captures.map(capture => () => capture.close()), ...contexts.map(context => () => context.close()),
-    () => { captures.length = 0; contexts.length = 0; }, () => author.close()]);
+  }), () => [...captures.map(capture => () => capture.close()), ...contexts.map(context => () => context.close()),
+    () => { captures.length = 0; contexts.length = 0; }]);
+}
+
+/** Same local/X witness, independent of four-client startup and its lifecycle.
+ * Only one renderer is live during the pending protocol race. */
+export async function runPendingAutoSeatScenario(browser: Browser, value: RoomPluginOrigin) {
+  const captures: RoomAuthorityCapture[] = [], contexts: Array<{ close(): Promise<void> }> = [];
+  const observations = new Map<Page, RoomAuthorityCapture>();
+  const observe = async (page: Page) => { const capture = await captureRoomAuthority(page); captures.push(capture); return capture; };
+  await withCleanup(() => withAutoSeatRoom(browser, value, (roomId, put) =>
+    disablePendingClaim(browser, value, roomId, put, contexts, observations, observe)),
+  () => [...captures.map(capture => () => capture.close()), ...contexts.map(context => () => context.close()),
+    () => { captures.length = 0; contexts.length = 0; observations.clear(); }]);
 }
 
 async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, roomId: string, put: (enabled: boolean) => Promise<void>,
-  witness: { page: Page; participantId: string; authority: RoomAuthorityCapture }, contexts: Array<{ close(): Promise<void> }>,
+  contexts: Array<{ close(): Promise<void> }>,
   observations: Map<Page, RoomAuthorityCapture>, observe: (page: Page) => Promise<RoomAuthorityCapture>) {
   let held = false, accepted = false, releaseAck = false, claimAt = 0, releaseAt = 0;
   let claimId = "", releaseId = "";
   let claimCount = 0, releaseCount = 0;
-  // Keep normal onboarding/scene loading OUTSIDE this protocol race. No response
-  // is replaced: discovery simply starts after entry, and the Host's ordinary CAS
-  // PUT starts on the actual server accept, not after another Node/browser poll.
-  let startDiscovery!: () => void;
-  const discoveryGate = new Promise<void>(resolve => { startDiscovery = resolve; });
+  // Startup is normal and bounded independently. Response observation begins at
+  // the actual outgoing claim, never at scene/connection entry or discovery.
+  let acceptedObservation: Promise<void> | undefined;
+  let responseAwaited = false;
   let finishMutation!: () => void;
   const mutationGate = new Promise<void>(resolve => { finishMutation = resolve; });
   const protocolTasks = new Set<Promise<void>>();
@@ -181,7 +199,8 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
   const mark = (phase: string) => { phases[phase] = performance.now(); };
   const runtimeReads: Array<{ at: number; status: number | null; revision: number | null; enabledBindings: number | null }> = [];
   const runtimeReadsPending = new Set<Promise<void>>();
-  let runtime: { revision: number | null; readyDeliveries: unknown; pendingBeforeSend: boolean; seating: { settlements?: Array<{ reason: string }> } | null } | null = null;
+  let runtime: { revision: number | null; readyDeliveries: unknown; pendingBeforeSend: boolean; startup: any; entry: any; releaseDeltaMs: number | null;
+    seating: { settlements?: Array<{ reason: string }> } | null } | null = null;
   // Passive timing only: never intercept or replace runtime authority. Keep no
   // URLs, credentials, binding identities, config, source or raw response bytes.
   const onRuntimeFinished = (request: Request) => {
@@ -209,9 +228,9 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     pendingPage = page;
     contexts.push(context); observations.set(page, await observe(page));
     await installSeatDeliveryObservation(page);
+    await installSeatEntryObservation(page);
     page.on("requestfinished", onRuntimeFinished);
     await page.route(url => url.pathname === pluginPath(roomId, "runtime"), async route => {
-      await discoveryGate;
       // Only this managed cancellation witness orders a pending refresh after
       // the real Host CAS. Otherwise an enabled read racing the mutation can
       // consume the next poll slot and test lost-answer instead of retirement.
@@ -228,6 +247,9 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
           held = true; claimAt = performance.now(); claimId = payload.commandId;
           claimCount++; phases.firstClaim ??= claimAt;
           mark("claim");
+          acceptedObservation ??= expect.poll(() => { if (protocolError) throw protocolError; return accepted; },
+            { timeout: 15_000, intervals: [50] }).toBe(true);
+          void acceptedObservation.catch(() => undefined);
           // The preinstalled page hook captures actual pending/current BEFORE
           // send. Verify that saved fact later, without a Node/page round trip
           // delaying the real server acceptance inside the 3000ms window.
@@ -266,12 +288,17 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
   void entering.catch(() => undefined);
   let member: Awaited<ReturnType<typeof enterPluginRoom>> | undefined;
   await withCleanup(async () => {
-    // Scene loading and normal onboarding have their own entry deadlines. The
-    // claim deadline must not start while the new participant is still entering.
+    // entryComplete proves only scene+connection, not instance readiness or
+    // handler consumption. No discovery/worker event is artificially held here.
     member = await entering;
     mark("entryComplete");
-    startDiscovery();
-    try { await expect.poll(() => { if (protocolError) throw protocolError; return accepted; }, { timeout: 15_000, intervals: [50] }).toBe(true); }
+    try {
+      await expect.poll(() => { if (protocolError) throw protocolError; return Boolean(claimId); },
+        { timeout: 60_000, intervals: [50] }).toBe(true);
+      mark("startupObserved");
+      responseAwaited = true;
+      await acceptedObservation;
+    }
     catch (error) {
       const facts = await member.page.evaluate(() => {
         const debug = (window as any).__VRATA_DEBUG__;
@@ -284,6 +311,7 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
       throw error;
     }
     mark("acceptedObserved");
+    expect(phases.serverAccepted - phases.firstClaim < 15_000).toBe(true);
     expect(Boolean(disableTask)).toBe(true);
     await disableTask;
     if (protocolError) throw protocolError;
@@ -297,9 +325,21 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     runtime = await member.page.evaluate(() => {
       const plugins = (window as any).__VRATA_DEBUG__?.plugins;
       return { revision: plugins?.revision ?? null, readyDeliveries: plugins?.readyDeliveries ?? null,
-        pendingBeforeSend: (window as any).__t16SeatDelivery?.pendingBeforeSend === true, seating: plugins?.seating ?? null };
+        pendingBeforeSend: (window as any).__t16SeatDelivery?.pendingBeforeSend === true,
+        startup: (window as any).__t16SeatDelivery?.startup ?? null, entry: (window as any).__t16SeatEntryFacts?.() ?? null,
+        releaseDeltaMs: (window as any).__t16SeatDelivery?.releaseDeltaMs ?? null,
+        seating: plugins?.seating ?? null };
     });
     expect(runtime.pendingBeforeSend).toBe(true);
+    expect(Number.isFinite(runtime.releaseDeltaMs) && runtime.releaseDeltaMs! > 0 && runtime.releaseDeltaMs! < 3000).toBe(true);
+    // Real page-clock proof, not a fake-clock or late instance's diagnostics.
+    const startup = runtime.startup;
+    expect(startup?.ready === true && startup.correlation === true && startup.online === true).toBe(true);
+    expect([startup?.firstReadyAtMs, startup?.openedAtMs, startup?.claimAtMs].every(Number.isFinite)).toBe(true);
+    expect(startup.openedAtMs >= startup.firstReadyAtMs && startup.openedAtMs - startup.firstReadyAtMs <= 20_000).toBe(true);
+    expect(startup.claimAtMs >= startup.openedAtMs && startup.claimAtMs - startup.openedAtMs < 5000).toBe(true);
+    expect(runtime.entry?.joinClicks.length === 1 && runtime.entry.joinClicks[0].trusted
+      && runtime.entry.admissionStarts.length === 1 && runtime.entry.discovery.some((row: any) => row.status === 200)).toBe(true);
     expect(runtime.seating?.settlements?.map(row => row.reason)).toEqual(["retired"]);
     await Promise.all(runtimeReadsPending);
     expect(runtimeReads.some(row => row.status === 200 && row.enabledBindings === 0 && row.revision === runtime!.revision)).toBe(true);
@@ -336,13 +376,18 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     await member.page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
     await expect.poll(() => actor.authority.commands().some(command => command.type === "seat_release_result" && command.commandId === releaseId
       && actor.authority.commands().some(sent => sent.type === "seat_release" && sent.commandId === releaseId)), { timeout: 15_000 }).toBe(true);
-    await expectExactRoomAuthority([witness, actor]);
+    await expectExactRoomAuthority([actor]);
     const state = await seatState(member.page);
-    expect(state.currentSeatId === null && state.pendingSeatId === null && !Object.values(witness.authority.snapshot()!.occupancy).includes(actor.participantId)).toBe(true);
+    expect(state.currentSeatId === null && state.pendingSeatId === null && Object.keys(actor.authority.snapshot()!.occupancy).length === 0).toBe(true);
     expect(actor.authority.commands().some(command => command.type === "seat_claim_result" && command.commandId === claimId && command.accepted)).toBe(true);
     await member.context.close();
-    await expectExactRoomAuthority([witness]);
-  }, () => [() => { startDiscovery(); finishMutation(); }, async () => {
+    const late = await enterPluginRoom(browser, value, roomId, "member", "Pending disabled late member", async (context, page) => {
+      contexts.push(context); observations.set(page, await observe(page));
+    });
+    await expectExactRoomAuthority([{ ...late, participantId: late.session.participantId, authority: observations.get(late.page)! }]);
+    expect((await seatState(late.page)).currentSeatId).toBeNull(); expect(late.requests.workers).toBe(0);
+    await late.context.close();
+  }, () => [() => { finishMutation(); }, () => responseAwaited ? undefined : acceptedObservation, async () => {
     await Promise.allSettled(protocolTasks);
     if (protocolError) throw protocolError;
   }, async () => {
@@ -351,7 +396,10 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     const finalRuntime = runtime ?? (pendingPage && !pendingPage.isClosed() ? await pendingPage.evaluate(() => {
       const plugins = (window as any).__VRATA_DEBUG__?.plugins;
       return { revision: plugins?.revision ?? null, readyDeliveries: plugins?.readyDeliveries ?? null,
-        pendingBeforeSend: (window as any).__t16SeatDelivery?.pendingBeforeSend === true, seating: plugins?.seating ?? null };
+        pendingBeforeSend: (window as any).__t16SeatDelivery?.pendingBeforeSend === true,
+        startup: (window as any).__t16SeatDelivery?.startup ?? null, entry: (window as any).__t16SeatEntryFacts?.() ?? null,
+        releaseDeltaMs: (window as any).__t16SeatDelivery?.releaseDeltaMs ?? null,
+        seating: plugins?.seating ?? null };
     }).catch(() => ({ unavailable: true })) : null);
     const offset = (at: number) => Math.round((at - (claimAt || beganAt)) * 10) / 10;
     console.info("t16_pending_claim_timing", JSON.stringify({ claimCount, releaseCount, claimObserved: Boolean(claimId), acceptedObserved: accepted,
@@ -370,7 +418,9 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
 async function installSeatDeliveryObservation(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const dispatch = EventTarget.prototype.dispatchEvent, send = WebSocket.prototype.send;
-    const state = { accepted: 0, released: 0, occupied: 0, pendingBeforeSend: false, claimId: "", claimedSeat: "", releaseId: "" };
+    const state = { accepted: 0, released: 0, occupied: 0, pendingBeforeSend: false, claimId: "", claimedSeat: "", releaseId: "",
+      startup: null as { claimAtMs: number; firstReadyAtMs?: number; openedAtMs?: number; ready?: boolean; correlation?: boolean; online?: boolean } | null,
+      releaseDeltaMs: null as number | null };
     WebSocket.prototype.send = function (data) {
       if (typeof data === "string" && data.length < 262_144) {
         try {
@@ -379,8 +429,14 @@ async function installSeatDeliveryObservation(page: Page): Promise<void> {
             state.claimId = message.commandId; state.claimedSeat = message.seatId;
             const debug = (window as any).__VRATA_DEBUG__;
             state.pendingBeforeSend = debug?.pendingSeatId === message.seatId && debug?.currentSeatId === null;
+            const seating = debug?.plugins?.seating;
+            state.startup = { claimAtMs: performance.now(), firstReadyAtMs: seating?.firstReadyAtMs,
+              openedAtMs: seating?.openedAtMs, ready: seating?.ready, correlation: seating?.correlation, online: seating?.online };
           }
-          if (message.type === "seat_release" && String(message.commandId).startsWith("plugin-release:") && !state.releaseId) state.releaseId = message.commandId;
+          if (message.type === "seat_release" && String(message.commandId).startsWith("plugin-release:") && !state.releaseId) {
+            state.releaseId = message.commandId;
+            state.releaseDeltaMs = state.startup ? performance.now() - state.startup.claimAtMs : null;
+          }
         } catch { /* Never alter transport delivery. */ }
       }
       return send.call(this, data);
