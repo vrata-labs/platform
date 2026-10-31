@@ -129,6 +129,18 @@ export async function installExistingSocketControl(page: Page) {
     const Native = window.WebSocket;
     let socket: WebSocket | undefined;
     let heldSocket: WebSocket | undefined;
+    let heldClose: WebSocket["close"] | undefined;
+    let closeRequested = false;
+    const release = () => {
+      const target = heldSocket, close = heldClose;
+      heldSocket = undefined; heldClose = undefined;
+      if (target && close) {
+        delete (target as { close?: WebSocket["close"] }).close;
+        // Complete the client's deferred retirement, not a new connection.
+        if (closeRequested) close.call(target);
+      }
+      closeRequested = false;
+    };
     const Wrapped = new Proxy(Native, { construct(target, args, newTarget) {
       const value = Reflect.construct(target, args, newTarget) as WebSocket;
       if (new URL(value.url).searchParams.has("roomId")) socket = value;
@@ -136,9 +148,17 @@ export async function installExistingSocketControl(page: Page) {
     } });
     window.WebSocket = Wrapped;
     (window as any).__t16HoldSocket = () => {
+      if (heldSocket) throw new Error("t16_transport_already_held");
       if (!socket || socket.readyState !== Native.OPEN) throw new Error("t16_transport_not_open");
       heldSocket = socket;
+      heldClose = socket.close;
+      // Role updates voluntarily reconnect the normal client. Retain only its
+      // already-authenticated OLD transport for this adversarial command; server
+      // closes and all server authorization still apply normally. New transports
+      // are created by the runtime, never by this hook.
+      socket.close = () => { closeRequested = true; };
     };
+    (window as any).__t16ReleaseSocket = release;
     (window as any).__t16SocketCommand = (command: unknown) => {
       const target = heldSocket ?? socket;
       if (!target) throw new Error("t16_transport_missing");
@@ -147,9 +167,10 @@ export async function installExistingSocketControl(page: Page) {
       return "sent";
     };
     (window as any).__t16SocketCleanup = () => {
-      socket = undefined; heldSocket = undefined;
+      release(); socket = undefined;
       if (window.WebSocket === Wrapped) window.WebSocket = Native;
-      delete (window as any).__t16HoldSocket; delete (window as any).__t16SocketCommand; delete (window as any).__t16SocketCleanup;
+      delete (window as any).__t16HoldSocket; delete (window as any).__t16ReleaseSocket;
+      delete (window as any).__t16SocketCommand; delete (window as any).__t16SocketCleanup;
     };
   }).toString()})()` });
   return async () => {

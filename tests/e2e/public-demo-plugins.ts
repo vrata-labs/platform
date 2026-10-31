@@ -129,21 +129,29 @@ export async function publicDemoAuthorityChanges(origin: string, roomId: string,
   await role(member, "presenter");
   await expect(member.page.locator("#document-upload-button")).toBeEnabled();
   await plugins.denyAuthor(member, host);
+  const presenterSocket = member.authority.snapshot();
+  expect(Boolean(presenterSocket)).toBe(true);
   await member.page.evaluate(() => (window as any).__t16HoldSocket());
-  await action(host, member, "#revoke-presenter", `presenters/${member.participantId}/revoke`);
-  await role(member, "member");
-  await expect(member.page.locator("#document-upload-button")).toBeDisabled();
-  await deniedPrivilegedEffects(member, host);
+  try {
+    await action(host, member, "#revoke-presenter", `presenters/${member.participantId}/revoke`);
+    await role(member, "member");
+    await expect(member.page.locator("#document-upload-button")).toBeDisabled();
+    await deniedPrivilegedEffects(member, host, presenterSocket!);
+  } finally { await member.page.evaluate(() => (window as any).__t16ReleaseSocket()); }
+  const hostSocket = host.authority.snapshot();
+  expect(Boolean(hostSocket)).toBe(true);
   await host.page.evaluate(() => (window as any).__t16HoldSocket());
-  await action(host, member, "#transfer-host", "host/transfer");
-  await role(host, "member"); await role(member, "host");
-  await chooseMeetingPanel(member.page, "people", false);
-  await expect(member.page.locator("#room-plugin-author")).toBeVisible();
-  await plugins.read(member);
-  await plugins.denyAuthor(host, member);
-  await deniedPrivilegedEffects(host, member);
+  try {
+    await action(host, member, "#transfer-host", "host/transfer");
+    await role(host, "member"); await role(member, "host");
+    await chooseMeetingPanel(member.page, "people", false);
+    await expect(member.page.locator("#room-plugin-author")).toBeVisible();
+    await plugins.read(member);
+    await plugins.denyAuthor(host, member);
+    await deniedPrivilegedEffects(host, member, hostSocket!);
+  } finally { await host.page.evaluate(() => (window as any).__t16ReleaseSocket()); }
 
-  async function deniedPrivilegedEffects(actor: Actor, reader: Actor) {
+  async function deniedPrivilegedEffects(actor: Actor, reader: Actor, oldSocket: { socketScope: string; generation: number }) {
     const get = async (suffix: string) => {
       const response = await privateHttp(origin, `/api/rooms/${roomId}/${suffix}`, "GET", bearer(reader.sessionToken));
       expect(response.status).toBe(200); return sha256(response.bytes);
@@ -158,6 +166,7 @@ export async function publicDemoAuthorityChanges(origin: string, roomId: string,
       surfaceId: "debug-main", objectType: "pdf-presentation" }), commandId);
     expect(delivery).toBe("sent");
     await expect.poll(() => actor.authority.commands().some(value => value.commandId === commandId && value.type === "access_denied"
+      && value.socketScope === oldSocket.socketScope && value.generation === oldSocket.generation
       && value.accepted === false && value.permissionDenied && actor.authority.commands().some(sent => sent.type === "surface_create_object"
         && sent.commandId === commandId && sent.socketScope === value.socketScope && sent.generation === value.generation)), { timeout: 15_000 }).toBe(true);
     // A real server-side presence update, ordered after the denial on the SAME

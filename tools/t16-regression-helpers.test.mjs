@@ -178,6 +178,57 @@ test("existing-socket control enables its own CDP Page domain before registering
   assert.deepEqual(calls.slice(2), ["cleanup", "Page.removeScriptToEvaluateOnNewDocument", "detach"]);
 });
 
+async function socketControlFixture() {
+  const { installExistingSocketControl } = loadHelper("tests/e2e/room-state-observation.ts");
+  const sockets = [];
+  class Native {
+    static OPEN = 1;
+    constructor(url) { this.url = url; this.readyState = 1; this.sent = []; this.closes = 0; sockets.push(this); }
+    close() { this.closes++; this.readyState = 3; }
+    send(bytes) { this.sent.push(JSON.parse(bytes)); }
+  }
+  const window = { WebSocket: Native };
+  const cdp = { async send(method, input) {
+    if (method === "Page.addScriptToEvaluateOnNewDocument") vm.runInNewContext(input.source, { window, URL });
+    return { identifier: "owned-script" };
+  }, async detach() {} };
+  const page = { context: () => ({ newCDPSession: async () => cdp }), isClosed: () => false,
+    evaluate: async () => window.__t16SocketCleanup() };
+  const cleanup = await installExistingSocketControl(page);
+  return { window, Native, sockets, cleanup };
+}
+
+test("held OLD socket survives only voluntary client close, commands never switch to the runtime replacement, release restores retirement", async () => {
+  const f = await socketControlFixture();
+  await withCleanup(async () => {
+    const old = new f.window.WebSocket("ws://example.invalid/?roomId=owned");
+    f.window.__t16HoldSocket();
+    assert.throws(() => f.window.__t16HoldSocket(), /already_held/);
+    old.close(); // applyAccessDebug voluntarily retires this transport on a role change.
+    const current = new f.window.WebSocket("ws://example.invalid/?roomId=owned");
+    assert.equal(f.sockets.length, 2, "only the runtime constructs a replacement; holding never opens one");
+    assert.equal(f.window.__t16SocketCommand({ commandId: "t16-old-command" }), "sent");
+    assert.equal(old.sent.length, 1); assert.equal(current.sent.length, 0); assert.equal(old.closes, 0);
+    f.window.__t16ReleaseSocket();
+    assert.equal(old.closes, 1); assert.equal(old.readyState, 3); assert.equal(Object.hasOwn(old, "close"), false);
+    current.close(); assert.equal(current.closes, 1, "nonheld client transports close normally");
+  }, () => [f.cleanup]);
+  assert.equal(f.window.WebSocket, f.Native); assert.equal(f.window.__t16HoldSocket, undefined);
+});
+
+test("server closure is not suppressed and failed-test cleanup completes deferred client close", async () => {
+  const f = await socketControlFixture();
+  const old = new f.window.WebSocket("ws://example.invalid/?roomId=owned");
+  f.window.__t16HoldSocket(); old.close();
+  f.Native.prototype.close.call(old); // A server close is not a call to the intercepted client method.
+  assert.equal(f.window.__t16SocketCommand({ commandId: "t16-closed-command" }), "closed");
+  assert.equal(old.sent.length, 0);
+  const primary = new Error("owned_failure");
+  await assert.rejects(withCleanup(async () => { throw primary; }, () => [f.cleanup]), error => error === primary);
+  assert.equal(Object.hasOwn(old, "close"), false); assert.equal(f.window.WebSocket, f.Native);
+  assert.equal(f.window.__t16ReleaseSocket, undefined);
+});
+
 test("pending-disable claim observation starts only after normal scene/connection entry completes", async () => {
   let completeEntry;
   const entering = new Promise(resolve => { completeEntry = resolve; });

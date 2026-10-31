@@ -69,6 +69,13 @@
 - Текущий auto-seat failure ещё не объяснён конкретным наблюдаемым интервалом: отчёт не сохранил значения claim/release и время до/после disable. Добавлен только ограниченный пассивный timeline/allowlisted runtime-response signal с независимой очисткой, без изменения порядка, authority или3000ms fence (D-065). Продуктовый fix по гипотезе не вносится.
 - Следующий narrow выбирает только эти два исходных cases одним worker и с новым report. Он не заменяет focused22/package/final full/новое итоговое review/CI/G/X; scope=[.], все13required=true, full без исключений.
 
+### Доказательные итерации после6d4f448
+
+- Его terminal narrow:0 expected/2 unexpected/0 skipped/flaky,498.5s. Demo упал уже на отсутствующем existing-socket hook; auto-seat — до pending-disable, на initial four-seat. Поэтому старый release failure этот report не объясняет и pending timeline в нём отсутствует.
+- Реальный Chromium probe установил: отдельной CDP session нужен Page.enable перед init-script registration; без него hook отсутствует и после navigation, и после reload (D-067). После исправления первая итерация ebad509 дала1 expected/1 unexpected/0 skipped/flaky: auto-seat прошёл целиком, release2607ms, intermediate late-ACK standing/pose и final authority сохранены; demo дошёл до OLD command и обнаружил closed.
+- applyAccessDebug добровольно закрывает сокет при смене роли. Test-only hold теперь откладывает только этот client close выбранного OLD transport, не server close/authority и не normal reconnect. Release в finally завершает retirement. Denial обязан совпасть с socket scope/generation ДО revoke/transfer (D-068); новый сокет не может выдать себя за OLD proof.
+- Bounded arrival/pending facts остаются явно наблюдательными. Прежние причины auto-seat не объявлены установленными одним успешным run; timing/permissions/authority/assertions продукта не изменены. Второй и последний узкий run сохраняет отдельные terminal evidence на своём SHA. Это по-прежнему не focused/full или общий T16 PASS.
+
 ## Минимальные изменения после проверки матрицы
 
 1. **Shared demo.** Явный isolated floor2 local; расширение `runPublicDemoScenario` авторскими UI-фазами R03–R06. Переиспользовать внешний build и UI операции, не запускать существующий самостоятельный UI test из test. Admin нужен setup/invites/cleanup, не author/upload/bind или role transitions. Два нынешних admin GET lock-state (`public-demo-scenarios.ts:1381,1390`) можно заменить чтением обычного Host session.
