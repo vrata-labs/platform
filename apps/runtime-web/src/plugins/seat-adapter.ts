@@ -33,6 +33,7 @@ export type RoomPluginSeatOutcome = { result: RoomPluginSeatClaimResult } | { er
 type Grant = "waiting" | "armed" | "open" | "used" | "closed";
 type GrantReason = "platform-ready" | "room-ready" | "entry-expired" | "window-expired" | "candidate-limit"
   | "uncorrelated" | "offline" | "xr" | "opted-out" | "seated" | "pending" | "accepted" | "manual-intent" | "session-closed";
+type SettlementReason = "lost-answer" | "claim-error" | "accepted" | "busy" | "owner-cancel" | "retired" | "manual-intent" | "offline" | "session-closed";
 
 function randomAlias(): string {
   const bytes = new Uint8Array(9); globalThis.crypto.getRandomValues(bytes);
@@ -48,6 +49,7 @@ export class RoomPluginSeatAdapter {
   private firstReadyAtMs: number | null = null;
   private readonly transitions: Array<{ from: Grant; to: Grant; reason: GrantReason; atMs: number }> = [];
   private readonly activations: number[] = [];
+  private readonly settlements: Array<{ atMs: number; reason: SettlementReason }> = [];
   private candidates = 0;
   private sequence = 0;
   private inFlight: { owner: string; commandId: string; seatId: string; resolve(outcome: RoomPluginSeatOutcome): void; timer: ReturnType<typeof setTimeout> } | null = null;
@@ -67,7 +69,8 @@ export class RoomPluginSeatAdapter {
     const world = this.ports.world();
     return { grant: this.grant, openedAtMs: this.grant === "open" || this.grant === "used" ? this.openedAtMs : null, candidates: this.candidates, inFlight: Boolean(this.inFlight),
       ready: world.ready, correlation: world.correlation, online: world.online,
-      firstReadyAtMs: this.firstReadyAtMs, transitions: this.transitions.map(row => ({ ...row })), activations: [...this.activations] };
+      firstReadyAtMs: this.firstReadyAtMs, transitions: this.transitions.map(row => ({ ...row })), activations: [...this.activations],
+      settlements: this.settlements.map(row => ({ ...row })) };
   }
 
   /** Re-evaluates the grant from platform facts. It is armed and opened at most once per page session. */
@@ -133,36 +136,37 @@ export class RoomPluginSeatAdapter {
     }
     const commandId = `plugin-seat:${this.nonce}:${++this.sequence}`;
     return new Promise(resolve => {
-      const timer = setTimeout(() => this.finish(commandId, { result: "offline" }, true), ROOM_PLUGIN_ARRIVAL.claimResponseMs);
+      const timer = setTimeout(() => this.finish(commandId, { result: "offline" }, true, "lost-answer"), ROOM_PLUGIN_ARRIVAL.claimResponseMs);
       this.inFlight = { owner, commandId, seatId, resolve, timer };
       try { this.ports.claim(seatId, commandId); }
-      catch { this.finish(commandId, { result: "offline" }, true); }
+      catch { this.finish(commandId, { result: "offline" }, true, "claim-error"); }
     });
   }
   /** Correlated server answer. Answers for other or cancelled attempts are ignored here. */
   settleClaim(result: { seatId: string; accepted: boolean; commandId?: string }): void {
     if (!this.inFlight || result.commandId !== this.inFlight.commandId) return;
     if (result.accepted) this.transition("used", "accepted");
-    this.finish(result.commandId, { result: result.accepted ? "accepted" : "busy" }, false);
+    this.finish(result.commandId, { result: result.accepted ? "accepted" : "busy" }, false, result.accepted ? "accepted" : "busy");
   }
   /** A plugin may cancel only its own still-pending claim; a confirmed seat belongs to the user. */
   cancelOwn(owner = "default"): void {
-    if (this.inFlight?.owner === owner) this.finish(this.inFlight.commandId, { result: "cancelled" }, true);
+    if (this.inFlight?.owner === owner) this.finish(this.inFlight.commandId, { result: "cancelled" }, true, "owner-cancel");
   }
   /** A disabled, updated or failed instance: its pending claim is cancelled and its aliases are dropped. */
   retire(owner: string): void {
-    this.cancelOwn(owner); this.forget(owner);
+    if (this.inFlight?.owner === owner) this.finish(this.inFlight.commandId, { result: "cancelled" }, true, "retired");
+    this.forget(owner);
   }
   /** Any manual seat, stand, teleport or movement intent vetoes the arrival grant for good. */
   manualIntent(): void {
     if (this.grant === "waiting" || this.grant === "armed" || this.grant === "open") this.transition("closed", "manual-intent");
-    if (this.inFlight) this.finish(this.inFlight.commandId, { result: "cancelled" }, true);
+    if (this.inFlight) this.finish(this.inFlight.commandId, { result: "cancelled" }, true, "manual-intent");
   }
   /** Connection loss closes an open grant (no retries) but not one still waiting for readiness;
    * session end closes both. A pending claim is cancelled through the barrier. */
   stop(reason: "offline" | "closed" = "closed"): void {
     if (this.grant === "open" || this.grant === "armed" || reason === "closed" && this.grant === "waiting") this.transition("closed", reason === "closed" ? "session-closed" : "offline");
-    if (this.inFlight) this.finish(this.inFlight.commandId, { result: reason === "offline" ? "offline" : "cancelled" }, true);
+    if (this.inFlight) this.finish(this.inFlight.commandId, { result: reason === "offline" ? "offline" : "cancelled" }, true, reason === "offline" ? "offline" : "session-closed");
   }
 
   private transition(to: Grant, reason: GrantReason, atMs = this.clock()): void {
@@ -171,9 +175,10 @@ export class RoomPluginSeatAdapter {
     this.grant = to;
   }
 
-  private finish(commandId: string, outcome: RoomPluginSeatOutcome, cancel: boolean): void {
+  private finish(commandId: string, outcome: RoomPluginSeatOutcome, cancel: boolean, reason: SettlementReason): void {
     const flight = this.inFlight;
     if (!flight || flight.commandId !== commandId) return;
+    if (this.settlements.length < 8) this.settlements.push({ atMs: this.clock(), reason });
     this.inFlight = null; clearTimeout(flight.timer);
     if (cancel) { try { this.ports.cancel(`plugin-release:${this.nonce}:${++this.sequence}`, commandId); } catch { /* The core barrier owns recovery. */ } }
     this.observe();

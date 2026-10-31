@@ -292,52 +292,70 @@ test("public-demo stale write projects the read DTO into valid PUT fields and re
   assert.equal(JSON.stringify(readBinding), beforeRead);
 });
 
-test("pending-disable timing stays observational, preserves the 3000ms failure and cleans its response listener", async () => {
+for (const releaseDelta of [1200, 3200]) test(`controlled pending-disable keeps the real release fence at ${releaseDelta}ms and cleans its listener`, async () => {
   let now = 1, fromClient, fromServer, closed = 0;
-  let installed = false, pendingReads = 0;
+  let installed = false, pendingReads = 0, entered = false, discoveryContinued = false;
+  const afterFence = new Error("positive_control_reached_intermediate_pose");
   const logs = [], page = new EventEmitter(), context = { close: async () => { closed++; } };
   page.context = () => context; page.isClosed = () => false;
   page.addInitScript = async () => { installed = true; };
   page.evaluate = async callback => {
+    if (callback.toString().includes("localPose")) throw afterFence;
+    if (callback.toString().includes("readyDeliveries")) return { revision: 9, readyDeliveries: [], seating: { settlements: [{ reason: "retired" }] } };
     if (!callback.toString().includes("__VRATA_DEBUG__")) return;
     pendingReads++;
     return { participantId: "private-participant", pendingSeatId: "seat-01", currentSeatId: null, running: 0 };
   };
-  const server = { onMessage(callback) { fromServer = callback; }, send() {} };
+  const server = { onMessage(callback) { fromServer = callback; }, send(message) {
+    if (JSON.parse(message).type !== "seat_claim") return;
+    assert.equal(pendingReads, 1, "actual pending/current must be checked BEFORE upstream claim delivery");
+    fromServer(JSON.stringify({ type: "room_state", room: { seatOccupancy: { "seat-01": "private-participant" } } }));
+    now = 120; fromServer(JSON.stringify({ type: "seat_claim_result", seatClaimResult: { commandId: claimId, accepted: true } }));
+  } };
   const socket = { connectToServer: () => server, onMessage(callback) { fromClient = callback; }, send() {}, close() {} };
   page.routeWebSocket = async (_match, handler) => handler(socket);
+  page.route = async (_match, handler) => {
+    void handler({ async continue() {
+      assert.equal(entered, true, "runtime discovery cannot consume the claim deadline during entry");
+      discoveryContinued = true;
+      now = 100; fromClient(JSON.stringify({ type: "seat_claim", commandId: claimId, seatId: "seat-01" }));
+    } });
+  };
   const roomId = "private-owned-room", claimId = "plugin-seat:private-claim", releaseId = "plugin-release:private-release";
   const helper = loadHelper("tests/e2e/room-plugin-auto-seat-scenarios.ts", {
     "./plugin-author-scenarios": { pluginPath: (room, suffix) => `/api/rooms/${room}/plugins/${suffix}` },
     "./room-plugin-fixture": { async enterPluginRoom(_browser, _value, _room, _role, _name, prepare) {
       await prepare(context, page);
       assert.equal(installed, true, "delivery observation is installed before navigation and the first claim");
-      now = 100; fromClient(JSON.stringify({ type: "seat_claim", commandId: claimId, seatId: "seat-01" }));
-      now = 120; fromServer(JSON.stringify({ type: "seat_claim_result", seatClaimResult: { commandId: claimId, accepted: true } }));
-      now = 3200; return { page, context, session: { participantId: "private-participant" } };
+       assert.equal(discoveryContinued, false);
+       entered = true; return { page, context, session: { participantId: "private-participant" } };
     } },
     "./room-state-observation": {}, "./room-seat-protocol-race": {}, "./staging-identity": {}, "./scene-bundle-fixtures": {}
   }, "\nexport { disablePendingClaim };\n", { performance: { now: () => now }, console: { info: (...args) => logs.push(args), warn() {} } });
   const put = async enabled => {
-    assert.equal(enabled, false); assert.equal(pendingReads, 1, "pending/current are verified in one read before disable"); now = 3250;
+    assert.equal(enabled, false); assert.equal(pendingReads, 1);
+    assert.equal(now, 120, "Host PUT begins in the real accepted callback, without poll/UI/read overhead");
+    now = 100 + releaseDelta - 50;
     page.emit("requestfinished", { url: () => `https://example.invalid/api/rooms/${roomId}/plugins/runtime`,
       response: async () => ({ status: () => 200, json: async () => ({ revision: 9, bindings: [], token: "must-not-log", config: { private: "must-not-log" } }) }) });
-    now = 3300; fromClient(JSON.stringify({ type: "seat_release", commandId: releaseId }));
-    now = 3320; fromServer(JSON.stringify({ type: "seat_release_result", seatReleaseResult: { commandId: releaseId } }));
+    now = 100 + releaseDelta; fromClient(JSON.stringify({ type: "seat_release", commandId: releaseId }));
+    now += 20; fromServer(JSON.stringify({ type: "seat_release_result", seatReleaseResult: { commandId: releaseId } }));
   };
   const observations = new Map();
   await assert.rejects(helper.disablePendingClaim({}, {}, roomId, put, {}, [], observations, async () => ({})),
-    error => /Expected: true/.test(error.message), "a late release must still fail; diagnostics cannot turn it into PASS");
+    error => releaseDelta < 3000 ? error === afterFence : /Expected: true/.test(error.message),
+    "only an early release reaches intermediate pose; a late release must still fail");
   assert.equal(page.listenerCount("requestfinished"), 0);
   assert.equal(closed, 2);
   assert.equal(logs.length, 1); assert.equal(logs[0][0], "t16_pending_claim_timing");
   const facts = JSON.parse(logs[0][1]);
   assert.equal(facts.claimCount, 1); assert.equal(facts.releaseCount, 1);
-  assert.equal(facts.releaseDeltaMs, 3200);
-  assert.equal(facts.phaseOffsetsMs.entryComplete, 3100);
-  assert.equal(facts.phaseOffsetsMs.disableRequested, 3100);
-  assert.equal(facts.phaseOffsetsMs.serverReleaseAck, 3220);
-  assert.deepEqual(facts.runtimeReads, [{ offsetMs: 3150, status: 200, revision: 9, enabledBindings: 0 }]);
+  assert.equal(facts.releaseDeltaMs, releaseDelta);
+  assert.equal(facts.phaseOffsetsMs.entryComplete, -99);
+  assert.equal(facts.phaseOffsetsMs.pendingVerified, 0);
+  assert.equal(facts.phaseOffsetsMs.disableRequested, 20);
+  assert.equal(facts.phaseOffsetsMs.serverReleaseAck, releaseDelta + 20);
+  assert.deepEqual(facts.runtimeReads, [{ offsetMs: releaseDelta - 50, status: 200, revision: 9, enabledBindings: 0 }]);
   for (const privateValue of [roomId, claimId, releaseId, "private-participant", "example.invalid", "must-not-log"]) {
     assert.equal(logs[0][1].includes(privateValue), false);
   }

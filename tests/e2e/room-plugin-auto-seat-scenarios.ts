@@ -24,13 +24,15 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
     const host = await enterOwnedPluginRoom(browser, value);
     await useOwnedActor(host, async () => {
       const pkg = await installPluginArtifact(value, host, await author.buildAutoSeat());
+      const library = await privateHttp(value.origin, pluginPath(host.roomId, "packages"), "GET", bearer(host.session.token));
+      expect(library.status).toBe(200);
+      let revision = library.json<{ revision: number }>().revision;
       const put = async (enabled: boolean) => {
-        const library = await privateHttp(value.origin, pluginPath(host.roomId, "packages"), "GET", bearer(host.session.token));
-        expect(library.status).toBe(200);
         const response = await privateHttp(value.origin, pluginPath(host.roomId, `bindings/${pkg.pluginId}`), "PUT", bearer(host.session.token), {
-          expectedRevision: library.json<{ revision: number }>().revision, packageId: pkg.packageId, version: pkg.version, artifactSha256: pkg.artifactSha256,
+          expectedRevision: revision, packageId: pkg.packageId, version: pkg.version, artifactSha256: pkg.artifactSha256,
           enabled, config: {}, approvedCapabilities: capabilities, capabilityApproval: { artifactSha256: pkg.artifactSha256, capabilities } });
         expect(response.status).toBe(200);
+        revision = response.json<{ revision: number }>().revision;
       };
       await put(true);
       await host.context.close();
@@ -150,10 +152,22 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
   let held = false, accepted = false, releaseAck = false, claimAt = 0, releaseAt = 0;
   let claimId = "", releaseId = "";
   let claimCount = 0, releaseCount = 0;
+  // Keep normal onboarding/scene loading OUTSIDE this protocol race. No response
+  // is replaced: discovery simply starts after entry, and the Host's ordinary CAS
+  // PUT starts on the actual server accept, not after another Node/browser poll.
+  let startDiscovery!: () => void;
+  const discoveryGate = new Promise<void>(resolve => { startDiscovery = resolve; });
+  const protocolTasks = new Set<Promise<void>>();
+  let protocolError: unknown, disableTask: Promise<void> | undefined;
+  const track = (task: Promise<void>) => {
+    protocolTasks.add(task);
+    void task.catch(error => { protocolError ??= error; }).finally(() => protocolTasks.delete(task));
+  };
   const beganAt = performance.now(), phases: Record<string, number> = {};
   const mark = (phase: string) => { phases[phase] = performance.now(); };
   const runtimeReads: Array<{ at: number; status: number | null; revision: number | null; enabledBindings: number | null }> = [];
   const runtimeReadsPending = new Set<Promise<void>>();
+  let runtime: { revision: number | null; readyDeliveries: unknown; seating: { settlements?: Array<{ reason: string }> } | null } | null = null;
   // Passive timing only: never intercept or replace runtime authority. Keep no
   // URLs, credentials, binding identities, config, source or raw response bytes.
   const onRuntimeFinished = (request: Request) => {
@@ -182,6 +196,10 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     contexts.push(context); observations.set(page, await observe(page));
     await installSeatDeliveryObservation(page);
     page.on("requestfinished", onRuntimeFinished);
+    await page.route(url => url.pathname === pluginPath(roomId, "runtime"), async route => {
+      await discoveryGate;
+      await route.continue();
+    });
     await page.routeWebSocket(url => url.searchParams.has("roomId"), socket => {
       transport = socket;
       const server = socket.connectToServer();
@@ -191,6 +209,14 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
           held = true; claimAt = performance.now(); claimId = payload.commandId;
           claimCount++; phases.firstClaim ??= claimAt;
           mark("claim");
+          track((async () => {
+            const pendingState = await seatState(page);
+            expect(Boolean(pendingState.pendingSeatId)).toBe(true);
+            expect(pendingState.currentSeatId).toBeNull();
+            mark("pendingVerified");
+            server.send(message); // The real server answers only after the pending proof.
+          })());
+          return;
         }
         if (payload.type === "seat_release" && String(payload.commandId).startsWith("plugin-release:")) {
           releaseAt = performance.now(); releaseId = payload.commandId;
@@ -210,6 +236,9 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
           }
           if (!accepted && payload.type === "seat_claim_result" && payload.seatClaimResult?.commandId === claimId && payload.seatClaimResult?.accepted === true) {
             accepted = true; mark("serverAccepted");
+            mark("disableRequested");
+            disableTask = put(false).then(() => { mark("disableAck"); });
+            track(disableTask);
           }
           if (!releaseAck && payload.type === "seat_release_result" && payload.seatReleaseResult?.commandId === releaseId) {
             releaseAck = true; mark("serverReleaseAck");
@@ -225,7 +254,8 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     // claim deadline must not start while the new participant is still entering.
     member = await entering;
     mark("entryComplete");
-    try { await expect.poll(() => accepted, { timeout: 15_000, intervals: [50] }).toBe(true); }
+    startDiscovery();
+    try { await expect.poll(() => { if (protocolError) throw protocolError; return accepted; }, { timeout: 15_000, intervals: [50] }).toBe(true); }
     catch (error) {
       const facts = await member.page.evaluate(() => {
         const debug = (window as any).__VRATA_DEBUG__;
@@ -238,19 +268,21 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
       throw error;
     }
     mark("acceptedObserved");
-    const pendingState = await seatState(pendingPage!);
-    expect(Boolean(pendingState.pendingSeatId)).toBe(true);
-    expect(pendingState.currentSeatId).toBeNull();
-    mark("pendingVerified");
-    mark("disableRequested");
-    await put(false);
-    mark("disableAck");
+    expect(Boolean(disableTask)).toBe(true);
+    await disableTask;
+    if (protocolError) throw protocolError;
     const actor = { ...member, participantId: member.session.participantId, authority: observations.get(member.page)! };
     await expect.poll(async () => (await seatState(actor.page)).running, { timeout: 15_000 }).toBe(0);
     mark("runningZeroObserved");
     await expect.poll(() => releaseAck, { timeout: 15_000 }).toBe(true);
     mark("releaseAckObserved");
     expect(releaseAt > claimAt && releaseAt - claimAt < 3000).toBe(true); // Not the adapter's lost-answer timeout.
+    expect(claimCount).toBe(1); expect(releaseCount).toBe(1);
+    runtime = await member.page.evaluate(() => {
+      const plugins = (window as any).__VRATA_DEBUG__?.plugins;
+      return { revision: plugins?.revision ?? null, readyDeliveries: plugins?.readyDeliveries ?? null, seating: plugins?.seating ?? null };
+    });
+    expect(runtime.seating?.settlements?.map(row => row.reason)).toEqual(["retired"]);
     // Deliver ONLY occupied/accepted first. A later correct empty snapshot must
     // not conceal even one frame of applying the cancelled seating attempt.
     const acceptedIndex = queue.findIndex(message => message.type === "seat_claim_result"
@@ -290,14 +322,21 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     expect(actor.authority.commands().some(command => command.type === "seat_claim_result" && command.commandId === claimId && command.accepted)).toBe(true);
     await member.context.close();
     await expectExactRoomAuthority([witness]);
-  }, () => [async () => {
+  }, () => [() => { startDiscovery(); }, async () => {
+    await Promise.allSettled(protocolTasks);
+    if (protocolError) throw protocolError;
+  }, async () => {
     pendingPage?.off("requestfinished", onRuntimeFinished);
     await Promise.allSettled(runtimeReadsPending);
+    const finalRuntime = runtime ?? (pendingPage && !pendingPage.isClosed() ? await pendingPage.evaluate(() => {
+      const plugins = (window as any).__VRATA_DEBUG__?.plugins;
+      return { revision: plugins?.revision ?? null, readyDeliveries: plugins?.readyDeliveries ?? null, seating: plugins?.seating ?? null };
+    }).catch(() => ({ unavailable: true })) : null);
     const offset = (at: number) => Math.round((at - (claimAt || beganAt)) * 10) / 10;
     console.info("t16_pending_claim_timing", JSON.stringify({ claimCount, releaseCount, claimObserved: Boolean(claimId), acceptedObserved: accepted,
       releaseObserved: Boolean(releaseId), releaseDeltaMs: claimAt && releaseAt ? Math.round((releaseAt - claimAt) * 10) / 10 : null,
       phaseOffsetsMs: Object.fromEntries(Object.entries(phases).map(([phase, at]) => [phase, offset(at)])),
-      runtimeReads: runtimeReads.map(({ at, ...row }) => ({ offsetMs: offset(at), ...row })) }));
+      runtimeReads: runtimeReads.map(({ at, ...row }) => ({ offsetMs: offset(at), ...row })), runtime: finalRuntime }));
     runtimeReads.length = 0; runtimeReadsPending.clear();
   }, () => { held = false; queue.length = 0; },
     () => pendingPage && !pendingPage.isClosed() ? pendingPage.evaluate(() => (window as any).__t16SeatDeliveryCleanup?.()) : undefined,

@@ -125,3 +125,21 @@ test("arrival diagnostics retain causal monotonic transitions after closure with
   const offline = harness({ ready: true }); offline.adapter.observe(); offline.adapter.stop("offline");
   assert.equal(offline.adapter.diagnostics().transitions.at(-1)?.reason, "offline");
 });
+
+test("settlement diagnostics are bounded copies and distinguish owner cancellation from retirement", async () => {
+  const h = harness({ ready: true }); h.adapter.activate();
+  for (let i = 0; i < 8; i++) {
+    const pending = h.adapter.claim("seat-a", "private-owner-identity");
+    if (i % 2) h.adapter.retire("private-owner-identity"); else h.adapter.cancelOwn("private-owner-identity");
+    assert.deepEqual(await pending, { result: "cancelled" });
+  }
+  const first = h.adapter.diagnostics();
+  assert.equal(first.settlements.length, 8);
+  assert.deepEqual(first.settlements.map(row => row.reason), Array.from({ length: 8 }, (_, i) => i % 2 ? "retired" : "owner-cancel"));
+  first.settlements[0].reason = "lost-answer"; first.settlements.length = 0;
+  assert.equal(h.adapter.diagnostics().settlements[0].reason, "owner-cancel");
+  assert.deepEqual(await h.adapter.claim("seat-a"), { error: "arrival-not-allowed" });
+  assert.equal(h.adapter.diagnostics().settlements.length, 8);
+  assert.equal(JSON.stringify(h.adapter.diagnostics()).includes("private-owner-identity"), false);
+  assert.equal(JSON.stringify(h.adapter.diagnostics()).includes("self-private-id"), false);
+});

@@ -86,6 +86,12 @@
 - Runtime build и1515/1515 tests, helper18/18 и strict e2e types прошли. Первый environment check попал до готовности новой БД и failed; после healthy собственный PG16 действительно подключён. Первый strict вызов без DOM.Iterable failed; исправленный invocation exit0, source ради него не менялся. Исходные логи сохранены.
 - Лимит двух новых причинных итераций исчерпан. Третьего запуска нет; требуются trace воспроизведённого initial closed и причина pending cancel/retire, затем новое содержательное ревью и весь13-required/full/CI/G/X контракт. Свой PG оставлен главному потоку; оба runs вернули свободные порты и schema set0→0, сохранили55/59 прежних артефактов. **T16 NOT_READY**, не приёмка T17.
 
+### Управляемое продолжение RCA — D-073
+
+- Настоящие controller/broker/adapter/facade queue и QuickJS scaffold различают dispatch/actual handler/promise completion. На управляемом monotonic clock пустой manifest1200 отменяет через retire, manifest3100 проигрывает lost-answer3000; revision/hint/HTTP completion не взаимозаменяемы. Поздний startup после entry20000 закрывает grant по entry-expired; stale manifest/старое поколение не возвращают authority. Это не ретроспективная причина c0837de и не browser elapsed proof.
+- Удаление activate, retire cancellation и stale-revision fence в реальном compiled source отвергается тестами. Runtime build и46/46 узких compiled,19/19 actual-helper tests/strict types passed. Новый bounded settlement trace хранит причину/время, не идентификаторы.
+- Pending protocol race теперь откладывает реальную discovery до normal entry, проверяет pending/current перед отправкой claim серверу и запускает обычный Host CAS PUT прямо на server accepted с заранее подготовленной revision. Ответы не заменяются; author UI lifecycle общего demo не меняется. Положительный1200ms helper control доходит до intermediate pose, отрицательный3200ms правильно отказывает на прежнем fence. Нового browser результата ещё нет; разрешён один узкий реальный run. Все13 required/full/новое review сохранены.
+
 ## Минимальные изменения после проверки матрицы
 
 1. **Shared demo.** Явный isolated floor2 local; расширение `runPublicDemoScenario` авторскими UI-фазами R03–R06. Переиспользовать внешний build и UI операции, не запускать существующий самостоятельный UI test из test. Admin нужен setup/invites/cleanup, не author/upload/bind или role transitions. Два нынешних admin GET lock-state (`public-demo-scenarios.ts:1381,1390`) можно заменить чтением обычного Host session.
