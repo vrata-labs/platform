@@ -38,6 +38,8 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
       const routes: Array<{ route: WebSocketRoute; page: Page }> = [], pages: Page[] = [];
       let barrierOpen = false;
       const observations = new Map<Page, RoomAuthorityCapture>();
+      const arrivalBeganAt = performance.now();
+      const arrivalPhases: Record<string, number> = {};
       const entries = [1, 2, 3, 4].map(index => enterPluginRoom(browser, value, host.roomId, "member", `Auto-seat member ${index}`, async (context, page) => {
         contexts.push(context); pages.push(page); observations.set(page, await observe(page));
         // All four real clients finish scene loading before any gets the initial
@@ -50,10 +52,32 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
       await withCleanup(async () => {
         await expect.poll(() => pages.length === 4 && routes.length === 4, { timeout: 90_000 }).toBe(true);
         await Promise.all(pages.map(page => expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.sceneBundleState), { timeout: 90_000 }).toBe("loaded")));
+        arrivalPhases.scenesLoaded = performance.now();
         barrierOpen = true;
         for (const { route } of routes) route.connectToServer();
+        arrivalPhases.barrierOpened = performance.now();
         const members = (await settled).map(member => ({ ...member, participantId: member.session.participantId, authority: observations.get(member.page)! }));
-        for (const member of members) await expect.poll(async () => Boolean((await seatState(member.page)).currentSeatId), { timeout: 60_000 }).toBe(true);
+        arrivalPhases.entriesComplete = performance.now();
+        try {
+          for (const member of members) await expect.poll(async () => Boolean((await seatState(member.page)).currentSeatId), { timeout: 60_000 }).toBe(true);
+        } finally {
+          // Passive allowlisted facts also survive a failure before pending-disable.
+          // Keep identities, URLs, config and wire payloads out of diagnostics.
+          const offset = (at: number) => Math.round(at - arrivalBeganAt);
+          const facts = await Promise.all(members.map(async member => ({
+            state: await member.page.evaluate(() => {
+              const debug = (window as any).__VRATA_DEBUG__, plugins = debug?.plugins;
+              return { loaded: debug?.sceneBundleState === "loaded", connected: debug?.roomStateConnected === true,
+                pending: Boolean(debug?.pendingSeatId), seated: Boolean(debug?.currentSeatId),
+                state: plugins?.state ?? null, running: plugins?.running ?? null, failure: plugins?.lastFailure ?? null,
+                hostPhase: plugins?.lastHostPhase ?? null, startupTiming: plugins?.startupTiming ?? null,
+                seating: plugins?.seating ?? null };
+            }).catch(() => ({ unavailable: true })),
+            commands: member.authority.commands().map(command => ({ type: command.type, accepted: command.accepted,
+              offsetMs: offset(command.observedAtMs) }))
+          })));
+          console.info("t16_arrival_timing", JSON.stringify({ phaseOffsetsMs: Object.fromEntries(Object.entries(arrivalPhases).map(([phase, at]) => [phase, offset(at)])), facts }));
+        }
         const seated = await Promise.all(members.map(member => seatState(member.page)));
         const seats = seated.map(state => state.currentSeatId!);
         expect(new Set(seats).size).toBe(4);

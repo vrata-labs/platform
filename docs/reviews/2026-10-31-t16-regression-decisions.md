@@ -147,3 +147,10 @@
 - Контекст: отдельный HTTP/storage-contract запуск без PG дал45 passed/1 skipped. Повтор с собственным PG был прерван внешним60s лимитом после13 завершённых PG subtests; terminal полного набора отсутствует. Оба исходных лога сохранены, skipped/interrupted не превращены в passed.
 - Решение: не повторять тяжёлый набор в этом узком этапе. После прерывания отдельно завершить очистку только своей schema, которую штатный t.after не успел удалить. Владение установлено по одному совпавшему окну создания package records и времени запуска; другая ранее существовавшая schema сохранена.
 - Проверка: своих процессов этого запуска не осталось; своя schema удалена, набор ранее существовавших schema неизменен, выделенный PG сохранён. Отдельные HTTP tests прошли23/23 без skips. Эти проверки не закрывают обязательный focused-unit/package/full.
+
+## D-067 — 2026-10-31 — Existing-socket init требует Page.enable собственной CDP session
+
+- Контекст: terminal narrow на6d4f448:0 expected/2 unexpected/0 skipped/flaky. Demo уже прошёл stale409 и упал на отсутствии __t16HoldSocket. Auto-seat упал раньше pending-disable, на начальной посадке четырёх entrants; pending timeline в этом run отсутствует.
+- Основание: настоящий Playwright-transformed installExistingSocketControl в установленном Chromium без Page.enable не создаёт hook ни после navigation, ни после reload. Единственное добавление Page.enable в ту же session даёт function в обоих случаях. Исходный script валиден, __name не содержит; это не CAS/permission failure.
+- Решение: включить Page domain до регистрации persistent init script; сохранить прежние old-socket commands/denial/barrier/cleanup. Actual-helper regression закрепляет enable→register и cleanup/remove/detach. Для отдельного initial auto-seat failure добавить только пассивные allowlisted arrival phase/command/startup facts, не менять порядок или продукт по догадке.
+- Последствия: прежний release<3000ms дефект ещё требует actual timeline; новое наблюдение не является его исправлением. Узкие terminal исходы фиксируются отдельно, все13 обязательных критериев, full и новое review сохранены. T16 NOT_READY.

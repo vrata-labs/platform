@@ -4,7 +4,7 @@ import { cleanupAll } from "./test-cleanup";
 
 type SocketScope = { socketScope: string; generation: number; sequence: number };
 type Snapshot = SocketScope & { participants: string[]; occupancy: Record<string, string>; mediaHash: string };
-type Command = SocketScope & { commandId: string; type: string; seatId: string | null; accepted: boolean | null; occupantId: string | null; permissionDenied: boolean };
+type Command = SocketScope & { observedAtMs: number; commandId: string; type: string; seatId: string | null; accepted: boolean | null; occupantId: string | null; permissionDenied: boolean };
 const id = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9._:-]{1,200}$/.test(value);
 
 /** Passive CDP observation of the client's EXISTING authenticated transport.
@@ -55,7 +55,7 @@ export async function captureRoomAuthority(page: Page) {
     const value = direction === "sent" ? payload : payload?.seatClaimResult ?? payload?.seatReleaseResult ?? payload?.result;
     if (!id(value?.commandId) || !/^(?:plugin-seat:|plugin-release:|t16-)/.test(value.commandId)) return;
     if (!["seat_claim", "seat_release", "seat_claim_result", "seat_release_result", "surface_create_object", "access_denied", "surface_command_result"].includes(payload.type)) return;
-    commands.push({ ...scope, commandId: value.commandId, type: payload.type, seatId: id(value.seatId) ? value.seatId : null,
+    commands.push({ ...scope, observedAtMs: performance.now(), commandId: value.commandId, type: payload.type, seatId: id(value.seatId) ? value.seatId : null,
       accepted: typeof value.accepted === "boolean" ? value.accepted : null, occupantId: id(value.occupantId) ? value.occupantId : null,
       permissionDenied: value.blockedReason === "missing-permission" });
     if (commands.length > 128) commands.shift();
@@ -122,6 +122,9 @@ export async function expectExactRoomAuthority(clients: AuthorityClient[], timeo
  * creating an observer. Separate from the passive authority capture above. */
 export async function installExistingSocketControl(page: Page) {
   const cdp = await page.context().newCDPSession(page);
+  // A fresh CDP session does not inherit Playwright's Page domain enablement.
+  // Without it Chromium accepts registration but never executes this init script.
+  await cdp.send("Page.enable");
   const result = await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `(${(() => {
     const Native = window.WebSocket;
     let socket: WebSocket | undefined;

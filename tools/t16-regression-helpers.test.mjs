@@ -166,6 +166,18 @@ test("unchanged-media barrier requires the exact post-denial presence marker on 
   }, () => [() => f.capture.close()]);
 });
 
+test("existing-socket control enables its own CDP Page domain before registering the persistent script", async () => {
+  const { installExistingSocketControl } = loadHelper("tests/e2e/room-state-observation.ts");
+  const calls = [];
+  const cdp = { async send(method) { calls.push(method); return { identifier: "owned-script" }; }, async detach() { calls.push("detach"); } };
+  const page = { context: () => ({ newCDPSession: async () => cdp }), isClosed: () => false,
+    evaluate: async () => { calls.push("cleanup"); } };
+  const close = await installExistingSocketControl(page);
+  assert.deepEqual(calls, ["Page.enable", "Page.addScriptToEvaluateOnNewDocument"]);
+  await close();
+  assert.deepEqual(calls.slice(2), ["cleanup", "Page.removeScriptToEvaluateOnNewDocument", "detach"]);
+});
+
 test("pending-disable claim observation starts only after normal scene/connection entry completes", async () => {
   let completeEntry;
   const entering = new Promise(resolve => { completeEntry = resolve; });
