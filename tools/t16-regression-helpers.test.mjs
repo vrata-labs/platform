@@ -294,27 +294,34 @@ test("public-demo stale write projects the read DTO into valid PUT fields and re
 
 for (const releaseDelta of [1200, 3200]) test(`controlled pending-disable keeps the real release fence at ${releaseDelta}ms and cleans its listener`, async () => {
   let now = 1, fromClient, fromServer, closed = 0;
-  let installed = false, pendingReads = 0, entered = false, discoveryContinued = false;
+  let installed = false, pendingReads = 0, entered = false, discoveryContinued = false, mutationCommitted = false;
+  let runtimeRoute, pendingRefresh, refreshContinued = 0;
   const afterFence = new Error("positive_control_reached_intermediate_pose");
   const logs = [], page = new EventEmitter(), context = { close: async () => { closed++; } };
   page.context = () => context; page.isClosed = () => false;
   page.addInitScript = async () => { installed = true; };
   page.evaluate = async callback => {
     if (callback.toString().includes("localPose")) throw afterFence;
-    if (callback.toString().includes("readyDeliveries")) return { revision: 9, readyDeliveries: [], seating: { settlements: [{ reason: "retired" }] } };
+    if (callback.toString().includes("readyDeliveries")) return { revision: 9, readyDeliveries: [], pendingBeforeSend: true, seating: { settlements: [{ reason: "retired" }] } };
     if (!callback.toString().includes("__VRATA_DEBUG__")) return;
     pendingReads++;
     return { participantId: "private-participant", pendingSeatId: "seat-01", currentSeatId: null, running: 0 };
   };
   const server = { onMessage(callback) { fromServer = callback; }, send(message) {
     if (JSON.parse(message).type !== "seat_claim") return;
-    assert.equal(pendingReads, 1, "actual pending/current must be checked BEFORE upstream claim delivery");
+    assert.equal(pendingReads, 0, "the page captured pending before send; no extra Node/page poll may delay upstream acceptance");
+    pendingRefresh = runtimeRoute({ async continue() {
+      assert.equal(mutationCommitted, true, "pending refresh must read the real post-CAS state, not race an enabled read");
+      refreshContinued++;
+    }, fulfill() { assert.fail("never fabricate runtime discovery"); } });
+    assert.equal(refreshContinued, 0);
     fromServer(JSON.stringify({ type: "room_state", room: { seatOccupancy: { "seat-01": "private-participant" } } }));
     now = 120; fromServer(JSON.stringify({ type: "seat_claim_result", seatClaimResult: { commandId: claimId, accepted: true } }));
   } };
   const socket = { connectToServer: () => server, onMessage(callback) { fromClient = callback; }, send() {}, close() {} };
   page.routeWebSocket = async (_match, handler) => handler(socket);
   page.route = async (_match, handler) => {
+    runtimeRoute = handler;
     void handler({ async continue() {
       assert.equal(entered, true, "runtime discovery cannot consume the claim deadline during entry");
       discoveryContinued = true;
@@ -333,11 +340,12 @@ for (const releaseDelta of [1200, 3200]) test(`controlled pending-disable keeps 
     "./room-state-observation": {}, "./room-seat-protocol-race": {}, "./staging-identity": {}, "./scene-bundle-fixtures": {}
   }, "\nexport { disablePendingClaim };\n", { performance: { now: () => now }, console: { info: (...args) => logs.push(args), warn() {} } });
   const put = async enabled => {
-    assert.equal(enabled, false); assert.equal(pendingReads, 1);
+    assert.equal(enabled, false); assert.equal(pendingReads, 0);
     assert.equal(now, 120, "Host PUT begins in the real accepted callback, without poll/UI/read overhead");
     now = 100 + releaseDelta - 50;
     page.emit("requestfinished", { url: () => `https://example.invalid/api/rooms/${roomId}/plugins/runtime`,
       response: async () => ({ status: () => 200, json: async () => ({ revision: 9, bindings: [], token: "must-not-log", config: { private: "must-not-log" } }) }) });
+    mutationCommitted = true;
     now = 100 + releaseDelta; fromClient(JSON.stringify({ type: "seat_release", commandId: releaseId }));
     now += 20; fromServer(JSON.stringify({ type: "seat_release_result", seatReleaseResult: { commandId: releaseId } }));
   };
@@ -345,6 +353,7 @@ for (const releaseDelta of [1200, 3200]) test(`controlled pending-disable keeps 
   await assert.rejects(helper.disablePendingClaim({}, {}, roomId, put, {}, [], observations, async () => ({})),
     error => releaseDelta < 3000 ? error === afterFence : /Expected: true/.test(error.message),
     "only an early release reaches intermediate pose; a late release must still fail");
+  await pendingRefresh; assert.equal(refreshContinued, 1);
   assert.equal(page.listenerCount("requestfinished"), 0);
   assert.equal(closed, 2);
   assert.equal(logs.length, 1); assert.equal(logs[0][0], "t16_pending_claim_timing");
@@ -352,7 +361,6 @@ for (const releaseDelta of [1200, 3200]) test(`controlled pending-disable keeps 
   assert.equal(facts.claimCount, 1); assert.equal(facts.releaseCount, 1);
   assert.equal(facts.releaseDeltaMs, releaseDelta);
   assert.equal(facts.phaseOffsetsMs.entryComplete, -99);
-  assert.equal(facts.phaseOffsetsMs.pendingVerified, 0);
   assert.equal(facts.phaseOffsetsMs.disableRequested, 20);
   assert.equal(facts.phaseOffsetsMs.serverReleaseAck, releaseDelta + 20);
   assert.deepEqual(facts.runtimeReads, [{ offsetMs: releaseDelta - 50, status: 200, revision: 9, enabledBindings: 0 }]);
@@ -371,7 +379,7 @@ test("preinstalled seat-delivery observer counts only actual correlated replay a
   class Socket extends Target { send(data) { sent.push(data); } }
   class Message { constructor(data) { this.data = JSON.stringify(data); } }
   const originalSend = Socket.prototype.send, originalDispatch = Target.prototype.dispatchEvent;
-  const window = { __VRATA_DEBUG__: { participantId: "private-self" } };
+  const window = { __VRATA_DEBUG__: { participantId: "private-self", pendingSeatId: "seat-01", currentSeatId: null } };
   await installSeatDeliveryObservation({ addInitScript: async callback => vm.runInNewContext(`(${callback.toString()})()`, {
     window, WebSocket: Socket, EventTarget: Target, MessageEvent: Message
   }) });
@@ -380,6 +388,7 @@ test("preinstalled seat-delivery observer counts only actual correlated replay a
   const deliver = message => socket.dispatchEvent(new Message(message));
   try {
     send({ type: "seat_claim", commandId: "plugin-seat:first", seatId: "seat-01" });
+    assert.equal(state.pendingBeforeSend, true, "pending and standing were captured before the unchanged send");
     send({ type: "seat_claim", commandId: "plugin-seat:unrelated", seatId: "seat-02" });
     send({ type: "seat_release", commandId: "plugin-release:first" });
     assert.equal(sent.length, 3, "all native sends are unchanged");
@@ -397,6 +406,15 @@ test("preinstalled seat-delivery observer counts only actual correlated replay a
   } finally { window.__t16SeatDeliveryCleanup(); }
   assert.equal(Socket.prototype.send, originalSend); assert.equal(Target.prototype.dispatchEvent, originalDispatch);
   assert.equal(window.__t16SeatDelivery, undefined); assert.equal(window.__t16SeatDeliveryCleanup, undefined);
+  await installSeatDeliveryObservation({ addInitScript: async callback => vm.runInNewContext(`(${callback.toString()})()`, {
+    window, WebSocket: Socket, EventTarget: Target, MessageEvent: Message
+  }) });
+  try {
+    window.__VRATA_DEBUG__.pendingSeatId = null;
+    socket.send(JSON.stringify({ type: "seat_claim", commandId: "plugin-seat:invalid-pending", seatId: "seat-01" }));
+    window.__VRATA_DEBUG__.pendingSeatId = "seat-01";
+    assert.equal(window.__t16SeatDelivery.pendingBeforeSend, false, "later pending state cannot repair a missing pre-send witness");
+  } finally { window.__t16SeatDeliveryCleanup(); }
 });
 
 test("actual Playwright mock keeps native receive distinct from delayed app dispatch on the same page clock", async () => {

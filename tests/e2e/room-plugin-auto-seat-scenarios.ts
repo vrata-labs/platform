@@ -169,6 +169,8 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
   // PUT starts on the actual server accept, not after another Node/browser poll.
   let startDiscovery!: () => void;
   const discoveryGate = new Promise<void>(resolve => { startDiscovery = resolve; });
+  let finishMutation!: () => void;
+  const mutationGate = new Promise<void>(resolve => { finishMutation = resolve; });
   const protocolTasks = new Set<Promise<void>>();
   let protocolError: unknown, disableTask: Promise<void> | undefined;
   const track = (task: Promise<void>) => {
@@ -179,7 +181,7 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
   const mark = (phase: string) => { phases[phase] = performance.now(); };
   const runtimeReads: Array<{ at: number; status: number | null; revision: number | null; enabledBindings: number | null }> = [];
   const runtimeReadsPending = new Set<Promise<void>>();
-  let runtime: { revision: number | null; readyDeliveries: unknown; seating: { settlements?: Array<{ reason: string }> } | null } | null = null;
+  let runtime: { revision: number | null; readyDeliveries: unknown; pendingBeforeSend: boolean; seating: { settlements?: Array<{ reason: string }> } | null } | null = null;
   // Passive timing only: never intercept or replace runtime authority. Keep no
   // URLs, credentials, binding identities, config, source or raw response bytes.
   const onRuntimeFinished = (request: Request) => {
@@ -210,6 +212,11 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     page.on("requestfinished", onRuntimeFinished);
     await page.route(url => url.pathname === pluginPath(roomId, "runtime"), async route => {
       await discoveryGate;
+      // Only this managed cancellation witness orders a pending refresh after
+      // the real Host CAS. Otherwise an enabled read racing the mutation can
+      // consume the next poll slot and test lost-answer instead of retirement.
+      // No response is fabricated and initial normal entrants have no route.
+      if (held) await mutationGate;
       await route.continue();
     });
     await page.routeWebSocket(url => url.searchParams.has("roomId"), socket => {
@@ -221,13 +228,10 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
           held = true; claimAt = performance.now(); claimId = payload.commandId;
           claimCount++; phases.firstClaim ??= claimAt;
           mark("claim");
-          track((async () => {
-            const pendingState = await seatState(page);
-            expect(Boolean(pendingState.pendingSeatId)).toBe(true);
-            expect(pendingState.currentSeatId).toBeNull();
-            mark("pendingVerified");
-            server.send(message); // The real server answers only after the pending proof.
-          })());
+          // The preinstalled page hook captures actual pending/current BEFORE
+          // send. Verify that saved fact later, without a Node/page round trip
+          // delaying the real server acceptance inside the 3000ms window.
+          server.send(message);
           return;
         }
         if (payload.type === "seat_release" && String(payload.commandId).startsWith("plugin-release:")) {
@@ -249,7 +253,7 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
           if (!accepted && payload.type === "seat_claim_result" && payload.seatClaimResult?.commandId === claimId && payload.seatClaimResult?.accepted === true) {
             accepted = true; mark("serverAccepted");
             mark("disableRequested");
-            disableTask = put(false).then(() => { mark("disableAck"); });
+            disableTask = put(false).then(() => { mark("disableAck"); finishMutation(); });
             track(disableTask);
           }
           if (!releaseAck && payload.type === "seat_release_result" && payload.seatReleaseResult?.commandId === releaseId) {
@@ -292,9 +296,13 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     expect(claimCount).toBe(1); expect(releaseCount).toBe(1);
     runtime = await member.page.evaluate(() => {
       const plugins = (window as any).__VRATA_DEBUG__?.plugins;
-      return { revision: plugins?.revision ?? null, readyDeliveries: plugins?.readyDeliveries ?? null, seating: plugins?.seating ?? null };
+      return { revision: plugins?.revision ?? null, readyDeliveries: plugins?.readyDeliveries ?? null,
+        pendingBeforeSend: (window as any).__t16SeatDelivery?.pendingBeforeSend === true, seating: plugins?.seating ?? null };
     });
+    expect(runtime.pendingBeforeSend).toBe(true);
     expect(runtime.seating?.settlements?.map(row => row.reason)).toEqual(["retired"]);
+    await Promise.all(runtimeReadsPending);
+    expect(runtimeReads.some(row => row.status === 200 && row.enabledBindings === 0 && row.revision === runtime!.revision)).toBe(true);
     // Deliver ONLY occupied/accepted first. A later correct empty snapshot must
     // not conceal even one frame of applying the cancelled seating attempt.
     const acceptedIndex = queue.findIndex(message => message.type === "seat_claim_result"
@@ -334,7 +342,7 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     expect(actor.authority.commands().some(command => command.type === "seat_claim_result" && command.commandId === claimId && command.accepted)).toBe(true);
     await member.context.close();
     await expectExactRoomAuthority([witness]);
-  }, () => [() => { startDiscovery(); }, async () => {
+  }, () => [() => { startDiscovery(); finishMutation(); }, async () => {
     await Promise.allSettled(protocolTasks);
     if (protocolError) throw protocolError;
   }, async () => {
@@ -342,7 +350,8 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     await Promise.allSettled(runtimeReadsPending);
     const finalRuntime = runtime ?? (pendingPage && !pendingPage.isClosed() ? await pendingPage.evaluate(() => {
       const plugins = (window as any).__VRATA_DEBUG__?.plugins;
-      return { revision: plugins?.revision ?? null, readyDeliveries: plugins?.readyDeliveries ?? null, seating: plugins?.seating ?? null };
+      return { revision: plugins?.revision ?? null, readyDeliveries: plugins?.readyDeliveries ?? null,
+        pendingBeforeSend: (window as any).__t16SeatDelivery?.pendingBeforeSend === true, seating: plugins?.seating ?? null };
     }).catch(() => ({ unavailable: true })) : null);
     const offset = (at: number) => Math.round((at - (claimAt || beganAt)) * 10) / 10;
     console.info("t16_pending_claim_timing", JSON.stringify({ claimCount, releaseCount, claimObserved: Boolean(claimId), acceptedObserved: accepted,
@@ -361,13 +370,15 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
 async function installSeatDeliveryObservation(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const dispatch = EventTarget.prototype.dispatchEvent, send = WebSocket.prototype.send;
-    const state = { accepted: 0, released: 0, occupied: 0, claimId: "", claimedSeat: "", releaseId: "" };
+    const state = { accepted: 0, released: 0, occupied: 0, pendingBeforeSend: false, claimId: "", claimedSeat: "", releaseId: "" };
     WebSocket.prototype.send = function (data) {
       if (typeof data === "string" && data.length < 262_144) {
         try {
           const message = JSON.parse(data);
           if (message.type === "seat_claim" && String(message.commandId).startsWith("plugin-seat:") && !state.claimId) {
             state.claimId = message.commandId; state.claimedSeat = message.seatId;
+            const debug = (window as any).__VRATA_DEBUG__;
+            state.pendingBeforeSend = debug?.pendingSeatId === message.seatId && debug?.currentSeatId === null;
           }
           if (message.type === "seat_release" && String(message.commandId).startsWith("plugin-release:") && !state.releaseId) state.releaseId = message.commandId;
         } catch { /* Never alter transport delivery. */ }
