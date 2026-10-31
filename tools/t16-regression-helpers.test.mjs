@@ -446,25 +446,94 @@ test("actual Playwright mock keeps native receive distinct from delayed app disp
   for (const secret of [claim.commandId, claim.seatId, "private-owned", "example.invalid"]) assert.equal(JSON.stringify(facts).includes(secret), false);
 });
 
-test("initial four-entry barrier continues original HTTP discovery together without registering a WS route", async () => {
-  const { holdInitialSeatDiscovery } = loadHelper("tests/e2e/room-plugin-auto-seat-scenarios.ts", {
-    "./plugin-author-scenarios": { pluginPath: (room, suffix) => `/api/rooms/${room}/plugins/${suffix}` },
-    "./room-plugin-fixture": {}, "./room-state-observation": {}, "./room-seat-protocol-race": {},
-    "./staging-identity": {}, "./scene-bundle-fixtures": {}
+test("four actual normal entry helpers wait at actionable forms, then submit UI without holding post-ready traffic", async () => {
+  const actualExpect = require("@playwright/test").expect;
+  let release, allPrepared, now = 0;
+  const gate = new Promise(resolve => { release = resolve; }), ready = new Promise(resolve => { allPrepared = resolve; });
+  const forms = [], clicks = [], discoveries = [], closed = [];
+  const expect = value => ({
+    ...actualExpect(value),
+    async toHaveValue(name) { assert.equal(value.value, name); },
+    async toBeVisible() { assert.equal(value.visible, true); },
+    async toBeEnabled() { assert.equal(value.enabled, true); }
   });
-  let release, reached = 0, continued = 0;
-  const gate = new Promise(resolve => { release = resolve; }), pending = [];
-  for (let i = 0; i < 4; i++) await holdInitialSeatDiscovery({
-    routeWebSocket() { assert.fail("normal live transport must remain native"); },
-    async route(match, handler) {
-      assert.equal(match(new URL("https://example.invalid/api/rooms/owned/plugins/runtime")), true);
-      assert.equal(match(new URL("https://example.invalid/elsewhere")), false);
-      pending.push(handler({ async continue() { continued++; }, fulfill() { assert.fail("no fabricated HTTP response"); } }));
-    }
-  }, "owned", gate, () => { reached++; });
-  assert.equal(reached, 4); assert.equal(continued, 0);
-  release(); await Promise.all(pending);
-  assert.equal(continued, 4);
+  expect.poll = fn => ({ async toBe(value) { actualExpect(await fn()).toBe(value); } });
+  const helper = loadHelper("tests/e2e/room-plugin-fixture.ts", {
+    "@playwright/test": { expect }, "./reference-template-fixture": {},
+    "./functional-frame-budget": { installFunctionalFrameBudget: async () => {} },
+    "./meeting-tools-acceptance": { installMeetingPerformanceObservation: async () => {} },
+    "./plugin-author-scenarios": { privateHttp: async () => ({ status: 201, json: () => ({ inviteLink: "https://example.invalid/?invite=private" }) }) }
+  });
+  const browser = { async newContext() {
+    const index = forms.length;
+    let admitted, evaluations = 0;
+    const admission = new Promise(resolve => { admitted = resolve; });
+    const input = { value: "", async fill(value) { this.value = value; } };
+    const button = { visible: true, enabled: true, async click(options) {
+      assert.equal(options.noWaitAfter, true); clicks.push({ index, at: now });
+      // Normal application discovery after admission is not gated at all.
+      discoveries.push({ index, at: now }); admitted({ json: async () => ({ participantId: `member-${index}` }) });
+    } };
+    const page = { on() {}, waitForResponse: () => admission,
+      async goto(link) { const params = new URL(link).searchParams; assert(params.has("invite") && !params.has("role") && !params.has("onboard")); },
+      locator: selector => selector === "#guest-name-input" ? input : button,
+      evaluate: async () => ++evaluations === 1 ? "loaded" : true,
+      route() { assert.fail("no post-ready discovery interception"); }, routeWebSocket() { assert.fail("native WS must not be routed"); }
+    };
+    forms.push(page);
+    return { newPage: async () => page, close: async () => { closed.push(index); } };
+  } };
+  const prepared = new Set();
+  const entries = [1, 2, 3, 4].map(index => helper.enterPluginRoom(browser, { origin: "https://example.invalid" }, "owned", "member", `Member ${index}`,
+    undefined, async page => { prepared.add(page); if (prepared.size === 4) allPrepared(); await gate; }));
+  await ready;
+  assert.equal(forms.length, 4); assert.equal(clicks.length, 0); assert.equal(discoveries.length, 0);
+  now = 25_000; release(); const members = await Promise.all(entries);
+  assert.equal(clicks.length, 4); assert.equal(discoveries.length, 4);
+  assert(clicks.every(row => row.at === 25_000));
+  await Promise.all(members.map(member => member.context.close()));
+  assert.equal(new Set(closed).size, 4);
+});
+
+test("passive entry phases preserve original fetch/worker delivery and expose no URLs, source or action IDs", async () => {
+  const { installSeatEntryObservation } = loadHelper("tests/e2e/seat-entry-observation.ts");
+  let now = 0, click;
+  const posted = [], deliveries = [], reads = [], resources = [];
+  const loading = Promise.resolve({ status: 200 });
+  class Worker extends EventTarget { postMessage(...args) { posted.push(args); } }
+  const window = { Worker, fetch(...args) { reads.push(args); return loading; } };
+  const document = { addEventListener(type, callback, capture) { assert.equal(type, "click"); assert.equal(capture, true); click = callback; } };
+  const performance = { now: () => now, timeOrigin: 100_000, getEntriesByName: (url, type) => {
+    assert.equal(type, "resource"); return resources.filter(entry => entry.name === url);
+  } };
+  await installSeatEntryObservation({ addInitScript: async callback => vm.runInNewContext(`(${callback.toString()})()`, {
+    window, document, location: { href: "https://example.invalid/" }, performance, URL, Request
+  }) });
+  now = 25_000; click({ target: { closest: () => true }, isTrusted: true });
+  assert.equal(window.fetch("/api/tokens/state"), loading);
+  const url = "https://example.invalid/api/rooms/private-room/plugins/runtime", options = { headers: { authorization: "private-proof" } };
+  now = 25_100; assert.equal(window.fetch(url, options), loading, "no promise or HTTP hold is introduced");
+  now = 25_200; await loading;
+  resources.push({ name: url, startTime: 25_100, responseEnd: 25_180 });
+  const worker = new window.Worker("https://example.invalid/private-worker", { name: "room-plugin-kernel" });
+  worker.addEventListener("message", event => deliveries.push(event.data));
+  const init = { type: "init", source: "private-source", config: { secret: "private-config" } };
+  worker.postMessage(init, []);
+  now = 25_300; const command = { type: "event", id: 23456, event: { type: "room.ready" } };
+  worker.postMessage(command, []);
+  now = 25_400; worker.dispatchEvent(new MessageEvent("message", { data: { type: "requests", actionId: 23455 } }));
+  now = 25_500; worker.dispatchEvent(new MessageEvent("message", { data: { type: "requests", actionId: 23456, requestsJson: "private-requests" } }));
+  const facts = JSON.parse(JSON.stringify(window.__t16SeatEntryFacts()));
+  assert.deepEqual(facts.joinClicks, [{ atMs: 25_000, trusted: true }]);
+  assert.deepEqual(facts.admissionStarts, [25_000]);
+  assert.deepEqual(facts.discovery, [{ startMs: 25_100, responseMs: 25_200, status: 200, bodyEndMs: 25_180 }]);
+  assert.deepEqual(facts.kernel.map(row => [row.phase, row.atMs]), [["worker-created", 25_200], ["init-dispatch", 25_200],
+    ["ready-kernel-dispatch", 25_300], ["ready-handler-request-received", 25_500]]);
+  assert.equal(deliveries.length, 2); assert.equal(posted[0][0], init); assert.equal(posted[1][0], command); assert.equal(reads[1][1], options);
+  for (const secret of ["example.invalid", "private-room", "private-source", "private-config", "private-proof", "private-requests", "23456"]) {
+    assert.equal(JSON.stringify(facts).includes(secret), false);
+  }
+  facts.kernel.length = 0; assert.equal(window.__t16SeatEntryFacts().kernel.length, 4);
 });
 
 test("native-only ACK observer preserves bytes and separates old-socket answers from current generation", async () => {

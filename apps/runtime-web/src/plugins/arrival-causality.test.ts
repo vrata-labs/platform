@@ -49,7 +49,6 @@ function harness(t: TestContext) {
   const adapter = new RoomPluginSeatAdapter({ world: () => world, optedOut: () => false, clock: () => now, random: () => `alias-${++alias}`,
     claim(seat, id) { world.pendingSeatId = seat; claims.push({ at: now, id }); },
     cancel(_release, claim) { cancels.push({ at: now, claim }); world.pendingSeatId = null; return true; } });
-  adapter.observe();
   const workers: ControlledWorker[] = [];
   class ControlledWorker implements KernelWorker {
     onmessage: KernelWorker["onmessage"] = null; onerror: KernelWorker["onerror"] = null; onmessageerror: KernelWorker["onmessageerror"] = null;
@@ -98,10 +97,11 @@ function harness(t: TestContext) {
     } });
   t.after(async () => { controller.stop(); adapter.stop(); for (const worker of workers) { worker.vm.close(); } await flush(); module.assertNoMemoryAllocated(); });
   return { controller, adapter, world, claims, cancels, consumed, retirements, responses, workers, clients, snapshot,
-    async start() { controller.start(2); await until(() => controller.diagnostics().running === 1); },
+    beginDiscovery() { controller.start(2); },
+    async start() { adapter.observe(); controller.start(2); await until(() => controller.diagnostics().running === 1); },
     async advance(ms: number) { now += ms; t.mock.timers.tick(ms); await flush(); },
     async config(revision: number, enabled: boolean) { current = snapshot(revision, enabled); controller.kick(); await flush(); },
-    holdRead() { pendingRead = new Promise(resolve => { this.releaseRead = resolve; }); },
+    holdRead() { pendingRead = new Promise(resolve => { this.releaseRead = snapshot => { pendingRead = undefined; resolve(snapshot); }; }); },
     releaseRead: (_snapshot: RoomPluginRuntimeSnapshot) => {}
   };
 }
@@ -126,10 +126,38 @@ test("actual ready consumption, dispatch and completion differ while the real sc
 });
 
 test("entry expiry is measured from actual platform ready, not setup or a delayed VM start", async t => {
-  const h = harness(t); await h.advance(20_001); await h.start(); await h.workers[0].drain();
+  const h = harness(t); h.adapter.observe(); await h.advance(20_001); await h.start(); await h.workers[0].drain();
   assert.equal(h.claims.length, 0);
   assert.equal(h.adapter.diagnostics().transitions.at(-1)?.reason, "entry-expired");
   assert.equal(h.controller.diagnostics().readyDeliveries[0].arrivalAllowed, false);
+});
+
+test("post-ready discovery hold consumes the real entry budget before any claim timer starts", async t => {
+  const h = harness(t); h.adapter.observe(); h.holdRead(); h.beginDiscovery(); await flush();
+  assert.equal(h.adapter.diagnostics().firstReadyAtMs, 0);
+  assert.equal(h.controller.diagnostics().fetchPending, true);
+  await h.advance(20_001);
+  h.releaseRead(h.snapshot()); await flush();
+  // The stale response cannot renew its expired lease ticket. A normal fresh
+  // discovery can start the VM, but cannot restore the spent arrival budget.
+  h.controller.kick(); await until(() => h.controller.diagnostics().running === 1); await h.workers[0].drain();
+  assert.equal(h.adapter.diagnostics().transitions.at(-1)?.reason, "entry-expired");
+  assert.equal(h.controller.diagnostics().readyDeliveries[0].arrivalAllowed, false);
+  assert.equal(h.claims.length, 0); assert.deepEqual(h.adapter.diagnostics().claimPhases, []);
+  assert.deepEqual(h.adapter.diagnostics().settlements, [], "there was no claim-response timer to expire");
+});
+
+test("waiting at the normal admission form cannot spend entry budget before platform readiness", async t => {
+  const h = harness(t); h.world.ready = false; h.adapter.observe();
+  await h.advance(25_000);
+  assert.equal(h.adapter.diagnostics().firstReadyAtMs, null);
+  assert.equal(h.controller.diagnostics().fetchPending, false);
+  h.world.ready = true; await h.start(); await h.workers[0].drain();
+  assert.equal(h.adapter.diagnostics().firstReadyAtMs, 25_000);
+  assert.equal(h.controller.diagnostics().readyDeliveries[0].arrivalAllowed, true);
+  assert.equal(h.claims[0].at, 25_000);
+  h.adapter.settleClaim({ seatId: "seat-a", accepted: true, commandId: h.claims[0].id }); await h.workers[0].drain();
+  assert.equal(h.adapter.diagnostics().grant, "used");
 });
 
 test("the real adapter closes an unused window at 5000, but pending completion is not a second window", async t => {

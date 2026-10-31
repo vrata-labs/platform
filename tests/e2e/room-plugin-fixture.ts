@@ -47,7 +47,8 @@ export async function deleteOwnedPluginRoom(value: RoomPluginOrigin, roomId: str
 
 /** One browser participant through the normal private invitation and onboarding. */
 export async function enterPluginRoom(browser: Browser, value: RoomPluginOrigin, roomId: string, role: "host" | "member" = "host",
-  name = "Owned plugin runtime Host", prepare?: (context: BrowserContext, page: Page) => Promise<void>) {
+  name = "Owned plugin runtime Host", prepare?: (context: BrowserContext, page: Page) => Promise<void>,
+  beforeSubmit?: (page: Page) => Promise<void>) {
   const invite = await privateHttp(value.origin, `/api/rooms/${roomId}/invites`, "POST", { "x-vrata-admin-token": value.adminToken }, { role, expiresInSeconds: 1200 });
   expect(invite.status).toBe(201);
   const context = await browser.newContext({ viewport: { width: 800, height: 500 }, deviceScaleFactor: .4 });
@@ -61,13 +62,20 @@ export async function enterPluginRoom(browser: Browser, value: RoomPluginOrigin,
       if (/room-plugin-(?:worker|kernel)-/.test(url.pathname)) requests.workers++;
       if (/emscripten.*\.wasm$/.test(url.pathname)) requests.wasm++;
     });
-    const admission = page.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state" && response.status() === 200);
-    void admission.catch(() => undefined);
     const link = invite.json<{ inviteLink: string }>().inviteLink;
     const params = new URL(link).searchParams;
     expect(params.has("invite") && !params.has("role") && !params.has("onboard")).toBe(true);
     try { await page.goto(link); } catch { throw new Error("owned_plugin_runtime_navigation_failed"); }
-    await page.locator("#guest-name-input").fill(name); await page.locator("#guest-enter-without-audio").click({ noWaitAfter: true });
+    await page.locator("#guest-name-input").fill(name);
+    if (beforeSubmit) {
+      await expect(page.locator("#guest-name-input")).toHaveValue(name);
+      await expect(page.locator("#guest-enter-without-audio")).toBeVisible();
+      await expect(page.locator("#guest-enter-without-audio")).toBeEnabled();
+      await beforeSubmit(page);
+    }
+    const admission = page.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state" && response.status() === 200);
+    void admission.catch(() => undefined);
+    await page.locator("#guest-enter-without-audio").click({ noWaitAfter: true });
     const session = await (await admission).json() as AuthorHttpSession;
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.sceneBundleState), { timeout: 90_000 }).toBe("loaded");
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected), { timeout: 30_000 }).toBe(true);

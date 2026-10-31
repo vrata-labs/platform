@@ -7,6 +7,7 @@ import { identityProtocolAt } from "./staging-identity";
 import { inlineSceneBundleUrl } from "./scene-bundle-fixtures";
 import { cleanupAll, withCleanup } from "./test-cleanup";
 import { installSeatAckObservation } from "./seat-ack-observation";
+import { installSeatEntryObservation } from "./seat-entry-observation";
 
 export const seatState = (page: Page) => page.evaluate(() => {
   const debug = (window as any).__VRATA_DEBUG__;
@@ -39,27 +40,29 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
       await host.context.close();
       const observe = async (page: Page) => { const capture = await captureRoomAuthority(page); captures.push(capture); return capture; };
       const pages: Page[] = [];
-      let startDiscovery!: () => void;
-      const discoveryGate = new Promise<void>(resolve => { startDiscovery = resolve; });
-      const discoveryRequests = new Set<Page>();
+      let submitEntries!: () => void;
+      const admissionGate = new Promise<void>(resolve => { submitEntries = resolve; });
+      const preparedForms = new Set<Page>();
       const observations = new Map<Page, RoomAuthorityCapture>();
       const arrivalBeganAt = performance.now();
       const arrivalPhases: Record<string, number> = {};
       const entries = [1, 2, 3, 4].map(index => enterPluginRoom(browser, value, host.roomId, "member", `Auto-seat member ${index}`, async (context, page) => {
         contexts.push(context); pages.push(page); observations.set(page, await observe(page));
         await installSeatAckObservation(page);
-        await holdInitialSeatDiscovery(page, host.roomId, discoveryGate, () => discoveryRequests.add(page));
-      }));
+        await installSeatEntryObservation(page);
+      }, async page => { preparedForms.add(page); await admissionGate; }));
       const settled = Promise.all(entries); void settled.catch(() => undefined);
       await withCleanup(async () => {
+        await expect.poll(() => pages.length === 4 && preparedForms.size === 4, { timeout: 90_000 }).toBe(true);
+        // All four normal invitation forms are filled and actionable BEFORE
+        // admission. Release real UI clicks, never post-ready HTTP or WS traffic.
+        const prepared = await Promise.all(pages.map(page => page.evaluate(() => (window as any).__t16SeatEntryFacts())));
+        expect(prepared.every(facts => facts.joinClicks.length === 0 && facts.admissionStarts.length === 0 && facts.discovery.length === 0)).toBe(true);
+        submitEntries();
+        arrivalPhases.barrierOpened = performance.now();
         const members = (await settled).map(member => ({ ...member, participantId: member.session.participantId, authority: observations.get(member.page)! }));
         arrivalPhases.scenesLoaded = performance.now();
         arrivalPhases.entriesComplete = performance.now();
-        await expect.poll(() => pages.length === 4 && discoveryRequests.size === 4, { timeout: 90_000 }).toBe(true);
-        // Four simultaneous normal entrants, with their REAL native snapshots.
-        // Release only HTTP discovery together; live WS frames never cross Node.
-        startDiscovery();
-        arrivalPhases.barrierOpened = performance.now();
         try {
           for (const member of members) await expect.poll(async () => Boolean((await seatState(member.page)).currentSeatId), { timeout: 60_000 }).toBe(true);
         } finally {
@@ -73,9 +76,10 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
                 pending: Boolean(debug?.pendingSeatId), seated: Boolean(debug?.currentSeatId),
                 state: plugins?.state ?? null, running: plugins?.running ?? null, failure: plugins?.lastFailure ?? null,
                 hostPhase: plugins?.lastHostPhase ?? null, startupTiming: plugins?.startupTiming ?? null,
-                 readyDeliveries: plugins?.readyDeliveries ?? null,
-                 ack: (window as any).__t16SeatAckFacts?.() ?? null,
-                 longTasks: (window as any).__meetingPerformance?.longTasks ?? null,
+                readyDeliveries: plugins?.readyDeliveries ?? null,
+                ack: (window as any).__t16SeatAckFacts?.() ?? null,
+                entry: (window as any).__t16SeatEntryFacts?.() ?? null,
+                longTasks: (window as any).__meetingPerformance?.longTasks ?? null,
                 seating: plugins?.seating ?? null };
             }).catch(() => ({ unavailable: true })),
             commands: member.authority.commands().map(command => ({ type: command.type, accepted: command.accepted,
@@ -86,6 +90,14 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
         const seated = await Promise.all(members.map(member => seatState(member.page)));
         const seats = seated.map(state => state.currentSeatId!);
         expect(new Set(seats).size).toBe(4);
+        const entryFacts = await Promise.all(members.map(member => member.page.evaluate(() => (window as any).__t16SeatEntryFacts())));
+        expect(entryFacts.every(facts => facts.joinClicks.length === 1 && facts.joinClicks[0].trusted
+          && facts.admissionStarts.length === 1 && facts.discovery.some((row: any) => row.responseMs !== null))).toBe(true);
+        // Compare actual click times using each page's performance time origin,
+        // not the scheduling of Promise.all on the test runner.
+        // This is a harness synchrony bound, not a product entry/claim deadline.
+        const clicks = entryFacts.map(facts => facts.timeOriginMs + facts.joinClicks[0].atMs);
+        expect(Math.max(...clicks) - Math.min(...clicks) < 3000).toBe(true);
         await expectExactRoomAuthority(members);
         for (const member of members) expect(member.authority.commands().some(command => command.type === "seat_claim_result" && command.accepted
           && member.authority.commands().some(sent => sent.type === "seat_claim" && sent.commandId === command.commandId && sent.seatId === command.seatId))).toBe(true);
@@ -130,8 +142,7 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
         await disablePendingClaim(browser, value, host.roomId, put, lateActor, contexts, observations, observe);
         await author.assertNotExecuted();
       }, () => [
-        // Release a failed discovery barrier before closing its requests/pages.
-        () => { startDiscovery(); },
+        () => { submitEntries(); },
         // Closing entrants also settles failed pending admission waits before room deletion.
         () => cleanupAll(contexts.map(context => () => context.close())),
         async () => {
@@ -140,19 +151,11 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
           if (errors.length) throw new AggregateError(errors, "owned_test_entries_failed");
         },
         () => cleanupAll(contexts.map(context => () => context.close())),
-        () => { discoveryRequests.clear(); pages.length = 0; observations.clear(); }
+        () => { preparedForms.clear(); pages.length = 0; observations.clear(); }
       ]);
     });
   }, () => [...captures.map(capture => () => capture.close()), ...contexts.map(context => () => context.close()),
     () => { captures.length = 0; contexts.length = 0; }, () => author.close()]);
-}
-
-/** Barrier before plugin startup, never on live native room-state traffic.
- * The original authenticated HTTP request/response is continued, not fulfilled. */
-export async function holdInitialSeatDiscovery(page: Page, roomId: string, gate: Promise<void>, reached: () => void) {
-  await page.route(url => url.pathname === pluginPath(roomId, "runtime"), async route => {
-    reached(); await gate; await route.continue();
-  });
 }
 
 async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, roomId: string, put: (enabled: boolean) => Promise<void>,
