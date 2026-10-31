@@ -104,6 +104,11 @@
 ### Дополнение D-076: native initial transport
 - Instrumented8626b37 failed initial:3 accepted,1 failed ready/no claim. На одном page clock реальные proxy crossings добавляют1.34–2.36s, callback<1ms, current generation совпадает. Это не воспроизведение lost-answer D-074; старый c0837de не объяснён.
 - Initial WS теперь не маршрутизируется; четыре normal entrants вместе получают исходную authenticated HTTP discovery после обычного entry/scene/native connection. Claims/snapshots не подменяются, pending managed route/intermediate assertions неизменны.22/22 helper regressions (actual mock, native/stale generation, original discovery barrier) и strict types passed. Expected complete browser trace ещё требуется.
+
+### Дополнение D-077: завершающий native trace и остаточный entry deadline
+- На2862254 complete scenario failed initial60000,136s0 skips/retries. Три current correlated native ACK приняты adapter за1140.4/16.8/935.5ms; proxy gap0–0.1ms, native receive→app0ms, mock-dispatch отсутствует.
+- Четвёртый firstReady18497.7/entry-expired39528.2/activate39582.2 (один page clock), claim0. Entry20000 соблюдён; claim3000 не начинался. Следующее недостающее измерение — discovery hold/release/response и startup/actual handler consumption на том же clock. Source допускает расход entry budget HTTP barrier, но его точная доля не измерена. Старые причины не приписываются по аналогии.
+- Pending-disable не достигнут, complete PASS и весь T16 NOT_READY.13 required/full без исключений; cleanup ports/schema/own processes/source unchanged/PG healthy подтверждён. Stage/lease/CI не выполнялись.
 - Порты свободны, schema0→0,63 прежних artifacts unchanged, собственный healthy PG сохранён. Процессы/внешний source checkout/план/T17 не менялись; all13 required=true, full без исключений, substantive review/focused/package/full/CI/G/X открыты. **T16 NOT_READY**.
 
 ## Минимальные изменения после проверки матрицы
