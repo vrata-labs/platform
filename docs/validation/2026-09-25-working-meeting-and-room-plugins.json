@@ -14,11 +14,17 @@
     },
     {
       "id": "final-full-local",
-      "description": "Полный локальный e2e на окончательном дереве с настоящим Postgres из окружения",
-      "required": true,
+      "description": "Полный локальный e2e на окончательном дереве с настоящим Postgres из окружения. Только для исполняемого среза 62f9ba8a0512336d6a06b4ca10ce1c92d3788db4 действует точечное исключение approved-full-local-exception: исходный полный прогон остаётся failed (255 passed, 1 failed, 0 skipped), а не passed. Для любых будущих исполняемых изменений полный прогон снова обязателен без этого исключения",
+      "required": false,
       "kind": "command",
       "argv": ["bash", "-o", "pipefail", "-lc", "set -e\n: \"${VRATA_TEST_POSTGRES_URL:?VRATA_TEST_POSTGRES_URL must point to disposable Postgres}\"\nexport VRATA_TEST_POSTGRES_URL\npnpm test:e2e --workers=1"],
       "timeout_seconds": 14400
+    },
+    {
+      "id": "approved-full-local-exception",
+      "description": "Только для исполняемого среза 62f9ba8a0512336d6a06b4ca10ce1c92d3788db4: требуется исходный полный прогон test-results/t15-final-current.json с 255/256 passed (1 failed, 0 skipped), отдельный реальный rerun того же сценария в 1 worker с 1/1 passed из test-results/t15-final-isolated-rerun.json, явное разрешение пользователя «Да, продолжить» на продолжение PR и staging без повторного full с сохранением сбоя в отчёте, а также доказанное отсутствие исполняемого diff от 62f9ba8a0512336d6a06b4ca10ce1c92d3788db4 до accepted commit. Единственный сбой: administrative-ownership.spec.ts:425, a poll overtaking normal room selection cannot leave the previous room's editable fields; route.fetch на строке 443 — read ECONNRESET. Исходный full остаётся failed; rerun не доказывает причину сбоя и не превращает full в passed. Исключение не распространяется на будущие исполняемые изменения: при них final-full-local снова required=true и нужен новый успешный полный прогон. Остальные обязательные критерии не заменяются",
+      "required": true,
+      "kind": "evidence"
     },
     {
       "id": "docker-assets",
