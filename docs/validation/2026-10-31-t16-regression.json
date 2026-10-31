@@ -1,0 +1,96 @@
+{
+  "schema": 1,
+  "task": "T16: shared normal-onboarding public demo, external author lifecycle, effective authority and auto-seat regression; не приёмка T17",
+  "domain": "general",
+  "scope": ["."],
+  "criteria": [
+    {
+      "id": "local-environment",
+      "description": "Явно /usr/bin/node 22.23.2, pnpm10 и настоящий disposable Postgres; DSN не выводится. Frozen dependencies уже установлены главным потоком; Chromium/build проверяются перед e2e. Local BASE_URL согласован с E2E_API_PORT",
+      "required": true,
+      "kind": "command",
+      "argv": ["bash", "-o", "pipefail", "-c", "set -eu\nexport PATH=\"/usr/bin:/bin:$PATH\"\n/usr/bin/node -e 'if(process.versions.node!==\"22.23.2\") throw new Error(\"t16_requires_system_node22\")'\ntest \"$(corepack pnpm --version)\" = 10.0.0\n: \"${VRATA_TEST_POSTGRES_URL:?disposable Postgres required}\"\n/usr/bin/node --input-type=module -e 'import {createRequire} from \"node:module\"; const {Pool}=createRequire(new URL(\"./apps/api/package.json\",import.meta.url))(\"pg\"); const p=new Pool({connectionString:process.env.VRATA_TEST_POSTGRES_URL,connectionTimeoutMillis:5000}); try { const r=await p.query(\"select current_setting($1) as version\",[\"server_version_num\"]); if(Number(r.rows[0].version)<160000) throw new Error(); console.log(\"t16_postgres_connected\"); } catch { console.error(\"t16_postgres_preflight_failed\"); process.exitCode=1; } finally { await p.end(); }'"],
+      "timeout_seconds": 60
+    },
+    {
+      "id": "package-checks",
+      "description": "Final-tree lint, typecheck, build, все package/tool tests с реальным Postgres; обязательные T16 PG tests не skipped. Включает runtime build/test и state-transition ownership regressions",
+      "required": true,
+      "kind": "command",
+      "argv": ["bash", "-o", "pipefail", "-c", "set -eu\nexport PATH=\"/usr/bin:/bin:$PATH\"\n/usr/bin/node -e 'if(process.versions.node!==\"22.23.2\") throw new Error(\"t16_requires_system_node22\")'\n: \"${VRATA_TEST_POSTGRES_URL:?disposable Postgres required}\"\nexport VRATA_TEST_POSTGRES_URL\ncorepack pnpm lint\ncorepack pnpm typecheck\ncorepack pnpm build\ncorepack pnpm test"],
+      "timeout_seconds": 7200
+    },
+    {
+      "id": "focused-unit",
+      "description": "Compiled focused API/PG authority, room-state races/late sockets и runtime broker/controller/seating/locomotion regressions; сначала выполнить build",
+      "required": true,
+      "kind": "command",
+      "argv": ["bash", "-o", "pipefail", "-c", "set -eu\nexport PATH=\"/usr/bin:/bin:$PATH\"\n/usr/bin/node -e 'if(process.versions.node!==\"22.23.2\") throw new Error(\"t16_requires_system_node22\")'\n: \"${VRATA_TEST_POSTGRES_URL:?disposable Postgres required}\"\nexport VRATA_TEST_POSTGRES_URL VRATA_DISABLE_AUTOSTART=1\n/usr/bin/node --test --test-concurrency=1 apps/api/dist/plugins/author-http.postgres.test.js apps/api/dist/plugins/access.test.js apps/api/dist/plugins/storage-contract.test.js apps/room-state/dist/index.test.js apps/room-state/dist/identity-socket-authority.test.js\n/usr/bin/node --test --test-concurrency=1 'apps/runtime-web/dist/plugins/*.test.js' 'apps/runtime-web/dist/seating/*.test.js' 'apps/runtime-web/dist/locomotion/*.test.js'"],
+      "timeout_seconds": 2400
+    },
+    {
+      "id": "focused-browser",
+      "description": "Shared public-demo и plugin author/runtime/auto-seat/browser sandbox/distribution на final tree. Flags до regex; normal UI/invites, no admin author calls, authority snapshots и no ghosts обязательны по R01–R14",
+      "required": true,
+      "kind": "command",
+      "argv": ["bash", "-o", "pipefail", "-c", "set -eu\nexport PATH=\"/usr/bin:/bin:$PATH\"\n/usr/bin/node -e 'if(process.versions.node!==\"22.23.2\") throw new Error(\"t16_requires_system_node22\")'\n: \"${VRATA_TEST_POSTGRES_URL:?disposable Postgres required}\"\nexport VRATA_TEST_POSTGRES_URL\nexport E2E_API_PORT=\"${T16_E2E_API_PORT:-4416}\"\nexport BASE_URL=\"http://127.0.0.1:${E2E_API_PORT}\" E2E_ROOM_STATE_PORT=\"${T16_E2E_ROOM_STATE_PORT:-25676}\" E2E_REMOTE_BROWSER_PORT=\"${T16_E2E_REMOTE_BROWSER_PORT:-4417}\"\nunset PLAYWRIGHT_NO_WEB_SERVER\nexport PLAYWRIGHT_REPORT_NAME=t16-focused\ncorepack pnpm test:e2e --workers=1 'tests/e2e/(public-demo|room-plugin-(author-ui|auto-seat|runtime|seating)|plugin-author|plugin-sandbox|plugin-sdk-distribution)[.]spec[.]ts$'"],
+      "timeout_seconds": 5400
+    },
+    {
+      "id": "ci-postgres-no-silent-skip",
+      "description": "Оба CI job имеют настоящий Postgres service/health/env и Node22. Отсутствие VRATA_TEST_POSTGRES_URL в local CI даёт фиксированный fail-fast даже при --list, а remote staging suite без local PG не ломается. Новый tools guard test входит в pnpm test; новые mandatory T16 cases не skipped",
+      "required": true,
+      "kind": "evidence"
+    },
+    {
+      "id": "final-full-local",
+      "description": "Один успешный полный local suite после последних executable edits на окончательном публикуемом дереве, с Node22/реальным Postgres. Отчёт сохраняет все failures/skips/retries; focused rerun не заменяет full, прежние исключения других этапов не применяются",
+      "required": true,
+      "kind": "command",
+      "argv": ["bash", "-o", "pipefail", "-c", "set -eu\nexport PATH=\"/usr/bin:/bin:$PATH\"\n/usr/bin/node -e 'if(process.versions.node!==\"22.23.2\") throw new Error(\"t16_requires_system_node22\")'\n: \"${VRATA_TEST_POSTGRES_URL:?disposable Postgres required}\"\nexport VRATA_TEST_POSTGRES_URL\nexport E2E_API_PORT=\"${T16_E2E_API_PORT:-4416}\"\nexport BASE_URL=\"http://127.0.0.1:${E2E_API_PORT}\" E2E_ROOM_STATE_PORT=\"${T16_E2E_ROOM_STATE_PORT:-25676}\" E2E_REMOTE_BROWSER_PORT=\"${T16_E2E_REMOTE_BROWSER_PORT:-4417}\"\nunset PLAYWRIGHT_NO_WEB_SERVER\nexport PLAYWRIGHT_REPORT_NAME=t16-final-local\ncorepack pnpm test:e2e --workers=1"],
+      "timeout_seconds": 14400
+    },
+    {
+      "id": "substantive-final-review",
+      "description": "Содержательное ревью окончательного T16 diff по R01–R16 и проектному контракту без дополнительных внешних консультаций: реальные assertions, отсутствие shortcut/admin author calls, unchanged-state denials, authority/no ghosts, CI inclusion, privacy/cleanup и ownership pose. Подтверждённые дефекты исправлены; после executable fixes повторены затронутые проверки и final full",
+      "required": true,
+      "kind": "evidence"
+    },
+    {
+      "id": "published-ci-docker",
+      "description": "Commit/push через обычный pipeline. CI core/checks и все шесть browser shards, Docker Publish успешны на точном публикуемом SHA; записаны head SHA, run IDs, attempts и conclusions. Не выдавать PR merge SHA или старые результаты за другой published SHA",
+      "required": true,
+      "kind": "evidence"
+    },
+    {
+      "id": "gated-staging-deploy",
+      "description": "Обычный exact-SHA gated deploy под собственной platform lease; non-bootstrap full gate либо законченная gated catalog activation нового host. Зафиксированы run/attempt, success, фактический SHA, отсутствие/результат rollback. Подготовка host и pre-push smoke не являются приёмкой T16",
+      "required": true,
+      "kind": "evidence"
+    },
+    {
+      "id": "published-staging-suite",
+      "description": "Полный staging gate suite в обычном gated workflow на exact deployed SHA, active reference catalog, Node22; сохранён run/attempt и JSON report с key room flows. Результат CI может закрыть критерий без лишнего локального повторения. Дополнительный local запуск только после lease+deploy/accepted readback по операционному брифу",
+      "required": true,
+      "kind": "evidence"
+    },
+    {
+      "id": "published-t16-extended",
+      "description": "Полный staging-extended после exact SHA deploy, включая расширенный shared public demo и reusable T16 auto-seat races/late joins. Новые mandatory T16 cases реально выполнены без skips; G без X не закрывает T16. CI Extended dispatch на зафиксированный candidate ref с headSha=published SHA, JSON report/run/attempt и unchanged accepted/images до/после suite; local повтор не требуется при применимом CI proof",
+      "required": true,
+      "kind": "evidence"
+    },
+    {
+      "id": "published-authority-and-images",
+      "description": "Очищенное доказательство на published T16 SHA: normal onboarding, external SDK hash/artifacts, non-admin UI install/update/disable, role/old-author deny+unchanged, simultaneous seat results, authoritative room_state+exact live participant sets и согласие clients после late/reload/reconnect; Hall/BlueOffice/ArtGallery loaded и key room flows. Accepted-release imageSha/runId/runAttempt/assetSha и реальные api/room-state/remote-browser refs/digests совпадают с pipeline, before/after suite одинаковы. Без секретов/source/raw frames/частных данных",
+      "required": true,
+      "kind": "evidence"
+    },
+    {
+      "id": "cleanup-and-stage-release",
+      "description": "Собственные rooms/tenants/invites/packages/external projects/browser contexts/observers/fixture schemas/processes убраны с проверкой результата, ошибки не подавлены. Удалён только собственный disposable PG по владению. Lease ID, release и конечная фаза platform зафиксированы; чужие leases/контейнеры/исходный checkout не менялись. T17 и внешний план не объявлены закрытыми",
+      "required": true,
+      "kind": "evidence"
+    }
+  ]
+}

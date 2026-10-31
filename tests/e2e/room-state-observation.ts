@@ -1,0 +1,130 @@
+import { expect, type Page } from "@playwright/test";
+import { createHash } from "node:crypto";
+
+type Snapshot = { participants: string[]; occupancy: Record<string, string>; mediaHash: string };
+type Command = { commandId: string; type: string; seatId: string | null; accepted: boolean | null; occupantId: string | null };
+const id = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9._:-]{1,200}$/.test(value);
+
+/** Passive CDP observation of the client's EXISTING authenticated transport.
+ * No extra identity/socket, raw frame, URL, token, source or config is retained.
+ * Only bounded allowlisted DTOs live in memory; callers assert booleans, not DTOs. */
+export async function captureRoomAuthority(page: Page) {
+  const cdp = await page.context().newCDPSession(page);
+  const sockets = new Set<string>();
+  const commands: Command[] = [];
+  let latest: Snapshot | null = null, received = 0, connections = 0;
+  const created = (event: { requestId: string; url: string }) => {
+    try {
+      const query = new URL(event.url).searchParams;
+      if (query.has("roomId") && query.has("participantId") && query.has("accessToken") && sockets.size < 32) {
+        sockets.add(event.requestId); connections++;
+      }
+    } catch { /* Never retain URL/error data. */ }
+  };
+  const closed = (event: { requestId: string }) => { sockets.delete(event.requestId); };
+  const frame = (direction: "sent" | "received", event: { requestId: string; response: { opcode: number; payloadData: string } }) => {
+    if (!sockets.has(event.requestId) || event.response.opcode !== 1 || event.response.payloadData.length > 262_144) return;
+    let payload: any;
+    try { payload = JSON.parse(event.response.payloadData); } catch { return; }
+    if (direction === "received" && payload?.type === "room_state") {
+      const room = payload.room;
+      if (!Array.isArray(room?.participants) || room.participants.length > 64 || !room.participants.every((p: any) => id(p?.participantId))) return;
+      const entries = Object.entries(room.seatOccupancy ?? {});
+      if (entries.length > 64 || !entries.every(([seat, pid]) => id(seat) && id(pid))) return;
+      latest = { participants: room.participants.map((p: any) => p.participantId), occupancy: Object.fromEntries(entries) as Record<string, string>,
+        mediaHash: createHash("sha256").update(JSON.stringify(room.mediaObjects ?? null)).digest("hex") };
+      received++;
+      return;
+    }
+    const value = direction === "sent" ? payload : payload?.seatClaimResult ?? payload?.seatReleaseResult ?? payload?.result;
+    if (!id(value?.commandId) || !/^(?:plugin-seat:|plugin-release:|t16-)/.test(value.commandId)) return;
+    if (!["seat_claim", "seat_release", "seat_claim_result", "seat_release_result", "surface_create_object", "access_denied", "surface_command_result"].includes(payload.type)) return;
+    commands.push({ commandId: value.commandId, type: payload.type, seatId: id(value.seatId) ? value.seatId : null,
+      accepted: typeof value.accepted === "boolean" ? value.accepted : null, occupantId: id(value.occupantId) ? value.occupantId : null });
+    if (commands.length > 128) commands.shift();
+  };
+  const sent = (event: any) => frame("sent", event), incoming = (event: any) => frame("received", event);
+  cdp.on("Network.webSocketCreated", created);
+  cdp.on("Network.webSocketClosed", closed);
+  cdp.on("Network.webSocketFrameSent", sent);
+  cdp.on("Network.webSocketFrameReceived", incoming);
+  await cdp.send("Network.enable");
+  return {
+    snapshot: () => latest,
+    received: () => received,
+    connections: () => connections,
+    commands: () => commands,
+    async close() {
+      cdp.off("Network.webSocketCreated", created); cdp.off("Network.webSocketClosed", closed);
+      cdp.off("Network.webSocketFrameSent", sent); cdp.off("Network.webSocketFrameReceived", incoming);
+      sockets.clear(); commands.length = 0; latest = null;
+      await cdp.detach().catch(() => undefined); // A closed page has already detached its session.
+    }
+  };
+}
+export type RoomAuthorityCapture = Awaited<ReturnType<typeof captureRoomAuthority>>;
+export type AuthorityClient = { page: Page; participantId: string; authority: RoomAuthorityCapture };
+
+export async function expectExactRoomAuthority(clients: AuthorityClient[], timeout = 45_000) {
+  const ids = clients.map(client => client.participantId).sort();
+  expect(new Set(ids).size === ids.length).toBe(true);
+  await expect.poll(async () => {
+    const snapshots = clients.map(client => client.authority.snapshot());
+    const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+    const sorted = (occupancy: Record<string, string>) => Object.entries(occupancy).sort(([a], [b]) => a.localeCompare(b));
+    if (snapshots.some(value => !value || !equal([...value.participants].sort(), ids)
+      || new Set(value.participants).size !== ids.length || Object.values(value.occupancy).some(pid => !ids.includes(pid))
+      || new Set(Object.values(value.occupancy)).size !== Object.values(value.occupancy).length)) return false;
+    const canonical = snapshots[0]!;
+    if (snapshots.some(value => !equal(sorted(value!.occupancy), sorted(canonical.occupancy)))) return false;
+    return (await Promise.all(clients.map(client => client.page.evaluate(({ ids, occupancy, own }) => {
+      const debug = (window as any).__VRATA_DEBUG__;
+      const remote = (debug?.remoteParticipants ?? []).map((p: any) => p.participantId).sort();
+      const expected = ids.filter(pid => pid !== own);
+      const entries = (value: Record<string, string>) => Object.entries(value).sort(([a], [b]) => a.localeCompare(b));
+      const seat = Object.entries(occupancy).find(([, pid]) => pid === own)?.[0] ?? null;
+      return debug?.roomStateConnected === true && debug?.participantId === own
+        && JSON.stringify(remote) === JSON.stringify(expected)
+        && JSON.stringify(entries(debug?.seatOccupancy ?? {})) === JSON.stringify(entries(occupancy))
+        && (debug?.currentSeatId ?? null) === seat;
+    }, { ids, occupancy: canonical.occupancy, own: client.participantId })))).every(Boolean);
+  }, { timeout, intervals: [250, 500, 1000] }).toBe(true);
+}
+
+/** Adversarial commands on the already-open socket, without exposing its URL or
+ * creating an observer. Separate from the passive authority capture above. */
+export async function installExistingSocketControl(page: Page) {
+  const cdp = await page.context().newCDPSession(page);
+  const result = await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `(${(() => {
+    const Native = window.WebSocket;
+    let socket: WebSocket | undefined;
+    let heldSocket: WebSocket | undefined;
+    const Wrapped = new Proxy(Native, { construct(target, args, newTarget) {
+      const value = Reflect.construct(target, args, newTarget) as WebSocket;
+      if (new URL(value.url).searchParams.has("roomId")) socket = value;
+      return value;
+    } });
+    window.WebSocket = Wrapped;
+    (window as any).__t16HoldSocket = () => {
+      if (!socket || socket.readyState !== Native.OPEN) throw new Error("t16_transport_not_open");
+      heldSocket = socket;
+    };
+    (window as any).__t16SocketCommand = (command: unknown) => {
+      const target = heldSocket ?? socket;
+      if (!target) throw new Error("t16_transport_missing");
+      if (target.readyState !== Native.OPEN) return "closed";
+      target.send(JSON.stringify(command));
+      return "sent";
+    };
+    (window as any).__t16SocketCleanup = () => {
+      socket = undefined; heldSocket = undefined;
+      if (window.WebSocket === Wrapped) window.WebSocket = Native;
+      delete (window as any).__t16HoldSocket; delete (window as any).__t16SocketCommand; delete (window as any).__t16SocketCleanup;
+    };
+  }).toString()})()` });
+  return async () => {
+    if (!page.isClosed()) await page.evaluate(() => (window as any).__t16SocketCleanup?.());
+    await cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: result.identifier }).catch(() => undefined);
+    await cdp.detach().catch(() => undefined);
+  };
+}

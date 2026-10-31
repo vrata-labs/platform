@@ -46,12 +46,12 @@ export async function deleteOwnedPluginRoom(value: RoomPluginOrigin, roomId: str
 
 /** One browser participant through the normal private invitation and onboarding. */
 export async function enterPluginRoom(browser: Browser, value: RoomPluginOrigin, roomId: string, role: "host" | "member" = "host",
-  name = "Owned plugin runtime Host", prepare?: (context: BrowserContext) => Promise<void>) {
+  name = "Owned plugin runtime Host", prepare?: (context: BrowserContext, page: Page) => Promise<void>) {
   const invite = await privateHttp(value.origin, `/api/rooms/${roomId}/invites`, "POST", { "x-vrata-admin-token": value.adminToken }, { role, expiresInSeconds: 1200 });
   expect(invite.status).toBe(201);
   const context = await browser.newContext({ viewport: { width: 800, height: 500 }, deviceScaleFactor: .4 });
-  await prepare?.(context);
   const page = await context.newPage(); await installFunctionalFrameBudget(page); await installMeetingPerformanceObservation(page);
+  await prepare?.(context, page);
   const requests = { plugin: 0, workers: 0, wasm: 0 };
   page.on("request", request => {
     const url = new URL(request.url());
@@ -61,7 +61,10 @@ export async function enterPluginRoom(browser: Browser, value: RoomPluginOrigin,
   });
   const admission = page.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state" && response.status() === 200);
   void admission.catch(() => undefined);
-  try { await page.goto(invite.json<{ inviteLink: string }>().inviteLink); } catch { throw new Error("owned_plugin_runtime_navigation_failed"); }
+  const link = invite.json<{ inviteLink: string }>().inviteLink;
+  const params = new URL(link).searchParams;
+  expect(params.has("invite") && !params.has("role") && !params.has("onboard")).toBe(true);
+  try { await page.goto(link); } catch { throw new Error("owned_plugin_runtime_navigation_failed"); }
   await page.locator("#guest-name-input").fill(name); await page.locator("#guest-enter-without-audio").click({ noWaitAfter: true });
   const session = await (await admission).json() as AuthorHttpSession;
   await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.sceneBundleState), { timeout: 90_000 }).toBe("loaded");
@@ -72,7 +75,9 @@ export async function enterPluginRoom(browser: Browser, value: RoomPluginOrigin,
 /** Host actor that owns its room: closing it deletes the room and its plugin blobs. */
 export async function enterOwnedPluginRoom(browser: Browser, value: RoomPluginOrigin) {
   const roomId = await createOwnedPluginRoom(value);
-  const actor = await enterPluginRoom(browser, value, roomId);
+  let actor: Awaited<ReturnType<typeof enterPluginRoom>>;
+  try { actor = await enterPluginRoom(browser, value, roomId); }
+  catch (error) { await deleteOwnedPluginRoom(value, roomId); throw error; }
   return { ...actor, admin: { "x-vrata-admin-token": value.adminToken },
     async close() { await actor.context.close(); await deleteOwnedPluginRoom(value, roomId); } };
 }

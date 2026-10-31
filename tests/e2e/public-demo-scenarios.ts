@@ -8,6 +8,9 @@ import { pathToFileURL } from "node:url";
 import { installFreshAudioObservation, readFreshAudioObservation } from "./fresh-audio-observation";
 import { createAudioProgressTracker, hasLiveAudio } from "./audio-progress";
 import { identityProtocolAt } from "./staging-identity";
+import { captureRoomAuthority, expectExactRoomAuthority, installExistingSocketControl, type RoomAuthorityCapture } from "./room-state-observation";
+import { publicDemoPluginLifecycle, publicDemoAuthorityChanges } from "./public-demo-plugins";
+import { chooseMeetingPanel } from "./meeting-tools-acceptance";
 
 type DemoRole = "host" | "member" | "guest";
 type JsonRecord = Record<string, any>;
@@ -30,6 +33,8 @@ type DemoClient = {
   audioMock: boolean;
   requireDevRoleQueryDisabled: boolean;
   pdfCapture?: PdfCommandCapture;
+  authority: RoomAuthorityCapture;
+  authorityCaptures: Map<Page, RoomAuthorityCapture>;
 };
 
 export type PublicDemoScenarioOptions = {
@@ -622,7 +627,13 @@ async function joinClientPage(input: {
   audioMock: boolean;
   requireDevRoleQueryDisabled: boolean;
   pdfCaptures?: Map<Page, PdfCommandCapture>;
+  authorityCaptures: Map<Page, RoomAuthorityCapture>;
 }, navigate = true): Promise<DemoClient> {
+  let authority = input.authorityCaptures.get(input.page);
+  if (!authority) {
+    authority = await captureRoomAuthority(input.page);
+    input.authorityCaptures.set(input.page, authority);
+  }
   let pdfCapture = input.pdfCaptures?.get(input.page);
   if (input.pdfCaptures && !pdfCapture) {
     pdfCapture = await capturePdfCommands(input.page);
@@ -642,6 +653,7 @@ async function joinClientPage(input: {
     throw new Error("public_demo_browser_join_invalid_json");
   }
   const session = assertTrustedSession(data, input.role);
+  if (data.identityProtocolVersion !== 2) throw new Error("t16_normal_onboarding_requires_identity_v2");
   await expect.poll(async () => input.page.evaluate(() => {
     const debug = (window as any).__VRATA_DEBUG__;
     return {
@@ -675,7 +687,7 @@ async function joinClientPage(input: {
     sessionToken: session.token,
     audioMock: input.audioMock,
     requireDevRoleQueryDisabled: input.requireDevRoleQueryDisabled,
-    pdfCapture
+    pdfCapture, authority, authorityCaptures: input.authorityCaptures
   };
 }
 
@@ -685,6 +697,7 @@ async function reloadClientThroughInvite(client: DemoClient): Promise<void> {
   if (rejoined.participantId !== previousParticipantId) throw new Error("public_demo_reload_changed_participant");
   client.page = rejoined.page;
   client.sessionToken = rejoined.sessionToken;
+  client.authority = rejoined.authority;
 }
 
 async function createTrackedContext(browser: Browser): Promise<BrowserContext> {
@@ -695,6 +708,7 @@ async function createTrackedContext(browser: Browser): Promise<BrowserContext> {
 }
 
 async function waitForExactPresence(clients: DemoClient[]): Promise<void> {
+  await expectExactRoomAuthority(clients, 120_000);
   const expectedIds = clients.map((client) => client.participantId);
   const snapshots = async () => Promise.all(clients.map(async (client) => client.page.evaluate((allParticipantIds) => {
        const debug = (window as any).__VRATA_DEBUG__;
@@ -793,6 +807,19 @@ async function uploadHostDocument(host: DemoClient, roomId: string, testInfo: Te
 
 async function waitForPresentation(clients: DemoClient[], pageNumber: number, documentId: string): Promise<void> {
   for (const client of clients) {
+    if (client.role === "guest") {
+      // Guests can see surface state, not protected PDF bytes. Do not promote
+      // their role merely to make a render assertion pass.
+      const denied = await sessionRequest(new URL(client.inviteLink).origin,
+        new URL(client.inviteLink).pathname.split("/").at(-1)!, client.sessionToken, "/documents", { method: "GET" }, "public_demo_guest_document_view");
+      requireStatus(denied.status, 403, "public_demo_guest_document_view");
+      await expect.poll(() => client.page.evaluate(({ documentId, pageNumber }) => {
+        const debug = (window as any).__VRATA_DEBUG__;
+        return debug?.access?.permissions?.includes("document.view") === false
+          && debug?.pdfPresentation?.documentId === documentId && debug?.pdfPresentation?.page === pageNumber;
+      }, { documentId, pageNumber }), { timeout: 30_000 }).toBe(true);
+      continue;
+    }
     await client.page.bringToFront();
     const snapshot = async () => client.page.evaluate(({ expectedPage, documentId }) => {
       const debug = (window as any).__VRATA_DEBUG__;
@@ -1179,6 +1206,9 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
   const contexts: BrowserContext[] = [];
   const clients: DemoClient[] = [];
   const pdfCaptures = new Map<Page, PdfCommandCapture>();
+  const authorityCaptures = new Map<Page, RoomAuthorityCapture>();
+  const socketCleanups: Array<() => Promise<void>> = [];
+  let pluginLifecycle: Awaited<ReturnType<typeof publicDemoPluginLifecycle>> | undefined;
   const environment = options.staging ? "staging" : "local";
   let phase = "seed";
   let primaryError: unknown;
@@ -1197,6 +1227,7 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
   }
 
   try {
+    if (await identityProtocolAt(options.origin) !== 2) throw new Error("t16_requires_activated_identity_v2");
     await demo.seedPublicDemo({
       baseUrl: options.origin,
       stateFile,
@@ -1247,17 +1278,19 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
 
     setPhase("four-participant-join");
     let hostPage = await contexts[0]!.newPage();
+    socketCleanups.push(await installExistingSocketControl(hostPage));
     const host = await joinClientPage({
       context: contexts[0]!, page: hostPage, role: "host", inviteLink: hostInvite,
       displayName: "Public Demo Host", audioMock: options.staging, requireDevRoleQueryDisabled: !options.staging,
-      pdfCaptures
+      pdfCaptures, authorityCaptures
     });
     clients.push(host);
     console.log(`public-demo:${environment}:host-joined`);
     let firstMemberPage = await contexts[1]!.newPage();
+    socketCleanups.push(await installExistingSocketControl(firstMemberPage));
     const firstMember = await joinClientPage({
       context: contexts[1]!, page: firstMemberPage, role: "member", inviteLink: memberInvites[0] as string,
-      displayName: "Public Demo Member One", audioMock: options.staging, requireDevRoleQueryDisabled: !options.staging
+      displayName: "Public Demo Member One", audioMock: options.staging, requireDevRoleQueryDisabled: !options.staging, authorityCaptures
     });
     clients.push(firstMember);
     console.log(`public-demo:${environment}:member-one-joined`);
@@ -1275,21 +1308,25 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
     let secondMemberPage = await contexts[2]!.newPage();
     const secondMember = await joinClientPage({
       context: contexts[2]!, page: secondMemberPage, role: "member", inviteLink: memberInvites[1] as string,
-      displayName: "Public Demo Member Two", audioMock: false, requireDevRoleQueryDisabled: !options.staging
+      displayName: "Public Demo Member Two", audioMock: false, requireDevRoleQueryDisabled: !options.staging, authorityCaptures
     });
     clients.push(secondMember);
     console.log(`public-demo:${environment}:member-two-joined`);
     let guestPage = await contexts[3]!.newPage();
     const guest = await joinClientPage({
       context: contexts[3]!, page: guestPage, role: "guest", inviteLink: guestInvite,
-      displayName: "Public Demo Guest", audioMock: false, requireDevRoleQueryDisabled: !options.staging
+      displayName: "Public Demo Guest", audioMock: false, requireDevRoleQueryDisabled: !options.staging, authorityCaptures
     });
     clients.push(guest);
     console.log(`public-demo:${environment}:guest-joined`);
     if (new Set(clients.map((client) => client.participantId)).size !== 4) throw new Error("public_demo_participant_ids_not_unique");
     await waitForExactPresence(clients);
 
+    setPhase("external-author-ui-lifecycle");
+    pluginLifecycle = await publicDemoPluginLifecycle(options.origin, roomId, host, firstMember, guest);
+
     setPhase("host-own-document-upload");
+    await chooseMeetingPanel(host.page, "present", false);
     await expect(host.page.locator("#documents-panel")).toBeVisible();
     await expect(host.page.locator("#document-select")).toBeEnabled({ timeout: 30_000 });
     await expect(host.page.locator("#document-select")).toHaveValue(state.resources.document.documentId, { timeout: 30_000 });
@@ -1328,6 +1365,9 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
       body: JSON.stringify({ content: "Guest must not overwrite the shared note." })
     }, "public_demo_guest_note_write");
     requireStatus(guestNoteWrite.status, 403, "public_demo_guest_note_write");
+    const noteAfterDenial = await sessionRequest(options.origin, roomId, secondMember.sessionToken, "/notes/shared", { method: "GET" }, "public_demo_guest_note_unchanged");
+    requireStatus(noteAfterDenial.status, 200, "public_demo_guest_note_unchanged");
+    expect(JSON.stringify(noteAfterDenial.data) === JSON.stringify(savedNote.data)).toBe(true);
 
     setPhase("presentation-page-two");
     await waitForPresentation([host], 1, ownDocumentId);
@@ -1346,6 +1386,7 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
     guest.page = rejoinedGuest.page;
     guest.participantId = rejoinedGuest.participantId;
     guest.sessionToken = rejoinedGuest.sessionToken;
+    guest.authority = rejoinedGuest.authority;
     if (new Set(clients.map((client) => client.participantId)).size !== 4) throw new Error("public_demo_rejoin_participant_ids_not_unique");
     await Promise.all([
       waitForPresentation([firstMember, guest], 2, ownDocumentId),
@@ -1363,7 +1404,12 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
       method: "POST"
     }, "public_demo_guest_session_control");
     requireStatus(guestSessionControl.status, 403, "public_demo_guest_session_control");
+    const documentsBeforeDenial = await sessionRequest(options.origin, roomId, host.sessionToken, "/documents", { method: "GET" }, "public_demo_guest_document_before");
+    requireStatus(documentsBeforeDenial.status, 200, "public_demo_guest_document_before");
     await denyGuestPresentationControl(guest, roomId, ownDocumentId);
+    const documentsAfterDenial = await sessionRequest(options.origin, roomId, host.sessionToken, "/documents", { method: "GET" }, "public_demo_guest_document_after");
+    requireStatus(documentsAfterDenial.status, 200, "public_demo_guest_document_after");
+    expect(JSON.stringify(documentsBeforeDenial.data) === JSON.stringify(documentsAfterDenial.data)).toBe(true);
 
     setPhase("presentation-page-three");
     await activateButton(host.page, "#presentation-next", {
@@ -1378,7 +1424,7 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
     await activateButton(host.page, "#lock-room");
     setPhase("host-lock-active");
     await expect.poll(async () => {
-      const result = await adminJson(options.origin, options.adminToken, `/api/rooms/${roomId}/session-control`, { method: "GET" }, "public_demo_lock_state");
+      const result = await sessionRequest(options.origin, roomId, host.sessionToken, "/session-control", { method: "GET" }, "public_demo_lock_state");
       return result.status === 200 && Boolean(result.data.state?.lockedAt);
     }, { timeout: 120_000, intervals: [500, 1_000, 2_000] }).toBe(true);
     await expect(host.page.locator("#host-controls-status")).toContainText("Room locked", { timeout: 120_000 });
@@ -1387,7 +1433,7 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
     await activateButton(host.page, "#unlock-room");
     setPhase("host-lock-released");
     await expect.poll(async () => {
-      const result = await adminJson(options.origin, options.adminToken, `/api/rooms/${roomId}/session-control`, { method: "GET" }, "public_demo_unlock_state");
+      const result = await sessionRequest(options.origin, roomId, host.sessionToken, "/session-control", { method: "GET" }, "public_demo_unlock_state");
       return result.status === 200 && !result.data.state?.lockedAt;
     }, { timeout: 120_000, intervals: [500, 1_000, 2_000] }).toBe(true);
     await expect(host.page.locator("#host-controls-status")).toContainText(/Room (unlocked|open)/, { timeout: 120_000 });
@@ -1396,6 +1442,7 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
     guest.page = unlockedGuest.page;
     guest.participantId = unlockedGuest.participantId;
     guest.sessionToken = unlockedGuest.sessionToken;
+    guest.authority = unlockedGuest.authority;
     setPhase("host-lock-guest-rejoined");
     await waitForExactPresence(clients);
 
@@ -1438,11 +1485,19 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
     } else {
       await expect(guest.page.locator("#status-line")).toContainText("Access denied: removed by host", { timeout: 120_000 });
     }
+    setPhase("presenter-and-former-host-authority");
+    await publicDemoAuthorityChanges(options.origin, roomId, host, firstMember, pluginLifecycle, ownDocumentId);
+    pluginLifecycle.assertNormalAuthorRequests();
+    await waitForExactPresence([host, firstMember, secondMember]);
     phase = "completed";
   } catch (error) {
     primaryError = error;
     await attachAllowlistedDiagnostics(options.testInfo, environment, phase, clients).catch(() => undefined);
   } finally {
+    try { await pluginLifecycle?.close(); } catch { cleanupFailed = true; }
+    for (const cleanup of socketCleanups) { try { await cleanup(); } catch { cleanupFailed = true; } }
+    for (const capture of authorityCaptures.values()) { try { await capture.close(); } catch { cleanupFailed = true; } }
+    authorityCaptures.clear();
     try {
       const captures = await Promise.all(Array.from(pdfCaptures, async ([page, capture]) => {
         const finalPreconditions = page.isClosed() ? null : await page.evaluate(pdfActionSnapshot, {
