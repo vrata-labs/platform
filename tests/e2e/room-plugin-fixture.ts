@@ -7,6 +7,7 @@ import { installFunctionalFrameBudget } from "./functional-frame-budget";
 import { installMeetingPerformanceObservation, readMeetingPerformance } from "./meeting-tools-acceptance";
 import { privateHttp, bearer, pluginPath, type ExternalArtifact } from "./plugin-author-scenarios";
 import type { AuthorHttpSession, AuthorHttpPackage } from "../../apps/api/src/plugins/author-http.test-helper";
+import { cleanupAll, withCleanup } from "./test-cleanup";
 
 const secret = "owned-t07-room-runtime-state-secret-32-bytes";
 export type RoomPluginFixture = Awaited<ReturnType<typeof startRoomPluginFixture>>;
@@ -50,26 +51,31 @@ export async function enterPluginRoom(browser: Browser, value: RoomPluginOrigin,
   const invite = await privateHttp(value.origin, `/api/rooms/${roomId}/invites`, "POST", { "x-vrata-admin-token": value.adminToken }, { role, expiresInSeconds: 1200 });
   expect(invite.status).toBe(201);
   const context = await browser.newContext({ viewport: { width: 800, height: 500 }, deviceScaleFactor: .4 });
-  const page = await context.newPage(); await installFunctionalFrameBudget(page); await installMeetingPerformanceObservation(page);
-  await prepare?.(context, page);
-  const requests = { plugin: 0, workers: 0, wasm: 0 };
-  page.on("request", request => {
-    const url = new URL(request.url());
-    if (url.pathname.includes("/plugins/")) requests.plugin++;
-    if (/room-plugin-(?:worker|kernel)-/.test(url.pathname)) requests.workers++;
-    if (/emscripten.*\.wasm$/.test(url.pathname)) requests.wasm++;
-  });
-  const admission = page.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state" && response.status() === 200);
-  void admission.catch(() => undefined);
-  const link = invite.json<{ inviteLink: string }>().inviteLink;
-  const params = new URL(link).searchParams;
-  expect(params.has("invite") && !params.has("role") && !params.has("onboard")).toBe(true);
-  try { await page.goto(link); } catch { throw new Error("owned_plugin_runtime_navigation_failed"); }
-  await page.locator("#guest-name-input").fill(name); await page.locator("#guest-enter-without-audio").click({ noWaitAfter: true });
-  const session = await (await admission).json() as AuthorHttpSession;
-  await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.sceneBundleState), { timeout: 90_000 }).toBe("loaded");
-  await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected), { timeout: 30_000 }).toBe(true);
-  return { page, context, requests, session, roomId };
+  try {
+    const page = await context.newPage(); await installFunctionalFrameBudget(page); await installMeetingPerformanceObservation(page);
+    await prepare?.(context, page);
+    const requests = { plugin: 0, workers: 0, wasm: 0 };
+    page.on("request", request => {
+      const url = new URL(request.url());
+      if (url.pathname.includes("/plugins/")) requests.plugin++;
+      if (/room-plugin-(?:worker|kernel)-/.test(url.pathname)) requests.workers++;
+      if (/emscripten.*\.wasm$/.test(url.pathname)) requests.wasm++;
+    });
+    const admission = page.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state" && response.status() === 200);
+    void admission.catch(() => undefined);
+    const link = invite.json<{ inviteLink: string }>().inviteLink;
+    const params = new URL(link).searchParams;
+    expect(params.has("invite") && !params.has("role") && !params.has("onboard")).toBe(true);
+    try { await page.goto(link); } catch { throw new Error("owned_plugin_runtime_navigation_failed"); }
+    await page.locator("#guest-name-input").fill(name); await page.locator("#guest-enter-without-audio").click({ noWaitAfter: true });
+    const session = await (await admission).json() as AuthorHttpSession;
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.sceneBundleState), { timeout: 90_000 }).toBe("loaded");
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected), { timeout: 30_000 }).toBe(true);
+    return { page, context, requests, session, roomId };
+  } catch (error) {
+    await cleanupAll([() => context.close()], { error });
+    throw error;
+  }
 }
 
 /** Host actor that owns its room: closing it deletes the room and its plugin blobs. */
@@ -77,22 +83,13 @@ export async function enterOwnedPluginRoom(browser: Browser, value: RoomPluginOr
   const roomId = await createOwnedPluginRoom(value);
   let actor: Awaited<ReturnType<typeof enterPluginRoom>>;
   try { actor = await enterPluginRoom(browser, value, roomId); }
-  catch (error) { await deleteOwnedPluginRoom(value, roomId); throw error; }
+  catch (error) { await cleanupAll([() => deleteOwnedPluginRoom(value, roomId)], { error }); throw error; }
   return { ...actor, admin: { "x-vrata-admin-token": value.adminToken },
-    async close() { await actor.context.close(); await deleteOwnedPluginRoom(value, roomId); } };
+    async close() { await cleanupAll([() => actor.context.close(), () => deleteOwnedPluginRoom(value, roomId)]); } };
 }
 
 export async function useOwnedActor(actor: { close(): Promise<void> }, run: () => Promise<void>) {
-  let failed = false;
-  try { await run(); }
-  catch (error) { failed = true; throw error; }
-  finally {
-    try { await actor.close(); }
-    catch (error) {
-      if (!failed) throw error;
-      console.warn("owned_plugin_runtime_cleanup_also_failed");
-    }
-  }
+  return withCleanup(run, () => [() => actor.close()]);
 }
 
 type Actor = { roomId: string; session: AuthorHttpSession };

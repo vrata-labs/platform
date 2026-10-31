@@ -1,8 +1,10 @@
 import { expect, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
+import { cleanupAll } from "./test-cleanup";
 
-type Snapshot = { participants: string[]; occupancy: Record<string, string>; mediaHash: string };
-type Command = { commandId: string; type: string; seatId: string | null; accepted: boolean | null; occupantId: string | null };
+type SocketScope = { socketScope: string; generation: number; sequence: number };
+type Snapshot = SocketScope & { participants: string[]; occupancy: Record<string, string>; mediaHash: string };
+type Command = SocketScope & { commandId: string; type: string; seatId: string | null; accepted: boolean | null; occupantId: string | null; permissionDenied: boolean };
 const id = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9._:-]{1,200}$/.test(value);
 
 /** Passive CDP observation of the client's EXISTING authenticated transport.
@@ -10,37 +12,52 @@ const id = (value: unknown): value is string => typeof value === "string" && /^[
  * Only bounded allowlisted DTOs live in memory; callers assert booleans, not DTOs. */
 export async function captureRoomAuthority(page: Page) {
   const cdp = await page.context().newCDPSession(page);
-  const sockets = new Set<string>();
+  const sockets = new Map<string, SocketScope>();
   const commands: Command[] = [];
+  const barriers = new Set<{ participantId: string; marker: number; observed: Snapshot | null }>();
   let latest: Snapshot | null = null, received = 0, connections = 0;
   const created = (event: { requestId: string; url: string }) => {
     try {
       const query = new URL(event.url).searchParams;
       if (query.has("roomId") && query.has("participantId") && query.has("accessToken") && sockets.size < 32) {
-        sockets.add(event.requestId); connections++;
+        connections++;
+        sockets.set(event.requestId, { socketScope: `socket-${connections}`, generation: connections, sequence: 0 });
+        latest = null; // A previous connection cannot prove admission of this one.
       }
     } catch { /* Never retain URL/error data. */ }
   };
-  const closed = (event: { requestId: string }) => { sockets.delete(event.requestId); };
+  const closed = (event: { requestId: string }) => {
+    const scope = sockets.get(event.requestId);
+    if (scope?.generation === latest?.generation) latest = null;
+    for (const barrier of barriers) if (barrier.observed?.generation === scope?.generation) barrier.observed = null;
+    sockets.delete(event.requestId);
+  };
   const frame = (direction: "sent" | "received", event: { requestId: string; response: { opcode: number; payloadData: string } }) => {
     if (!sockets.has(event.requestId) || event.response.opcode !== 1 || event.response.payloadData.length > 262_144) return;
+    const scope = sockets.get(event.requestId)!;
+    scope.sequence++;
     let payload: any;
     try { payload = JSON.parse(event.response.payloadData); } catch { return; }
     if (direction === "received" && payload?.type === "room_state") {
+      if (scope.generation !== connections) return; // An overlapping old transport is not current authority.
       const room = payload.room;
       if (!Array.isArray(room?.participants) || room.participants.length > 64 || !room.participants.every((p: any) => id(p?.participantId))) return;
       const entries = Object.entries(room.seatOccupancy ?? {});
       if (entries.length > 64 || !entries.every(([seat, pid]) => id(seat) && id(pid))) return;
-      latest = { participants: room.participants.map((p: any) => p.participantId), occupancy: Object.fromEntries(entries) as Record<string, string>,
+      latest = { ...scope, participants: room.participants.map((p: any) => p.participantId), occupancy: Object.fromEntries(entries) as Record<string, string>,
         mediaHash: createHash("sha256").update(JSON.stringify(room.mediaObjects ?? null)).digest("hex") };
+      for (const barrier of barriers) {
+        if (room.participants.some((p: any) => p.participantId === barrier.participantId && p.clientTimeMs === barrier.marker)) barrier.observed = latest;
+      }
       received++;
       return;
     }
     const value = direction === "sent" ? payload : payload?.seatClaimResult ?? payload?.seatReleaseResult ?? payload?.result;
     if (!id(value?.commandId) || !/^(?:plugin-seat:|plugin-release:|t16-)/.test(value.commandId)) return;
     if (!["seat_claim", "seat_release", "seat_claim_result", "seat_release_result", "surface_create_object", "access_denied", "surface_command_result"].includes(payload.type)) return;
-    commands.push({ commandId: value.commandId, type: payload.type, seatId: id(value.seatId) ? value.seatId : null,
-      accepted: typeof value.accepted === "boolean" ? value.accepted : null, occupantId: id(value.occupantId) ? value.occupantId : null });
+    commands.push({ ...scope, commandId: value.commandId, type: payload.type, seatId: id(value.seatId) ? value.seatId : null,
+      accepted: typeof value.accepted === "boolean" ? value.accepted : null, occupantId: id(value.occupantId) ? value.occupantId : null,
+      permissionDenied: value.blockedReason === "missing-permission" });
     if (commands.length > 128) commands.shift();
   };
   const sent = (event: any) => frame("sent", event), incoming = (event: any) => frame("received", event);
@@ -53,12 +70,22 @@ export async function captureRoomAuthority(page: Page) {
     snapshot: () => latest,
     received: () => received,
     connections: () => connections,
+    generation: () => connections,
     commands: () => commands,
+    watchParticipantBarrier(participantId: string, marker: number) {
+      if (!id(participantId) || !Number.isSafeInteger(marker) || barriers.size >= 8) throw new Error("t16_invalid_authority_barrier");
+      const barrier = { participantId, marker, observed: null as Snapshot | null };
+      barriers.add(barrier);
+      return { snapshot: () => barrier.observed?.generation === connections ? barrier.observed : null,
+        close: () => { barriers.delete(barrier); barrier.observed = null; } };
+    },
     async close() {
       cdp.off("Network.webSocketCreated", created); cdp.off("Network.webSocketClosed", closed);
       cdp.off("Network.webSocketFrameSent", sent); cdp.off("Network.webSocketFrameReceived", incoming);
       sockets.clear(); commands.length = 0; latest = null;
-      await cdp.detach().catch(() => undefined); // A closed page has already detached its session.
+      for (const barrier of barriers) barrier.observed = null;
+      barriers.clear();
+      if (!page.isClosed()) await cdp.detach(); // A closed page has already detached its session.
     }
   };
 }
@@ -123,8 +150,10 @@ export async function installExistingSocketControl(page: Page) {
     };
   }).toString()})()` });
   return async () => {
-    if (!page.isClosed()) await page.evaluate(() => (window as any).__t16SocketCleanup?.());
-    await cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: result.identifier }).catch(() => undefined);
-    await cdp.detach().catch(() => undefined);
+    await cleanupAll([
+      () => !page.isClosed() ? page.evaluate(() => (window as any).__t16SocketCleanup?.()) : undefined,
+      () => !page.isClosed() ? cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: result.identifier }) : undefined,
+      () => !page.isClosed() ? cdp.detach() : undefined
+    ]);
   };
 }

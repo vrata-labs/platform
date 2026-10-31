@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import { bearer, pluginPath, privateHttp, type ExternalArtifact } from "./plugin-author-scenarios";
 import { enterOwnedPluginRoom, enterPluginRoom, installPluginArtifact, startRoomPluginFixture, useOwnedActor } from "./room-plugin-fixture";
 import { runAutoSeatScenario, runNoAnchorAutoSeatScenario } from "./room-plugin-auto-seat-scenarios";
+import { startNoAnchorRoomPluginFixture } from "./room-plugin-no-anchor-fixture";
+import { withCleanup } from "./test-cleanup";
 
 // Room invitations, RS2 and private config must never enter trace/video/snapshots.
 test.use({ trace: "off", screenshot: "off", video: "off" });
@@ -16,16 +18,13 @@ const seatState = (page: Page) => page.evaluate(() => {
 const capabilities = ["seating.claimSelfOnEntry", "seating.cancelPendingOwnClaim", "status.set"];
 test("isolated v2 auto-seat gives four simultaneous entries four confirmed seats; stand, reload and disable keep people's choices", async ({ browser }) => {
   test.setTimeout(600_000); const value = await startRoomPluginFixture(2);
-  try {
-    await runAutoSeatScenario(browser, value);
-  } finally { await value.close(); }
+  await withCleanup(() => runAutoSeatScenario(browser, value), () => [() => value.close()]);
 });
 
 test("isolated v2 external auto-seat with no scene anchors stays standing without a claim", async ({ browser }) => {
   test.setTimeout(180_000);
-  const value = await startRoomPluginFixture(2);
-  try { await runNoAnchorAutoSeatScenario(browser, value); }
-  finally { await value.close(); }
+  const value = await startNoAnchorRoomPluginFixture();
+  await withCleanup(() => runNoAnchorAutoSeatScenario(browser, value), () => [() => value.close()]);
 });
 
 test("isolated v2 member whose browser cannot host plugins enters normally, is never auto-seated and seats manually", async ({ browser }) => {

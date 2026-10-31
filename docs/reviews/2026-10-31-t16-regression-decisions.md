@@ -59,3 +59,43 @@
 - Основание: apps/room-state/package.json:test и нижний autostart в index.ts. Прямой node --test без fence импортировал service entry point и оставлял запущенный сервер после assertions.
 - Последствия: прерванные прогоны остаются видимыми; последующий правильный запуск не переименовывает их в успешные. Полный local и package contract остаются required=true.
 - Проверка: отдельный runtime focused прошёл 355/355, room-state с fence —34/34, без skips. Исправленный общий focused-unit ещё требуется выполнить; browser/full/published gates остаются открыты.
+
+## D-055 — 2026-10-31 — Старый focused browser прерван до исправления подтверждённых дефектов
+
+- Контекст: на b998bc5 уже выполнялся focused; продолжение после обнаружения пяти дефектов тестовых свидетельств не проверяло бы окончательное дерево.
+- Решение: установить точные PID/владение script → work-check → browser, завершить только его browser process group и оставшиеся собственные services. Runner сохранил terminal receipt до изменения файлов.
+- Основание: общий focused-unit завершён:155+355 passed,0 skipped; browser receipt exit−15. До прерывания browser отметил8 passed и2 failed; итогового JSON report нет. Исходные логи/receipts не удалены и не переименованы в passed.
+- Последствия: новый focused — только после commit последних правок, с отдельными именами отчётов. Старые ошибки не заменяются новым успехом. Full/package/published gates остаются обязательными; исходный checkout, внешний план и T17 не меняются.
+- Проверка: все PID зафиксированного дерева завершены, локальные4416/25676/4417 освобождены. Другие процессы и контейнеры не изменялись.
+
+## D-056 — 2026-10-31 — Реальное действие старого сокета и наблюдательный media barrier
+
+- Контекст: surface_create_object без probeOnly:false проверял лишь permission probe и не возвращал commandId; немедленный cached media hash другого клиента не доказывал отсутствие эффекта.
+- Решение: реальный поддерживаемый create на сохранённом до revoke/transfer открытом сокете, обязательный sent и correlated access_denied/missing-permission на том же socket scope. После ответа через этот же сокет отправляется безвредный participant_update с уникальным clientTimeMs; reader обязан увидеть именно этот marker в новом room_state и неизменный media hash.
+- Основание: существующие dispatch/ordered socket guard и applyParticipantUpdate/broadcast; production protocol/probe не меняются. Свежесть snapshot привязана к test-only socket scope/generation/sequence, close/new connection инвалидируют старый snapshot. Reload/reconnect ждут room_state новой generation.
+- Последствия: marker не меняет pose/роль/права и не сохраняется в DTO/артефактах. Потерянный/старый snapshot не закрывает проверку. Одни глобальные receive/connect counters больше не являются reconnect witness.
+- Проверка: source probe реального create подтвердил correlated permission denial/unchanged media и разрешённый Host positive control; лёгкие tests отклоняют closed/overlapping old snapshots и cached/unrelated media barrier. Browser ещё требуется.
+
+## D-057 — 2026-10-31 — No-anchor использует собственный non-reference template
+
+- Контекст: personal-workspace-basic deprecated в active catalog; reference scene override намеренно запрещён продуктовым контрактом.
+- Решение: отдельная disposable fixture добавляет свой non-reference template/version только в свою проверенную schema. Inline scene задаётся при штатном POST room; перед закрытием fixture её template скрывается, затем базовая fixture проверяет reference catalog и удаляет schema/services/files.
+- Основание: storage version/hash contract и resolveRoomTemplateCreate. Замена shared template policy или shared GLB ради теста не нужна.
+- Последствия: новый template не публикуется и не попадает в shared catalog; no-anchor остаётся local/C, не published X.
+- Проверка: настоящие PostgreSQL/API вернули201 на inline room; meeting-room-basic сохранил2.0.0, room и fixture закрылись. Два ранних probe harness failures (непереданные VM globals/default-import interop) сохранены отдельно, не product failures. Browser assertions ещё открыты.
+
+## D-058 — 2026-10-31 — Отменённая посадка проверяется до исправляющего empty snapshot
+
+- Контекст: replay всего потока мог скрыть краткую ошибочную посадку последующим empty/release.
+- Решение: сначала доставить только удержанные occupied snapshot/accepted с commandId отменённой попытки; дождаться фактических delivery counters и двух кадров, проверить current/pending=null и неизменный standing root pose. Только затем доставить остаток в исходном порядке, correlated release и exact authoritative empty/no ghosts.
+- Основание: in-memory mutation control на существующем SeatingController: сломанное suppression проваливает промежуточный standing, хотя конечный standing восстанавливается.
+- Последствия: release по-прежнему обязан уйти до штатного3000ms timeout. Нет прямых pose writes, изменения lifecycle продукта или увеличения timeout.
+- Проверка: mutation control и строгие типы прошли; actual browser delivery/frame witness требует нового focused/full/X.
+
+## D-059 — 2026-10-31 — Независимая очистка и сохранение всех ошибок
+
+- Контекст: неуспешный enterPluginRoom мог не вернуть уже созданный context; первая ошибка cleanup могла пропустить другие contexts, внешний проект и удаление room.
+- Решение: enterPluginRoom закрывает собственный context при любом неуспехе. Общий test-only cleanupAll/withCleanup независимо пытается закрыть все ресурсы; при cleanup errors выбрасывает AggregateError с исходной ошибкой и cause. Owned actor всегда пытается удалить room; pending entries дожидаются завершения после закрытия contexts, их ошибки не теряются.
+- Основание: отдельные лёгкие tests на newPage/prepare/navigation/admission/scene failures, совместный primary+close failure, actor-close failure и независимость observer/contexts/author/room cleanup.
+- Последствия: закономерно уже закрытые pages не требуют повторного CDP/route close; другие cleanup failures не подавляются. Production и прежний sandbox/storage suite не меняются.
+- Проверка:11/11 helper tests,0 failed/skipped; строгая проверка типов пройдена. Финальный focused work-check после commit ещё обязателен; T16 остаётся NOT_READY.

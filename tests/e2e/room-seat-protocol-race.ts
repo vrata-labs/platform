@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { bearer, inviteTokenFromLink, privateHttp } from "./plugin-author-scenarios";
 import { admitInvitation } from "./staging-identity";
 import type { RoomPluginOrigin } from "./room-plugin-fixture";
+import { withCleanup } from "./test-cleanup";
 
 /** Two genuine contenders (not observers), with no additional 3D renderers. */
 export async function runSeatProtocolRace(value: RoomPluginOrigin, roomId: string, liveIds: string[], seatId: string) {
@@ -11,7 +12,7 @@ export async function runSeatProtocolRace(value: RoomPluginOrigin, roomId: strin
   const actors: Array<{ socket: any; participantId: string; result?: { commandId: string; accepted: boolean; occupantId: string };
     snapshot?: { ids: string[]; occupancy: Record<string, string> }; released: boolean }> = [];
   const inviteIds: string[] = [];
-  try {
+  await withCleanup(async () => {
     for (let index = 0; index < 2; index++) {
       const invitation = await privateHttp(value.origin, `/api/rooms/${roomId}/invites`, "POST", { "x-vrata-admin-token": value.adminToken }, { role: "member", expiresInSeconds: 600 });
       expect(invitation.status).toBe(201);
@@ -51,9 +52,11 @@ export async function runSeatProtocolRace(value: RoomPluginOrigin, roomId: strin
     await expect.poll(() => actors.every(actor => actor.snapshot?.occupancy[seatId] === winner.participantId), { timeout: 15_000 }).toBe(true);
     winner.socket.send(JSON.stringify({ type: "seat_release", seatId, commandId: "t16-race-release" }));
     await expect.poll(() => winner.released && actors.every(actor => !actor.snapshot?.occupancy[seatId]), { timeout: 15_000 }).toBe(true);
-  } finally {
-    for (const actor of actors) { actor.socket.removeAllListeners("message"); actor.socket.close(); actor.snapshot = undefined; actor.result = undefined; }
-    for (const inviteId of inviteIds) expect((await privateHttp(value.origin, `/api/rooms/${roomId}/invites/${inviteId}/revoke`, "POST",
-      { "x-vrata-admin-token": value.adminToken })).status).toBe(200);
-  }
+  }, () => [
+    ...actors.map(actor => () => actor.socket.removeAllListeners("message")),
+    ...actors.map(actor => () => actor.socket.close()),
+    () => { for (const actor of actors) { actor.snapshot = undefined; actor.result = undefined; } },
+    ...inviteIds.map(inviteId => async () => expect((await privateHttp(value.origin, `/api/rooms/${roomId}/invites/${inviteId}/revoke`, "POST",
+      { "x-vrata-admin-token": value.adminToken })).status).toBe(200))
+  ]);
 }

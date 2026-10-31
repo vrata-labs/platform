@@ -5,6 +5,7 @@ import { captureRoomAuthority, expectExactRoomAuthority, type RoomAuthorityCaptu
 import { runSeatProtocolRace } from "./room-seat-protocol-race";
 import { identityProtocolAt } from "./staging-identity";
 import { inlineSceneBundleUrl } from "./scene-bundle-fixtures";
+import { cleanupAll, withCleanup } from "./test-cleanup";
 
 export const seatState = (page: Page) => page.evaluate(() => {
   const debug = (window as any).__VRATA_DEBUG__;
@@ -19,7 +20,7 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
   const captures: RoomAuthorityCapture[] = [];
   const author = await createExternalAuthorProject(await downloadPublicSdk(value.origin, "0.2.0"), "0.2.0");
   const contexts: Array<{ close(): Promise<void> }> = [];
-  try {
+  await withCleanup(async () => {
     const host = await enterOwnedPluginRoom(browser, value);
     await useOwnedActor(host, async () => {
       const pkg = await installPluginArtifact(value, host, await author.buildAutoSeat());
@@ -34,7 +35,7 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
       await put(true);
       await host.context.close();
       const observe = async (page: Page) => { const capture = await captureRoomAuthority(page); captures.push(capture); return capture; };
-      const routes: WebSocketRoute[] = [], pages: Page[] = [];
+      const routes: Array<{ route: WebSocketRoute; page: Page }> = [], pages: Page[] = [];
       let barrierOpen = false;
       const observations = new Map<Page, RoomAuthorityCapture>();
       const entries = [1, 2, 3, 4].map(index => enterPluginRoom(browser, value, host.roomId, "member", `Auto-seat member ${index}`, async (context, page) => {
@@ -42,15 +43,15 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
         // All four real clients finish scene loading before any gets the initial
         // authoritative snapshot. No fabricated readiness, snapshots or claims.
         await page.routeWebSocket(url => url.searchParams.has("roomId"), socket => {
-          if (barrierOpen) socket.connectToServer(); else routes.push(socket);
+          if (barrierOpen) socket.connectToServer(); else routes.push({ route: socket, page });
         });
       }));
       const settled = Promise.all(entries); void settled.catch(() => undefined);
-      try {
+      await withCleanup(async () => {
         await expect.poll(() => pages.length === 4 && routes.length === 4, { timeout: 90_000 }).toBe(true);
         await Promise.all(pages.map(page => expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.sceneBundleState), { timeout: 90_000 }).toBe("loaded")));
         barrierOpen = true;
-        for (const route of routes) route.connectToServer();
+        for (const { route } of routes) route.connectToServer();
         const members = (await settled).map(member => ({ ...member, participantId: member.session.participantId, authority: observations.get(member.page)! }));
         for (const member of members) await expect.poll(async () => Boolean((await seatState(member.page)).currentSeatId), { timeout: 60_000 }).toBe(true);
         const seated = await Promise.all(members.map(member => seatState(member.page)));
@@ -68,6 +69,7 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
         await expect(first.page.locator("#room-plugin-seat-choice-input")).not.toBeChecked();
         await expectExactRoomAuthority(members);
         const previous = first.participantId;
+        const beforeReload = first.authority.generation();
         const readmission = first.page.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state" && response.status() === 200);
         void readmission.catch(() => undefined);
         await first.page.reload();
@@ -75,11 +77,11 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
         await first.page.locator("#guest-enter-without-audio").click({ noWaitAfter: true });
         const session = await (await readmission).json();
         expect(session.participantId === previous).toBe(true);
+        await expect.poll(() => (first.authority.snapshot()?.generation ?? 0) > beforeReload, { timeout: 30_000 }).toBe(true);
         await expectExactRoomAuthority(members);
-        const beforeReconnect = first.authority.received();
-        const connectionsBeforeReconnect = first.authority.connections();
+        const beforeReconnect = first.authority.generation();
         await first.page.evaluate(() => (window as any).__VRATA_TEST__.forceRoomStateReconnect());
-        await expect.poll(() => first.authority.connections() > connectionsBeforeReconnect && first.authority.received() > beforeReconnect, { timeout: 30_000 }).toBe(true);
+        await expect.poll(() => (first.authority.snapshot()?.generation ?? 0) > beforeReconnect, { timeout: 30_000 }).toBe(true);
         await expectExactRoomAuthority(members);
         await first.page.waitForTimeout(6000);
         expect((await seatState(first.page)).currentSeatId).toBeNull();
@@ -98,24 +100,30 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
         await put(true);
         await disablePendingClaim(browser, value, host.roomId, put, lateActor, contexts, observations, observe);
         await author.assertNotExecuted();
-      } finally {
+      }, () => [
         // Release a failed readiness barrier before closing pages; no pending routes remain.
-        for (const route of routes) await route.close().catch(() => undefined);
-        routes.length = 0; pages.length = 0; observations.clear();
-      }
+        () => { barrierOpen = true; },
+        ...routes.map(({ route, page }) => () => !page.isClosed() ? route.close() : undefined),
+        // Closing entrants also settles failed pending admission waits before room deletion.
+        () => cleanupAll(contexts.map(context => () => context.close())),
+        async () => {
+          const results = await Promise.allSettled(entries);
+          const errors = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+          if (errors.length) throw new AggregateError(errors, "owned_test_entries_failed");
+        },
+        () => cleanupAll(contexts.map(context => () => context.close())),
+        () => { routes.length = 0; pages.length = 0; observations.clear(); }
+      ]);
     });
-  } finally {
-    for (const capture of captures) await capture.close();
-    for (const context of contexts) await context.close();
-    captures.length = 0; contexts.length = 0;
-    await author.close();
-  }
+  }, () => [...captures.map(capture => () => capture.close()), ...contexts.map(context => () => context.close()),
+    () => { captures.length = 0; contexts.length = 0; }, () => author.close()]);
 }
 
 async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, roomId: string, put: (enabled: boolean) => Promise<void>,
   witness: { page: Page; participantId: string; authority: RoomAuthorityCapture }, contexts: Array<{ close(): Promise<void> }>,
   observations: Map<Page, RoomAuthorityCapture>, observe: (page: Page) => Promise<RoomAuthorityCapture>) {
   let held = false, accepted = false, releaseAck = false, claimAt = 0, releaseAt = 0;
+  let claimId = "", claimedSeat = "", releaseId = "";
   const queue: Array<{ type: string; frame: string | Buffer }> = [];
   let transport: WebSocketRoute | undefined;
   let pendingPage: Page | undefined;
@@ -127,8 +135,12 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
       const server = socket.connectToServer();
       socket.onMessage(message => {
         let payload: any; try { payload = JSON.parse(String(message)); } catch { server.send(message); return; }
-        if (payload.type === "seat_claim" && String(payload.commandId).startsWith("plugin-seat:")) { held = true; claimAt = performance.now(); }
-        if (payload.type === "seat_release" && String(payload.commandId).startsWith("plugin-release:")) releaseAt = performance.now();
+        if (payload.type === "seat_claim" && String(payload.commandId).startsWith("plugin-seat:")) {
+          held = true; claimAt = performance.now(); claimId = payload.commandId; claimedSeat = payload.seatId;
+        }
+        if (payload.type === "seat_release" && String(payload.commandId).startsWith("plugin-release:")) {
+          releaseAt = performance.now(); releaseId = payload.commandId;
+        }
         server.send(message);
       });
       server.onMessage(message => {
@@ -140,30 +152,31 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
             if (queue.length >= 32) throw new Error("t16_pending_claim_capture_bound");
             queue.push({ type: payload.type, frame: message });
           }
-          accepted ||= payload.type === "seat_claim_result" && payload.seatClaimResult?.accepted === true;
-          releaseAck ||= payload.type === "seat_release_result";
+          accepted ||= payload.type === "seat_claim_result" && payload.seatClaimResult?.commandId === claimId && payload.seatClaimResult?.accepted === true;
+          releaseAck ||= payload.type === "seat_release_result" && payload.seatReleaseResult?.commandId === releaseId;
         } else socket.send(message);
       });
     });
   });
   void entering.catch(() => undefined);
   let member: Awaited<ReturnType<typeof enterPluginRoom>> | undefined;
-  try {
+  await withCleanup(async () => {
     await expect.poll(() => accepted, { timeout: 15_000, intervals: [50] }).toBe(true);
     expect(Boolean((await seatState(pendingPage!)).pendingSeatId)).toBe(true);
     expect((await seatState(pendingPage!)).currentSeatId).toBeNull();
     // A transport capture sees server ACKs before this deliberate delay. Count
     // actual replay delivery as well, so pre-replay standing cannot pass.
-    await pendingPage!.evaluate(() => {
+    await pendingPage!.evaluate(({ claimId, claimedSeat }) => {
       const dispatch = EventTarget.prototype.dispatchEvent;
-      const state = { accepted: 0, released: 0 };
+      const state = { accepted: 0, released: 0, occupied: 0, releaseId: "" };
       EventTarget.prototype.dispatchEvent = function (event) {
         if (this instanceof WebSocket && event instanceof MessageEvent && typeof event.data === "string" && event.data.length < 262_144) {
           try {
             const message = JSON.parse(event.data);
-            if (message.type === "seat_claim_result" && message.seatClaimResult?.accepted === true) state.accepted++;
-            if (message.type === "seat_release_result") state.released++;
-          } catch { /* Only two allowlisted counters, no raw messages. */ }
+            if (message.type === "seat_claim_result" && message.seatClaimResult?.commandId === claimId && message.seatClaimResult.accepted === true) state.accepted++;
+            if (message.type === "seat_release_result" && message.seatReleaseResult?.commandId === state.releaseId) state.released++;
+            if (message.type === "room_state" && message.room?.seatOccupancy?.[claimedSeat] === (window as any).__VRATA_DEBUG__?.participantId) state.occupied++;
+          } catch { /* Only allowlisted counters, no raw messages. */ }
         }
         return dispatch.call(this, event);
       };
@@ -172,44 +185,66 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
         EventTarget.prototype.dispatchEvent = dispatch;
         delete (window as any).__t16SeatDelivery; delete (window as any).__t16SeatDeliveryCleanup;
       };
-    });
+    }, { claimId, claimedSeat });
     await put(false);
     member = await entering;
     const actor = { ...member, participantId: member.session.participantId, authority: observations.get(member.page)! };
     await expect.poll(async () => (await seatState(actor.page)).running, { timeout: 15_000 }).toBe(0);
     await expect.poll(() => releaseAck, { timeout: 15_000 }).toBe(true);
     expect(releaseAt > claimAt && releaseAt - claimAt < 3000).toBe(true); // Not the adapter's lost-answer timeout.
-    // Original wire order: old occupancy/accept, authoritative empty occupancy,
-    // targeted release ACK. Cancellation must suppress the late accepted claim.
-    held = false;
+    await member.page.evaluate(releaseId => { (window as any).__t16SeatDelivery.releaseId = releaseId; }, releaseId);
+    // Deliver ONLY occupied/accepted first. A later correct empty snapshot must
+    // not conceal even one frame of applying the cancelled seating attempt.
+    const acceptedIndex = queue.findIndex(message => message.type === "seat_claim_result"
+      && JSON.parse(String(message.frame)).seatClaimResult?.commandId === claimId);
+    expect(acceptedIndex > 0).toBe(true);
+    const standingPose = await member.page.evaluate(() => {
+      const root = (window as any).__VRATA_DEBUG__?.localPose?.root;
+      return [root?.x, root?.y, root?.z];
+    });
+    expect(standingPose.every(Number.isFinite)).toBe(true);
+    for (const message of queue.splice(0, acceptedIndex + 1)) transport!.send(message.frame);
+    await expect.poll(() => member!.page.evaluate(() => {
+      const state = (window as any).__t16SeatDelivery;
+      return state?.accepted === 1 && state?.occupied > 0 && state?.released === 0;
+    }), { timeout: 15_000 }).toBe(true);
+    await member.page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    const intermediate = await seatState(member.page);
+    expect(intermediate.currentSeatId === null && intermediate.pendingSeatId === null).toBe(true);
+    expect(await member.page.evaluate(() => (window as any).__VRATA_DEBUG__?.locomotionMode === "desktop")).toBe(true);
+    expect(await member.page.evaluate(standing => {
+      const root = (window as any).__VRATA_DEBUG__?.localPose?.root;
+      return JSON.stringify([root?.x, root?.y, root?.z]) === JSON.stringify(standing);
+    }, standingPose)).toBe(true);
+    // Now retain original wire order for empty occupancy and the correlated release ACK.
     for (const message of queue.splice(0)) transport!.send(message.frame);
+    held = false;
     await expect.poll(() => member!.page.evaluate(() => {
       const state = (window as any).__t16SeatDelivery;
       return state?.accepted > 0 && state?.released > 0;
     }), { timeout: 15_000 }).toBe(true);
     await member.page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-    await expect.poll(() => actor.authority.commands().some(command => command.type === "seat_release_result"
-      && actor.authority.commands().some(sent => sent.type === "seat_release" && sent.commandId === command.commandId)), { timeout: 15_000 }).toBe(true);
+    await expect.poll(() => actor.authority.commands().some(command => command.type === "seat_release_result" && command.commandId === releaseId
+      && actor.authority.commands().some(sent => sent.type === "seat_release" && sent.commandId === releaseId)), { timeout: 15_000 }).toBe(true);
     await expectExactRoomAuthority([witness, actor]);
     const state = await seatState(member.page);
     expect(state.currentSeatId === null && state.pendingSeatId === null && !Object.values(witness.authority.snapshot()!.occupancy).includes(actor.participantId)).toBe(true);
-    expect(actor.authority.commands().some(command => command.type === "seat_claim_result" && command.accepted)).toBe(true);
+    expect(actor.authority.commands().some(command => command.type === "seat_claim_result" && command.commandId === claimId && command.accepted)).toBe(true);
     await member.context.close();
     await expectExactRoomAuthority([witness]);
-  } finally {
-    held = false; queue.length = 0;
-    if (pendingPage && !pendingPage.isClosed()) await pendingPage.evaluate(() => (window as any).__t16SeatDeliveryCleanup?.());
-    await transport?.close().catch(() => undefined); await member?.context.close();
-  }
+  }, () => [() => { held = false; queue.length = 0; },
+    () => pendingPage && !pendingPage.isClosed() ? pendingPage.evaluate(() => (window as any).__t16SeatDeliveryCleanup?.()) : undefined,
+    () => pendingPage && !pendingPage.isClosed() ? transport?.close() : undefined, () => member?.context.close(),
+    () => pendingPage?.context().close(), () => entering]);
 }
 
 /** One tiny owned inline scene, not a catalog/scene-package change. */
-export async function runNoAnchorAutoSeatScenario(browser: Browser, value: RoomPluginOrigin) {
+export async function runNoAnchorAutoSeatScenario(browser: Browser, value: RoomPluginOrigin & { noAnchorTemplateId: string }) {
   const source = inlineSceneBundleUrl({ sceneId: "t16-no-seat-anchors", label: "No seat anchors regression" });
   const manifest = JSON.parse(decodeURIComponent(source.slice(source.indexOf(",") + 1)));
   manifest.anchors = { teleportFloorY: 0, seatAnchors: [] };
   const created = await privateHttp(value.origin, "/api/rooms", "POST", { "x-vrata-admin-token": value.adminToken }, {
-    tenantId: "demo-tenant", templateId: "personal-workspace-basic", name: "Owned no-anchor regression", visibility: "private",
+    tenantId: "demo-tenant", templateId: value.noAnchorTemplateId, name: "Owned no-anchor regression", visibility: "private",
     sceneBundleUrl: `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`
   });
   expect(created.status).toBe(201);
@@ -217,7 +252,7 @@ export async function runNoAnchorAutoSeatScenario(browser: Browser, value: RoomP
   let host: Awaited<ReturnType<typeof enterPluginRoom>> | undefined, member: typeof host;
   let author: Awaited<ReturnType<typeof createExternalAuthorProject>> | undefined;
   let authority: RoomAuthorityCapture | undefined;
-  try {
+  await withCleanup(async () => {
     host = await enterPluginRoom(browser, value, roomId);
     author = await createExternalAuthorProject(await downloadPublicSdk(value.origin, "0.2.0"), "0.2.0");
     const pkg = await installPluginArtifact(value, host, await author.buildAutoSeat());
@@ -234,8 +269,6 @@ export async function runNoAnchorAutoSeatScenario(browser: Browser, value: RoomP
     expect(await member.page.evaluate(() => (window as any).__VRATA_TEST__.requestSeatClaimById("seat-01"))).toBe(false);
     await expectExactRoomAuthority([{ page: member.page, participantId: member.session.participantId, authority: authority! }]);
     await author.assertNotExecuted();
-  } finally {
-    await authority?.close(); await member?.context.close(); await host?.context.close(); await author?.close();
-    await deleteOwnedPluginRoom(value, roomId);
-  }
+  }, () => [() => authority?.close(), () => member?.context.close(), () => host?.context.close(), () => author?.close(),
+    () => deleteOwnedPluginRoom(value, roomId)]);
 }

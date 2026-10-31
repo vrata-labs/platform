@@ -1,10 +1,11 @@
 import { expect, type Page, type Request } from "@playwright/test";
-import { randomUUID } from "node:crypto";
+import { randomInt, randomUUID } from "node:crypto";
 import { bearer, createExternalAuthorProject, downloadPublicSdk, nativeMarker, pluginPath, privateHttp, sha256 } from "./plugin-author-scenarios";
 import { uploadThroughUi, chooseVersion, act } from "./plugin-author-ui";
 import { expectPluginStatus } from "./room-plugin-fixture";
 import { chooseMeetingPanel } from "./meeting-tools-acceptance";
 import type { RoomAuthorityCapture } from "./room-state-observation";
+import { cleanupAll } from "./test-cleanup";
 
 type Actor = { page: Page; participantId: string; sessionToken: string; authority: RoomAuthorityCapture };
 type Library = { revision: number; packages: Array<{ packageId: string; pluginId: string; version: string; artifactSha256: string }>;
@@ -101,8 +102,8 @@ export async function publicDemoPluginLifecycle(origin: string, roomId: string, 
     }
     return { denyAuthor, read,
       assertNormalAuthorRequests() { expect(authorRequests > 0 && documentUploads > 0 && !invalidAuthority).toBe(true); },
-      async close() { host.page.off("request", onRequest); await author.close(); } };
-  } catch (error) { host.page.off("request", onRequest); await author.close(); throw error; }
+      async close() { await cleanupAll([() => host.page.off("request", onRequest), () => author.close()]); } };
+  } catch (error) { await cleanupAll([() => host.page.off("request", onRequest), () => author.close()], { error }); throw error; }
 }
 
 /** Short normal-UI authority handoff, not another Presenter/media suite. */
@@ -146,11 +147,21 @@ export async function publicDemoAuthorityChanges(origin: string, roomId: string,
     const denied = await privateHttp(origin, `/api/rooms/${roomId}/documents/${documentId}/surface`, "POST", bearer(actor.sessionToken), { surfaceId: "debug-main" });
     expect(denied.status).toBe(403);
     const commandId = `t16-old-author-${randomUUID()}`;
-    const delivery = await actor.page.evaluate(commandId => (window as any).__t16SocketCommand({ type: "surface_create_object", commandId,
-      surfaceId: "debug-main", objectType: "pdf-presentation", initialState: { documentId: "denied", currentPage: 1 } }), commandId);
-    expect(delivery === "sent" || delivery === "closed").toBe(true);
-    if (delivery === "sent") await expect.poll(() => actor.authority.commands().some(value => value.commandId === commandId && value.type === "access_denied" && value.accepted === false), { timeout: 15_000 }).toBe(true);
+    const delivery = await actor.page.evaluate(commandId => (window as any).__t16SocketCommand({ type: "surface_create_object", probeOnly: false, commandId,
+      surfaceId: "debug-main", objectType: "pdf-presentation" }), commandId);
+    expect(delivery).toBe("sent");
+    await expect.poll(() => actor.authority.commands().some(value => value.commandId === commandId && value.type === "access_denied"
+      && value.accepted === false && value.permissionDenied && actor.authority.commands().some(sent => sent.type === "surface_create_object"
+        && sent.commandId === commandId && sent.socketScope === value.socketScope && sent.generation === value.generation)), { timeout: 15_000 }).toBe(true);
+    // A real server-side presence update, ordered after the denial on the SAME
+    // held socket, makes the reader observe fresh media bytes, not a cached hash.
+    const marker = randomInt(1, 2 ** 48 - 1);
+    const barrier = reader.authority.watchParticipantBarrier(actor.participantId, marker);
+    try {
+      expect(await actor.page.evaluate(marker => (window as any).__t16SocketCommand({ type: "participant_update", participant: { clientTimeMs: marker } }), marker)).toBe("sent");
+      await expect.poll(() => Boolean(barrier.snapshot()), { timeout: 15_000 }).toBe(true);
+      expect(barrier.snapshot()?.mediaHash === mediaHash).toBe(true);
+    } finally { barrier.close(); }
     expect(JSON.stringify(await Promise.all([get("documents"), get("notes/shared")])) === JSON.stringify(before)).toBe(true);
-    expect(reader.authority.snapshot()?.mediaHash === mediaHash).toBe(true);
   }
 }
