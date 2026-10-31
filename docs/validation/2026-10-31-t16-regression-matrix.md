@@ -1,7 +1,7 @@
 # T16: матрица требований и проверок
 
 Статус: **NOT_READY**. База изменений: `b7ef73e0de90819ed7fa4d68f8f37291711c9bf0`.
-На `504e4facf58e941b7e288695b81b5571a3d14695` завершены отдельный pending case (1/1) и весь local auto-seat spec (4/4), без skips/retries. Это узкие результаты, не общий focused/full или приёмка T16. Для окончательного дерева обязательны проверки ниже, включая исправленные причинные assertions pending-disable и late discovery.
+На `33b2217bbba6c02a011d9e2a1598c6329d760684` завершены отдельный pending case (1/1) и весь local auto-seat spec (4/4), без skips/flaky/retries, включая sticky no-failure и завершённую disabled late discovery. Это узкие результаты, не общий focused/full или приёмка T16. Для окончательного дерева обязательны итоговое ревью и все проверки ниже.
 
 Основания: внешний план `2026-09-25-working-meeting-and-room-plugins.md`, §0, T16, T17, §8; [пакет оснований](../context/2026-10-31-t16-regression.json); [контракт проверок](2026-10-31-t16-regression.json); [решения D-048…](../reviews/2026-10-31-t16-regression-decisions.md).
 
