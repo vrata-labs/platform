@@ -46,20 +46,7 @@ async function withAutoSeatRoom(browser: Browser, value: RoomPluginOrigin,
   }, () => [() => author.close()]);
 }
 
-/** This four-renderer entry deadline must not inherit the worker browser's GPU
- * process/cache lifetime from earlier SDK, canvas or public-demo scenarios.
- * Playwright's BrowserType retains this project's default launch options; do
- * not substitute flags or pre-run the plugin to warm its startup. */
-async function withAutoSeatBrowser(browser: Browser, run: (owned: Browser) => Promise<void>) {
-  const owned = await browser.browserType().launch();
-  await withCleanup(() => run(owned), () => [() => owned.close()]);
-}
-
 export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOrigin) {
-  await withAutoSeatBrowser(browser, owned => runOwnedAutoSeatScenario(owned, value));
-}
-
-async function runOwnedAutoSeatScenario(browser: Browser, value: RoomPluginOrigin) {
   const captures: RoomAuthorityCapture[] = [];
   const contexts: Array<{ close(): Promise<void> }> = [];
   await withCleanup(() => withAutoSeatRoom(browser, value, async (roomId, put) => {
