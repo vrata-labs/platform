@@ -89,6 +89,7 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
                 state: plugins?.state ?? null, running: plugins?.running ?? null, failure: plugins?.lastFailure ?? null,
                 hostPhase: plugins?.lastHostPhase ?? null, startupTiming: plugins?.startupTiming ?? null,
                 readyDeliveries: plugins?.readyDeliveries ?? null,
+                retirements: plugins?.retirements ?? null,
                 ack: (window as any).__t16SeatAckFacts?.() ?? null,
                 entry: (window as any).__t16SeatEntryFacts?.() ?? null,
                 longTasks: (window as any).__meetingPerformance?.longTasks ?? null,

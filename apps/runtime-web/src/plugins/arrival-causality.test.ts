@@ -125,6 +125,20 @@ test("actual ready consumption, dispatch and completion differ while the real sc
   assert.ok(h.responses.some(response => response.ok && response.result === "accepted"));
 });
 
+test("fresh authority renewal does not wait for the actual pending room.ready broker claim", async t => {
+  const h = harness(t); await h.start(); await h.workers[0].drain();
+  assert.equal(h.claims.length, 1); assert.equal(h.clients[0].busy, true);
+  assert.equal(h.controller.diagnostics().readyDeliveries[0].completedAtMs, null);
+  await h.advance(2000);
+  assert.equal(h.controller.diagnostics().remainingLeaseMs, 5000, "fresh discovery renewed while the broker promise is pending");
+  assert.equal(h.controller.diagnostics().fetchPending, false); assert.equal(h.clients.length, 1);
+  assert.deepEqual(h.controller.diagnostics().retirements, []);
+  await h.advance(500); h.adapter.settleClaim({ seatId: "seat-a", accepted: true, commandId: h.claims[0].id });
+  await flush(); await h.workers[0].drain();
+  assert.equal(h.controller.diagnostics().readyDeliveries[0].completedAtMs, 2500);
+  assert.equal(h.adapter.diagnostics().grant, "used"); assert.deepEqual(h.cancels, []);
+});
+
 test("entry expiry is measured from actual platform ready, not setup or a delayed VM start", async t => {
   const h = harness(t); h.adapter.observe(); await h.advance(20_001); await h.start(); await h.workers[0].drain();
   assert.equal(h.claims.length, 0);
@@ -199,10 +213,28 @@ test("new manifest generation fences queued OLD handlers without consuming the a
   await h.workers[0].drain();
   assert.equal(h.claims.length, 0, "retired queue must not consume room.ready");
   assert.deepEqual(h.retirements, [500]);
+  assert.equal(h.controller.diagnostics().retirements[0].reason, "binding-replaced");
   await h.workers[1].drain(); assert.equal(h.claims.length, 1);
   assert.equal(h.consumed.filter(row => row.type === "room.ready").length, 1);
   h.adapter.settleClaim({ seatId: "seat-a", accepted: true, commandId: h.claims[0].id }); await flush(); await h.workers[1].drain();
   assert.equal(h.adapter.diagnostics().grant, "used");
+});
+
+test("lease expiry during an actual pending scaffold claim retires before its native answer, unlike claim timeout", async t => {
+  const h = harness(t); await h.start();
+  await h.workers[0].consume(); // room.connection completed, room.ready is queued
+  h.holdRead(); await h.advance(4000); await h.workers[0].drain();
+  assert.equal(h.claims[0].at, 4000); assert.equal(h.clients[0].busy, true);
+  await h.advance(1000);
+  const [row] = h.controller.diagnostics().retirements;
+  assert.equal(row.reason, "lease-expired"); assert.equal(row.atMs, 5000); assert.equal(row.busy, true);
+  assert.equal(row.leaseValid, false); assert.equal(row.remainingLeaseMs, 0); assert.equal(row.fetchPending, true);
+  assert.deepEqual(h.adapter.diagnostics().settlements, [{ atMs: 5000, reason: "retired" }]);
+  assert.equal(h.cancels.length, 1); assert.equal(h.cancels[0].at - h.claims[0].at, 1000);
+  h.adapter.settleClaim({ seatId: "seat-a", accepted: true, commandId: h.claims[0].id });
+  assert.equal(h.adapter.diagnostics().grant, "closed", "a late ACK cannot reopen the expired arrival window");
+  h.releaseRead(h.snapshot()); await flush(); await until(() => h.controller.diagnostics().running === 1);
+  assert.deepEqual(h.controller.diagnostics().retirements[0], row, "fresh authority cannot erase the producer fact");
 });
 
 test("negative control: suppressing actual retirement cannot masquerade as cancellation before 3000", async t => {

@@ -138,6 +138,57 @@ test("a disabled generation still terminates a pending VM after identical renewa
   assert.equal(instance.terminated, 1);
   const denied = h.dispatches[0]({ sdkApiVersion: 1, requestId: "90", operation: "status.set", payload: { text: "old" } }, new AbortController().signal) as { ok: boolean };
   assert.equal(denied.ok, false);
+  assert.equal(h.controller.diagnostics().retirements[0].reason, "binding-removed");
+});
+
+for (const phase of ["content", "VM"] as const) test(`expiry during pending ${phase} records the actual branch and fences late completion`, async t => {
+  const h = harness(); t.after(() => h.controller.stop()); h.config(snapshot());
+  let releaseContent!: (bytes: Uint8Array) => void, releaseVm!: (instance: Instance) => void;
+  if (phase === "content") h.contentTask(() => new Promise(resolve => { releaseContent = resolve; }));
+  else h.startTask(() => new Promise(resolve => { releaseVm = resolve; }));
+  h.controller.start(2); await until(() => (phase === "content" ? h.counters.contents : h.counters.starts) === 1);
+  h.snapshotTask(() => new Promise(() => {}));
+  await h.advance(5000);
+  const [fact] = h.controller.diagnostics().retirements;
+  assert.equal(fact.reason, "lease-expired"); assert.equal(fact.starting, true);
+  assert.equal(fact.instanceState, null); assert.equal(fact.leaseValid, false); assert.equal(fact.remainingLeaseMs, 0);
+  assert.equal(fact.fetchPending, true); assert.equal(fact.ordinal, 1); assert.equal(fact.generation, 1);
+  const instance = new Instance();
+  if (phase === "content") releaseContent(artifact.bytes); else releaseVm(instance);
+  await delay(5);
+  assert.equal(h.controller.diagnostics().running, 0);
+  assert.equal(h.counters.starts, phase === "content" ? 0 : 1);
+  assert.equal(instance.terminated, phase === "content" ? 0 : 1);
+});
+
+test("binding revision replacement is distinct from renewal and retains early diagnostics across healthy instances", async t => {
+  const h = harness(); t.after(() => h.controller.stop()); h.config(snapshot()); h.controller.start(2);
+  await until(() => h.controller.diagnostics().running === 1);
+  await h.advance(2000); assert.deepEqual(h.controller.diagnostics().retirements, []);
+  h.config(snapshot(2, "second")); h.controller.kick(); await until(() => h.counters.starts === 2);
+  const [first] = h.controller.diagnostics().retirements;
+  assert.equal(first.reason, "binding-replaced"); assert.equal(first.bindingRevision, 1); assert.equal(first.leaseValid, false);
+  for (let revision = 3; revision <= 40; revision++) {
+    h.config(snapshot(revision, "next")); h.controller.kick(); await until(() => h.counters.starts === revision);
+  }
+  const rows = h.controller.diagnostics().retirements;
+  assert.equal(rows.length, 32); assert.deepEqual(rows[0], first);
+  rows[0].reason = "session-stop";
+  assert.deepEqual(h.controller.diagnostics().retirements[0], first, "returned rows cannot mutate the history");
+  for (const secret of [bindingId, packageId, "native-private-token", artifact.artifact.entry, "second"])
+    assert.equal(JSON.stringify(rows).includes(secret), false);
+});
+
+test("busy availability loss and instance failure retain different producer branches", async t => {
+  const h = harness(); t.after(() => h.controller.stop()); h.config(snapshot()); h.controller.start(2);
+  await until(() => h.controller.diagnostics().running === 1);
+  h.instances[0].busy = true; h.context.online = false; h.controller.availabilityChanged();
+  assert.equal(h.controller.diagnostics().retirements[0].reason, "availability-changed");
+  h.context.online = true; h.controller.availabilityChanged(); await until(() => h.counters.starts === 2);
+  h.instances[1].state = "failed"; h.controller.kick(); await until(() => h.controller.diagnostics().failed === 1);
+  const row = h.controller.diagnostics().retirements.at(-1)!;
+  assert.equal(row.reason, "instance-closed"); assert.equal(row.failure, "instance_closed");
+  assert.equal(row.leaseValid, true);
 });
 
 test("update uses a new instance and new config with cached verified code; disable fences old callbacks first", async () => {
@@ -156,6 +207,8 @@ test("guest failure is sticky for its key, including pause/restore, and does not
   await until(() => h.controller.diagnostics().failed === 1);
   for (let i = 0; i < 5; i++) { h.controller.kick(); await until(() => !h.controller.diagnostics().fetchPending); }
   assert.equal(h.counters.starts, 1); assert.equal(h.counters.contents, 1); assert.equal(h.controller.diagnostics().lastFailure, "execution_timeout");
+  assert.equal(h.controller.diagnostics().retirements[0].reason, "start-failed");
+  assert.equal(h.controller.diagnostics().retirements[0].failure, "execution_timeout");
   h.controller.stop(); h.controller.start(2); await until(() => !h.controller.diagnostics().fetchPending);
   assert.equal(h.counters.starts, 1); assert.equal(h.controller.diagnostics().failed, 1); h.controller.stop();
 });
@@ -189,8 +242,22 @@ test("lease expiration blocks effects while a fresh bounded request can still re
   const h = harness(); h.config(snapshot()); h.controller.start(2); await until(() => h.controller.diagnostics().running === 1);
   let release!: (value: RoomPluginRuntimeSnapshot) => void; h.snapshotTask(() => new Promise(resolve => { release = resolve; }));
   await h.advance(2000); await h.advance(5000); assert.equal(h.controller.diagnostics().state, "suspended");
+  assert.deepEqual(h.controller.diagnostics().retirements, [], "idle expiry fences effects without retiring the instance");
   assert.equal((h.dispatches[0]({ sdkApiVersion: 1, requestId: "2", operation: "status.set", payload: { text: "expired" } }, new AbortController().signal) as { ok: boolean }).ok, false);
   release(snapshot()); await until(() => h.controller.diagnostics().running === 1); assert.equal(h.counters.starts, 1); h.controller.stop();
+});
+
+test("stale snapshot and session end retain their own retirement branch, not lease expiry", async t => {
+  const h = harness(); t.after(() => h.controller.stop()); h.config(snapshot(2)); h.controller.start(2);
+  await until(() => h.controller.diagnostics().running === 1);
+  h.instances[0].busy = true; h.config(snapshot(1)); h.controller.kick();
+  await until(() => !h.controller.diagnostics().fetchPending);
+  const [stale] = h.controller.diagnostics().retirements;
+  assert.equal(stale.reason, "snapshot-rejected"); assert.equal(stale.leaseValid, true);
+  assert.equal(stale.remainingLeaseMs, 5000); assert.equal(h.controller.diagnostics().revision, 2);
+  h.controller.stop();
+  assert.equal(h.controller.diagnostics().retirements.at(-1)?.reason, "session-stop");
+  assert.equal(h.controller.diagnostics().retirements.at(-1)?.leaseValid, false);
 });
 
 test("late content cannot cache or execute an artifact after its generation was disabled", async () => {
