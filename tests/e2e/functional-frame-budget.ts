@@ -7,23 +7,24 @@ export async function installFunctionalFrameBudget(page: Pick<Page, "addInitScri
   await page.addInitScript(() => {
     const nativeRequest = window.requestAnimationFrame.bind(window), nativeCancel = window.cancelAnimationFrame.bind(window);
     const pending = new Map<number, FrameRequestCallback>();
-    let sequence = 0, nativeHandle: number | undefined, timer: number | undefined, lastFrameAt = -Infinity;
+    let sequence = 0, nativeHandle: number | undefined, timer: number | undefined, lastFrameAt = -Infinity, dispatching = false;
     const intervalMs = 100;
     const schedule = () => {
-      if (!pending.size || nativeHandle !== undefined || timer !== undefined) return;
+      if (dispatching || !pending.size || nativeHandle !== undefined || timer !== undefined) return;
       const request = () => {
         timer = undefined;
         nativeHandle = nativeRequest(now => {
           nativeHandle = undefined;
-          // RAF timestamps describe frame start, not callback dispatch time.
-          // A delayed callback must not shorten the next frame's interval.
+          // Preserve native timestamps for the runtime, but reserve the idle
+          // budget after the entire callback batch, including expensive rendering.
           if (now - lastFrameAt < intervalMs) { schedule(); return; }
-          lastFrameAt = now;
+          dispatching = true;
           const ids = [...pending.keys()];
           for (const id of ids) {
             const callback = pending.get(id); pending.delete(id);
             if (callback) try { callback.call(window, now); } catch (error) { setTimeout(() => { throw error; }, 0); }
           }
+          lastFrameAt = performance.now(); dispatching = false;
           schedule();
         });
       };
