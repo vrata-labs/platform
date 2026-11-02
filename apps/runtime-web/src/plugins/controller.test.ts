@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import { createRoomPluginArtifact } from "@vrata/room-plugin-sdk/artifact";
-import type { RoomPluginEvent, RoomPluginRequest } from "@vrata/room-plugin-sdk";
+import type { RoomPluginEvent, RoomPluginRequest, RoomPluginRoomSnapshot } from "@vrata/room-plugin-sdk";
 import { RoomPluginController, type RoomPluginCoreContext, type RoomPluginInstance, type RoomPluginSeatingHost } from "./controller.js";
 import { parseRoomPluginRuntimeSnapshot, roomPluginContentPath, type RoomPluginRuntimeSnapshot } from "./runtime-dto.js";
 import type { RoomPluginStatusRow } from "./status-view.js";
@@ -210,13 +210,14 @@ test("an instance that fails while idle is not replaced by the discovery timer",
 function seatingHost(capabilities: string[] = ["status.set", "seating.claimSelfOnEntry"]) {
   const calls: string[] = [];
   let ready = false, supported = true;
+  let data: RoomPluginRoomSnapshot = { ownParticipantAlias: "alias", arrivalAllowed: true, seats: [] };
   const host: RoomPluginSeatingHost = {
     supported: () => supported, ready: () => ready, activate: () => { calls.push("activate"); },
-    snapshot: (owner, seating) => { calls.push(`snapshot:${seating}`); return { ownParticipantAlias: "alias", arrivalAllowed: seating, seats: [] }; },
+    snapshot: (owner, seating) => { calls.push(`snapshot:${seating}`); return { ...data, arrivalAllowed: seating && data.arrivalAllowed, seats: seating ? data.seats : [] }; },
     port: owner => { calls.push("port"); return { claim: async () => ({ result: "busy" }), cancel: () => undefined }; },
     retire: owner => { calls.push("retire"); }
   };
-  return { host, calls, capabilities, setReady(value: boolean) { ready = value; }, setSupported(value: boolean) { supported = value; } };
+  return { host, calls, capabilities, setSnapshot(value: RoomPluginRoomSnapshot) { data = value; }, setReady(value: boolean) { ready = value; }, setSupported(value: boolean) { supported = value; } };
 }
 function seatingSnapshot(revision = 1, enabled = true) {
   return parseRoomPluginRuntimeSnapshot(JSON.stringify({ schemaVersion: 1, sdkApiVersion: 1, revision, leaseExpiresAtMs: 1, bindings: enabled ? [{
@@ -266,6 +267,7 @@ test("a seating-capable instance gets the seat port, real snapshots and coalesce
   assert.deepEqual(h.instances[0].events.map(event => event.type), ["room.connection", "room.ready"]);
   assert.ok(s.calls.includes("port")); assert.equal(h.renderings.at(-1)![0].seatingUnavailable, false);
   assert.ok(s.calls.indexOf("activate") >= 0 && s.calls.indexOf("activate") < s.calls.indexOf("snapshot:true"), "the window opens before the first snapshot");
+  s.setSnapshot({ ownParticipantAlias: "alias", arrivalAllowed: true, seats: [{ id: "seat-a", yaw: 0, occupantAlias: null }] });
   for (let i = 0; i < 5; i++) h.controller.seatingChanged();
   await h.advance(100); await until(() => h.instances[0].events.length === 3);
   assert.equal(h.instances[0].events[2].type, "seating.snapshot");
@@ -289,4 +291,57 @@ test("a trusted WASM load miss gets one bounded retry; a second miss stops plugi
   ok.failStart(null as never); await ok.advance(2000); await until(() => ok.controller.diagnostics().running === 1);
   assert.equal(ok.controller.diagnostics().hostFailed, false);
   ok.controller.stop();
+});
+
+async function seatingControllerHarness() {
+  const { entrySha256: _computed, ...manifest } = artifact.artifact.manifest;
+  const seatArtifact = createRoomPluginArtifact({ ...manifest, id: "external.seat", requestedCapabilities: ["status.set", "seating.claimSelfOnEntry"] }, artifact.artifact.entry);
+  const s = seatingHost(); s.setReady(true); const h = harness(s.host); h.bytes(seatArtifact.bytes);
+  const config = (revision = 1) => parseRoomPluginRuntimeSnapshot(JSON.stringify({ schemaVersion: 1, sdkApiVersion: 1, revision, leaseExpiresAtMs: 1, bindings: [{
+    bindingId, packageId, pluginId: "external.seat", version: "1.0.0", artifactSha256: seatArtifact.artifactSha256, enabled: true,
+    generation: revision, bindingRevision: revision, approvedCapabilities: ["status.set", "seating.claimSelfOnEntry"], config: { greeting: "x" },
+    contentUrl: roomPluginContentPath("room", packageId) }] }), "room");
+  h.config(config()); h.controller.start(2);
+  await until(() => h.instances.length === 1 && h.instances[0].events.length === 2);
+  return { ...h, s, seatConfig: config };
+}
+
+test("seating updates suppress an unchanged SDK snapshot and deliver one changed snapshot", async () => {
+  const h = await seatingControllerHarness();
+  try {
+    for (let i = 0; i < 5; i++) h.controller.seatingChanged();
+    await h.advance(100); assert.equal(h.instances[0].events.length, 2, "unchanged snapshot creates no VM event");
+    h.s.setSnapshot({ ownParticipantAlias: "alias", arrivalAllowed: true, seats: [{ id: "seat-a", yaw: 0, occupantAlias: "peer" }] });
+    for (let i = 0; i < 5; i++) h.controller.seatingChanged();
+    await h.advance(200); assert.equal(h.instances[0].events.length, 3);
+    assert.equal(h.instances[0].events[2].type, "seating.snapshot");
+    h.controller.seatingChanged(); await h.advance(300); assert.equal(h.instances[0].events.length, 3);
+  } finally { h.controller.stop(); }
+});
+
+test("explicit force delivers one unchanged snapshot and survives coalescing with ordinary updates", async () => {
+  const h = await seatingControllerHarness();
+  try {
+    h.controller.seatingChanged(true); await h.advance(100);
+    assert.equal(h.instances[0].events.length, 3, "a post-claim observation is a semantic event even without occupancy changes");
+    h.controller.seatingChanged(); h.controller.seatingChanged(true); h.controller.seatingChanged();
+    await h.advance(200); assert.equal(h.instances[0].events.length, 4, "coalescing preserves force but sends only one event");
+    h.controller.seatingChanged(); await h.advance(300); assert.equal(h.instances[0].events.length, 4, "force resets after delivery");
+  } finally { h.controller.stop(); }
+});
+
+test("stop clears a pending seating force and a new instance always gets room.ready even with the same snapshot", async () => {
+  const h = await seatingControllerHarness();
+  try {
+    h.controller.seatingChanged(true); h.controller.stop(); h.controller.start(2);
+    await until(() => h.instances.length === 2 && h.instances[1].events.length === 2);
+    assert.equal(h.instances[1].events[1].type, "room.ready");
+    h.controller.seatingChanged(); await h.advance(100);
+    assert.equal(h.instances[1].events.length, 2, "a cancelled session cannot force the next session");
+    h.config(h.seatConfig(2)); h.controller.kick();
+    await until(() => h.instances.length === 3 && h.instances[2].events.some(event => event.type === "room.ready"));
+    assert.equal(h.instances[2].events.filter(event => event.type === "room.ready").length, 1);
+    h.controller.seatingChanged(); await h.advance(200);
+    assert.equal(h.instances[2].events.filter(event => event.type === "seating.snapshot").length, 0, "room.ready seeds dedupe for its own generation");
+  } finally { h.controller.stop(); }
 });

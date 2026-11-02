@@ -39,6 +39,7 @@ interface Entry {
   abort: AbortController; instance?: RoomPluginInstance; starting: boolean; starts: number[];
   connection?: RoomPluginCoreContext["connection"];
   readySent?: boolean;
+  sentSeating?: string;
 }
 const seatingCapable = (binding: RoomPluginRuntimeBinding) => binding.approvedCapabilities.some(capability => capability.startsWith("seating."));
 const ownerOf = (entry: Entry) => `${entry.binding.bindingId}:${entry.generation}`;
@@ -72,6 +73,7 @@ export class RoomPluginController {
   private frameworkFailed = false;
   private failedEntries = new Map<string, { key: string; code: Failure }>();
   private seatingTimer: unknown;
+  private seatingForced = false;
   private readonly readyDeliveries: Array<{ sentAtMs: number; completedAtMs: number | null; failedAtMs: number | null; seating: boolean; arrivalAllowed: boolean }> = [];
   // The trusted QuickJS module can miss its load deadline on a busy device; it gets one more
   // attempt (reusing the running compile) before plugins are stopped for this page.
@@ -106,7 +108,7 @@ export class RoomPluginController {
     if (this.timer !== undefined) this.timers.cancel(this.timer);
     if (this.expiryTimer !== undefined) this.timers.cancel(this.expiryTimer);
     if (this.seatingTimer !== undefined) this.timers.cancel(this.seatingTimer);
-    this.timer = this.expiryTimer = this.seatingTimer = undefined; this.lease.resetSession();
+    this.timer = this.expiryTimer = this.seatingTimer = undefined; this.seatingForced = false; this.lease.resetSession();
     for (const entry of this.entries.values()) this.retire(entry);
     this.entries.clear(); this.cache.clear(); this.deniedToken = null; this.state = "off"; this.render();
   }
@@ -129,12 +131,16 @@ export class RoomPluginController {
     if (this.active) void this.refresh().catch(() => this.failFramework("host-unavailable"));
   }
   /** Occupancy, anchors or readiness changed. room.ready is sent once per instance; later
-   * changes reach seating-capable instances as coalesced snapshots. */
-  seatingChanged(): void {
-    if (!this.active || this.seatingTimer !== undefined) return;
+   * changes reach seating-capable instances as coalesced snapshots. A correlated
+   * claim rejection forces delivery even when occupancy did not change. */
+  seatingChanged(force = false): void {
+    if (!this.active) return;
+    this.seatingForced ||= force;
+    if (this.seatingTimer !== undefined) return;
     this.seatingTimer = this.timers.schedule(() => {
       this.seatingTimer = undefined;
-      try { for (const entry of this.entries.values()) this.notifySeating(entry, true); }
+      const forced = this.seatingForced; this.seatingForced = false;
+      try { for (const entry of this.entries.values()) this.notifySeating(entry, true, forced); }
       catch { this.failFramework("host-unavailable"); }
     }, 100);
   }
@@ -306,7 +312,7 @@ export class RoomPluginController {
       this.failEntry(entry, error instanceof SandboxError ? error.code : "host-unavailable");
     });
   }
-  private notifySeating(entry: Entry, changed: boolean): void {
+  private notifySeating(entry: Entry, changed: boolean, forced = false): void {
     const seating = this.input.seating;
     if (!seating || !this.available() || entry.state !== "running" || !entry.instance) return;
     let event: RoomPluginEvent;
@@ -318,6 +324,9 @@ export class RoomPluginController {
     } else if (changed && seatingCapable(entry.binding)) {
       event = { sdkApiVersion: 1, type: "seating.snapshot", snapshot: seating.snapshot(ownerOf(entry), true) };
     } else return;
+    const sent = JSON.stringify(event.snapshot);
+    if (event.type === "seating.snapshot" && sent === entry.sentSeating && !forced) return;
+    entry.sentSeating = sent;
     const delivery = event.type === "room.ready" && this.readyDeliveries.length < 8
       ? { sentAtMs: this.clock(), completedAtMs: null as number | null, failedAtMs: null as number | null,
         seating: seatingCapable(entry.binding), arrivalAllowed: event.snapshot.arrivalAllowed } : null;

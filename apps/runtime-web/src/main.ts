@@ -5346,7 +5346,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       clearSeatReclaimRetry();
       syncSeatDebugState();
       setStatus(result.occupantId ? `Seat occupied by ${result.occupantId}` : "Seat unavailable");
-      roomPluginRuntime.seatingChanged();
+      roomPluginRuntime.seatingChanged(Boolean(result.commandId));
     },
     onSeatReleaseResult: (result) => {
       if (!isCurrentConnection()) return;
