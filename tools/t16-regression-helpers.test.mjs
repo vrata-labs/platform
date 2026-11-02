@@ -129,6 +129,38 @@ async function observationFixture() {
   return { capture, page, cdp, created, closed, frame, snapshot, expectExactRoomAuthority };
 }
 
+test("four authoritative seats cannot pass when one current client remains standing", async () => {
+  const { expectExactRoomAuthority } = loadHelper("tests/e2e/room-state-observation.ts");
+  const participants = ["member-1", "member-2", "member-3", "member-4"];
+  const occupancy = Object.fromEntries(participants.map((id, i) => [`seat-${i + 1}`, id]));
+  const debug = participants.map((id, i) => ({ participantId: id, roomStateConnected: true,
+    remoteParticipants: participants.filter(other => other !== id).map(participantId => ({ participantId })),
+    seatOccupancy: occupancy, currentSeatId: i === 3 ? null : `seat-${i + 1}` }));
+  const clients = participants.map((participantId, i) => ({ participantId,
+    authority: { snapshot: () => ({ participants, occupancy, generation: 1 }) },
+    page: { evaluate: async (callback, arg) => vm.runInNewContext(`(${callback.toString()})(arg)`, {
+      window: { __VRATA_DEBUG__: debug[i] }, arg }) }
+  }));
+  await assert.rejects(expectExactRoomAuthority(clients, 25));
+  debug[3].currentSeatId = "seat-4";
+  await expectExactRoomAuthority(clients, 100);
+});
+
+for (const fails of [false, true]) test(`initial scenario owns a fresh project-profile browser and closes only it after ${fails ? "failure" : "success"}`, async () => {
+  const { withAutoSeatBrowser } = loadHelper("tests/e2e/room-plugin-auto-seat-scenarios.ts", {}, "\nexport { withAutoSeatBrowser };\n");
+  const calls = [], primary = new Error("initial_failed");
+  const owned = { close: async () => { calls.push("owned-close"); } };
+  const browser = { browserType: () => ({ launch: async (...args) => {
+    assert.deepEqual(args, [], "inherit the current project's launch options without adding flags");
+    calls.push("launch"); return owned;
+  } }), close: () => assert.fail("the worker's browser belongs to Playwright"),
+    newContext: () => assert.fail("initial entrants must not reuse the worker browser") };
+  const run = async current => { assert.equal(current, owned); calls.push("scenario"); if (fails) throw primary; };
+  if (fails) await assert.rejects(withAutoSeatBrowser(browser, run), error => error === primary);
+  else await withAutoSeatBrowser(browser, run);
+  assert.deepEqual(calls, ["launch", "scenario", "owned-close"]);
+});
+
 test("closed/overlapping socket snapshots never satisfy reconnect before a new connection snapshot", async () => {
   const f = await observationFixture();
   await withCleanup(async () => {

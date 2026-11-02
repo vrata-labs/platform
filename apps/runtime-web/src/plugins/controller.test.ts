@@ -103,6 +103,43 @@ test("external exact content starts only after readiness and commits a labelled 
   h.controller.stop();
 });
 
+test("identical lease renewals preserve pending content and keep discovery independent", async t => {
+  const h = harness(); t.after(() => h.controller.stop()); h.config(snapshot());
+  let release!: (bytes: Uint8Array) => void;
+  h.contentTask(() => new Promise(resolve => { release = resolve; }));
+  h.controller.start(2); await until(() => h.counters.contents === 1 && !h.controller.diagnostics().fetchPending);
+  await h.advance(8000);
+  assert.deepEqual(h.counters, { snapshots: 5, contents: 1, starts: 0 });
+  release(artifact.bytes); await until(() => h.controller.diagnostics().running === 1);
+  assert.deepEqual(h.counters, { snapshots: 5, contents: 1, starts: 1 });
+});
+
+test("identical lease renewals preserve one pending VM without blocking fresh discovery", async t => {
+  const h = harness(); t.after(() => h.controller.stop()); h.config(snapshot());
+  let release!: (value: Instance) => void;
+  h.startTask(() => new Promise(resolve => { release = resolve; }));
+  h.controller.start(2); await until(() => h.counters.starts === 1 && !h.controller.diagnostics().fetchPending);
+  await h.advance(18000);
+  assert.deepEqual(h.counters, { snapshots: 10, contents: 1, starts: 1 });
+  const instance = new Instance(); release(instance);
+  await until(() => h.controller.diagnostics().running === 1);
+  assert.equal(instance.terminated, 0);
+  assert.equal(h.counters.starts, 1);
+});
+
+test("a disabled generation still terminates a pending VM after identical renewals", async t => {
+  const h = harness(); t.after(() => h.controller.stop()); h.config(snapshot());
+  let release!: (value: Instance) => void;
+  h.startTask(() => new Promise(resolve => { release = resolve; }));
+  h.controller.start(2); await until(() => h.counters.starts === 1);
+  await h.advance(2000); h.config(snapshot(2, "", false)); h.controller.kick();
+  await until(() => h.controller.diagnostics().instances === 0);
+  const instance = new Instance(); release(instance); await delay(1);
+  assert.equal(instance.terminated, 1);
+  const denied = h.dispatches[0]({ sdkApiVersion: 1, requestId: "90", operation: "status.set", payload: { text: "old" } }, new AbortController().signal) as { ok: boolean };
+  assert.equal(denied.ok, false);
+});
+
 test("update uses a new instance and new config with cached verified code; disable fences old callbacks first", async () => {
   const h = harness(); h.config(snapshot()); h.controller.start(2); await until(() => h.controller.diagnostics().running === 1);
   const old = h.dispatches[0]; h.config(snapshot(2, "second")); h.controller.kick(); await until(() => h.counters.starts === 2 && h.controller.diagnostics().running === 1);
