@@ -12,7 +12,7 @@ import type { KernelCommand, KernelReply } from "./kernel-protocol.js";
 import { RoomPluginController } from "./controller.js";
 import { RoomPluginSeatAdapter, type RoomPluginSeatWorld } from "./seat-adapter.js";
 import { parseRoomPluginRuntimeSnapshot, roomPluginContentPath, type RoomPluginRuntimeSnapshot } from "./runtime-dto.js";
-import { SANDBOX_LIMITS } from "./limits.js";
+import { SANDBOX_LIMITS, SandboxError } from "./limits.js";
 
 let module: TestQuickJSWASMModule, wasm: WebAssembly.Module, source: string;
 before(async () => {
@@ -31,11 +31,11 @@ async function until(check: () => boolean) {
  * and scaffold VM are real. Consumption is recorded at vm.event, NOT at event()
  * dispatch or lifecycle promise completion. This is not a browser elapsed proof
  * or a replacement for the trusted kernel's independent watchdog tests. */
-function harness(t: TestContext) {
+function harness(t: TestContext, entry = source) {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let now = 0, alias = 0;
   const artifact = createRoomPluginArtifact({ schemaVersion: 1, sdkApiVersion: 1, id: "external.causal-seat", version: "1.0.0",
-    displayName: "Causal seat", requestedCapabilities: [...capabilities], configSchema: {} }, source);
+    displayName: "Causal seat", requestedCapabilities: [...capabilities], configSchema: {} }, entry);
   const snapshot = (revision = 1, enabled = true) => parseRoomPluginRuntimeSnapshot(JSON.stringify({ schemaVersion: 1, sdkApiVersion: 1,
     revision, leaseExpiresAtMs: 1, bindings: enabled ? [{ bindingId: "11111111-1111-4111-8111-111111111111",
       packageId: "22222222-2222-4222-8222-222222222222", pluginId: artifact.artifact.manifest.id, version: "1.0.0",
@@ -65,12 +65,17 @@ function harness(t: TestContext) {
           startupTiming: { moduleAgeMs: 0, prepareMs: 0 } });
       } else {
         let turn: VmTurn;
-        if (command.type === "respond") { responses.push(...JSON.parse(command.responsesJson)); turn = this.vm.respond(command.responsesJson); }
-        else {
-          this.actionId = command.id; this.batchId = 0;
-          if (command.type === "init") turn = this.vm.init(command.source, command.config);
-          else if (command.type === "dispose") turn = this.vm.dispose();
-          else { consumed.push({ type: command.event.type, at: now }); turn = this.vm.event(JSON.stringify(command.event)); }
+        try {
+          if (command.type === "respond") { responses.push(...JSON.parse(command.responsesJson)); turn = this.vm.respond(command.responsesJson); }
+          else {
+            this.actionId = command.id; this.batchId = 0;
+            if (command.type === "init") turn = this.vm.init(command.source, command.config);
+            else if (command.type === "dispose") turn = this.vm.dispose();
+            else { consumed.push({ type: command.event.type, at: now }); turn = this.vm.event(JSON.stringify(command.event)); }
+          }
+        } catch (error) {
+          if (!(error instanceof SandboxError)) throw error;
+          this.reply({ version: 1, type: "failed", id: this.actionId, channel: "sandbox", failure: error.code }); await flush(); return;
         }
         if (turn.lifecycle === "pending") this.reply({ version: 1, type: "requests", actionId: this.actionId, batchId: ++this.batchId,
           requestsJson: JSON.stringify(turn.requests) });
@@ -82,6 +87,7 @@ function harness(t: TestContext) {
     async drain() { for (let i = 0; this.queue.length; i++) { assert.ok(i < 32); await this.consume(); } }
   }
   const clients: PluginKernelClient[] = [];
+  let hostCalls = 0, hostGate: Promise<void> | undefined;
   const controller = new RoomPluginController({ apiBaseUrl: "https://app.invalid", roomId: "room", clock: () => now,
     context: () => ({ active: true, ready: true, online: true, visible: true, connection: "connected" }),
     proof: () => ({ token: "unit-only", deadlineMs: 900_000 }), render() {},
@@ -91,6 +97,7 @@ function harness(t: TestContext) {
       port: owner => ({ claim: seat => adapter.claim(seat, owner), cancel: () => adapter.cancelOwn(owner) }),
       retire(owner) { retirements.push(now); adapter.retire(owner); } },
     async start(code, config, approved, dispatch) {
+      hostCalls++; await hostGate;
       const worker = new ControlledWorker(); workers.push(worker);
       const client = new PluginKernelClient(worker, approved, undefined, { dispatch, clock: () => now }); clients.push(client);
       const boot = client.init(wasm, code, config); await worker.drain(); await boot; return client;
@@ -101,6 +108,9 @@ function harness(t: TestContext) {
     async start() { adapter.observe(); controller.start(2); await until(() => controller.diagnostics().running === 1); },
     async advance(ms: number) { now += ms; t.mock.timers.tick(ms); await flush(); },
     async config(revision: number, enabled: boolean) { current = snapshot(revision, enabled); controller.kick(); await flush(); },
+    hostCalls: () => hostCalls,
+    holdHost() { hostGate = new Promise(resolve => { this.releaseHost = () => { hostGate = undefined; resolve(); }; }); },
+    releaseHost: () => {},
     holdRead() { pendingRead = new Promise(resolve => { this.releaseRead = snapshot => { pendingRead = undefined; resolve(snapshot); }; }); },
     releaseRead: (_snapshot: RoomPluginRuntimeSnapshot) => {}
   };
@@ -235,6 +245,36 @@ test("lease expiry during an actual pending scaffold claim retires before its na
   assert.equal(h.adapter.diagnostics().grant, "closed", "a late ACK cannot reopen the expired arrival window");
   h.releaseRead(h.snapshot()); await flush(); await until(() => h.controller.diagnostics().running === 1);
   assert.deepEqual(h.controller.diagnostics().retirements[0], row, "fresh authority cannot erase the producer fact");
+});
+
+test("a renewal in flight at expiry keeps the host start: one VM, one activation and a real accepted claim", async t => {
+  const h = harness(t); h.adapter.observe(); h.holdHost(); h.beginDiscovery(); await until(() => h.hostCalls() === 1);
+  h.holdRead(); await h.advance(4000); // A late refresh, as under a busy main thread.
+  await h.advance(1000);
+  assert.equal(h.controller.diagnostics().remainingLeaseMs, 0); assert.equal(h.controller.diagnostics().fetchPending, true);
+  assert.deepEqual(h.controller.diagnostics().retirements, []);
+  assert.deepEqual(h.retirements, [5000], "the seat port drops any pending claim; the preparation itself stays");
+  assert.deepEqual(h.adapter.diagnostics().activations, [], "no room.ready without authority");
+  h.releaseRead(h.snapshot()); await flush();
+  assert.equal(h.controller.diagnostics().remainingLeaseMs, 4000);
+  h.releaseHost(); await until(() => h.controller.diagnostics().running === 1); await h.workers[0].drain();
+  assert.equal(h.hostCalls(), 1); assert.equal(h.workers.length, 1);
+  assert.equal(h.adapter.diagnostics().activations.length, 1); assert.equal(h.claims.length, 1);
+  h.adapter.settleClaim({ seatId: "seat-a", accepted: true, commandId: h.claims[0].id }); await flush(); await h.workers[0].drain();
+  assert.equal(h.adapter.diagnostics().grant, "used");
+});
+
+test("a real guest denied in the lease gap gets a clean new start instead of a sticky failure", async t => {
+  const h = harness(t, 'export function init(context) { return context.sdk.status.set("ready"); }');
+  h.adapter.observe(); h.holdHost(); h.beginDiscovery(); await until(() => h.hostCalls() === 1);
+  h.holdRead(); await h.advance(4000); await h.advance(1000);
+  h.releaseHost(); await until(() => h.controller.diagnostics().retirements.length === 1);
+  assert.ok(h.responses.some(response => !response.ok && response.error === "lease-expired"));
+  const [fact] = h.controller.diagnostics().retirements;
+  assert.equal(fact.reason, "lease-expired"); assert.equal(fact.failure, "guest_exception");
+  assert.equal(h.controller.diagnostics().failed, 0); assert.equal(h.controller.diagnostics().lastInstanceFailure, null);
+  h.releaseRead(h.snapshot()); await until(() => h.controller.diagnostics().running === 1);
+  assert.equal(h.hostCalls(), 2); assert.ok(h.responses.some(response => response.ok));
 });
 
 test("negative control: suppressing actual retirement cannot masquerade as cancellation before 3000", async t => {
