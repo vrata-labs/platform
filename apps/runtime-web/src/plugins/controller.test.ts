@@ -287,6 +287,24 @@ test("a start failing after the lease gap is an interruption, not a sticky guest
   assert.equal(h.counters.starts, 2);
 });
 
+test("the lease gap excuses only its own attempt: a guest failure of the next start is sticky", async t => {
+  const h = harness(); t.after(() => h.controller.stop()); h.config(snapshot());
+  let reject!: (error: Error) => void;
+  h.startTask(() => new Promise((_, fail) => { reject = fail; }));
+  h.controller.start(2); await until(() => h.counters.starts === 1 && !h.controller.diagnostics().fetchPending);
+  const renewal = await expireWhileRenewing(h);
+  h.startTask(null);
+  reject(new SandboxError("guest_exception")); await delay(5);
+  assert.equal(h.controller.diagnostics().failed, 0, "the first attempt was an interruption");
+  h.failStart(new SandboxError("guest_exception"));
+  renewal.answer(snapshot()); await until(() => h.counters.starts === 2 && !h.controller.diagnostics().fetchPending); await delay(5);
+  const diagnostics = h.controller.diagnostics();
+  assert.equal(diagnostics.failed, 1, "the second attempt had no gap of its own");
+  assert.equal(diagnostics.lastInstanceFailure, "guest_exception");
+  assert.equal(diagnostics.retirements.at(-1)?.reason, "start-failed");
+  await h.advance(10_000); assert.equal(h.counters.starts, 2, "the failure stays sticky");
+});
+
 test("repeated gaps keep one attempt, and a start interrupted by them still spends the unchanged budget", async t => {
   const kept = harness(); t.after(() => kept.controller.stop()); kept.config(snapshot());
   const finish = holdPreparation(kept, "VM");

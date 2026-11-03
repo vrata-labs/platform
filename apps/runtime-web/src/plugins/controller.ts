@@ -297,8 +297,9 @@ export class RoomPluginController {
       entry.instance = instance; entry.state = "running"; this.notifyConnection(entry); this.notifySeating(entry, false); this.render();
     } catch (error) {
       if (!current()) return;
-      if (entry.leaseGap) {
+      if (entry.leaseGap && !entry.instance) {
         // As with a preparation interrupted at expiry, the failure may come from the denial itself and is not sticky.
+        // An installed instance is past that denial: its host fault takes the ordinary failure path below.
         this.retireSeating(entry, "lease-expired", error instanceof SandboxError ? error.code : error instanceof RoomPluginRuntimeError ? error.code : "host-unavailable");
         entry.state = "suspended"; entry.abort.abort(); this.render();
       } else if (error instanceof RoomPluginHttpError || error instanceof RoomPluginRuntimeError && error.code === "lease-expired") {

@@ -46,7 +46,8 @@ function harness(t: TestContext, entry = source) {
     seats: [{ id: "seat-a", yaw: 0 }], occupancy: {}, currentSeatId: null, pendingSeatId: null };
   const claims: Array<{ at: number; id: string }> = [], cancels: Array<{ at: number; claim: string }> = [];
   const retirements: number[] = [], consumed: Array<{ type: string; at: number }> = [], responses: RoomPluginResponse[] = [];
-  const adapter = new RoomPluginSeatAdapter({ world: () => world, optedOut: () => false, clock: () => now, random: () => `alias-${++alias}`,
+  let worldFault = false;
+  const adapter = new RoomPluginSeatAdapter({ world: () => { if (worldFault) { worldFault = false; throw new Error("seat_world_fault"); } return world; }, optedOut: () => false, clock: () => now, random: () => `alias-${++alias}`,
     claim(seat, id) { world.pendingSeatId = seat; claims.push({ at: now, id }); },
     cancel(_release, claim) { cancels.push({ at: now, claim }); world.pendingSeatId = null; return true; } });
   const workers: ControlledWorker[] = [];
@@ -109,6 +110,7 @@ function harness(t: TestContext, entry = source) {
     async advance(ms: number) { now += ms; t.mock.timers.tick(ms); await flush(); },
     async config(revision: number, enabled: boolean) { current = snapshot(revision, enabled); controller.kick(); await flush(); },
     hostCalls: () => hostCalls,
+    failNextWorldRead() { worldFault = true; },
     holdHost() { hostGate = new Promise(resolve => { this.releaseHost = () => { hostGate = undefined; resolve(); }; }); },
     releaseHost: () => {},
     holdRead() { pendingRead = new Promise(resolve => { this.releaseRead = snapshot => { pendingRead = undefined; resolve(snapshot); }; }); },
@@ -275,6 +277,29 @@ test("a real guest denied in the lease gap gets a clean new start instead of a s
   assert.equal(h.controller.diagnostics().failed, 0); assert.equal(h.controller.diagnostics().lastInstanceFailure, null);
   h.releaseRead(h.snapshot()); await until(() => h.controller.diagnostics().running === 1);
   assert.equal(h.hostCalls(), 2); assert.ok(h.responses.some(response => response.ok));
+});
+
+for (const gap of [false, true]) test(`a host fault while installing the VM ${gap ? "after a lease gap" : "without a lease gap"} terminates it and fails the entry`, async t => {
+  const h = harness(t); h.adapter.observe(); h.holdHost(); h.beginDiscovery(); await until(() => h.hostCalls() === 1);
+  if (gap) {
+    h.holdRead(); await h.advance(4000); await h.advance(1000);
+    assert.equal(h.controller.diagnostics().remainingLeaseMs, 0); assert.equal(h.controller.diagnostics().fetchPending, true);
+    h.releaseRead(h.snapshot()); await flush();
+    assert.equal(h.controller.diagnostics().remainingLeaseMs, 4000);
+  }
+  // room.connection is already queued; activate() throws synchronously on the way to room.ready.
+  h.failNextWorldRead(); h.releaseHost();
+  await until(() => h.controller.diagnostics().retirements.length > 0);
+  await h.advance(2000); await flush(); // The next accepted refresh must not show the instance as running.
+  const diagnostics = h.controller.diagnostics();
+  assert.equal(diagnostics.running, 0, "no VM stays alive behind a running status");
+  assert.equal(diagnostics.failed, 1); assert.equal(diagnostics.hostFailed, true);
+  assert.equal(diagnostics.retirements[0].reason, "start-failed"); assert.equal(diagnostics.retirements[0].failure, "host-unavailable");
+  assert.equal(h.clients[0].state, "failed"); assert.equal(h.clients[0].failure, "instance_closed", "the VM was terminated, not abandoned");
+  assert.ok(h.workers[0].queue.some(command => command.type === "terminate"), "termination reached the worker boundary");
+  assert.equal(h.hostCalls(), 1, "a host failure is sticky");
+  assert.deepEqual(h.adapter.diagnostics().activations, []);
+  assert.equal(h.consumed.some(event => event.type === "room.ready"), false);
 });
 
 test("negative control: suppressing actual retirement cannot masquerade as cancellation before 3000", async t => {
