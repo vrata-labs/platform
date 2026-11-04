@@ -18,7 +18,8 @@ function staleBindingUpdate(binding: Library["bindings"][number]) {
     enabled: binding.enabled, expectedRevision: 1, config: { greeting: "stale" }, approvedCapabilities: ["status.set"] };
 }
 
-export async function publicDemoPluginLifecycle(origin: string, roomId: string, host: Actor, member: Actor, guest: Actor) {
+/** Runs while only the Host and the Member are in the room; later entrants meet the running plugin. */
+export async function publicDemoPluginLifecycle(origin: string, roomId: string, host: Actor, member: Actor) {
   const author = await createExternalAuthorProject(await downloadPublicSdk(origin, "0.2.0"), "0.2.0");
   let authorRequests = 0, documentUploads = 0, invalidAuthority = false;
   const onRequest = (request: Request) => {
@@ -31,6 +32,9 @@ export async function publicDemoPluginLifecycle(origin: string, roomId: string, 
     invalidAuthority ||= Boolean(headers["x-vrata-admin-token"]) || !headers.authorization?.startsWith("Bearer rs2.");
   };
   host.page.on("request", onRequest);
+  const assertNoNativeExecution = async (actor: Actor) => {
+    expect(await actor.page.evaluate(marker => Reflect.has(window, marker), nativeMarker)).toBe(false);
+  };
   const read = async (actor = host) => {
     const response = await privateHttp(origin, pluginPath(roomId, "packages"), "GET", bearer(actor.sessionToken));
     expect(response.status).toBe(200);
@@ -38,7 +42,7 @@ export async function publicDemoPluginLifecycle(origin: string, roomId: string, 
   };
   try {
     await chooseMeetingPanel(host.page, "people", false);
-    for (const actor of [host, member, guest]) {
+    for (const actor of [host, member]) {
       expect(await actor.page.evaluate(() => (window as any).__VRATA_DEBUG__?.plugins?.running ?? 0)).toBe(0);
     }
     await expect(host.page.locator("#room-plugin-author")).toBeVisible();
@@ -87,9 +91,9 @@ export async function publicDemoPluginLifecycle(origin: string, roomId: string, 
     await act(host.page, entry, "enable", "Behavior enabled");
     library = await read(); expect(library.revision).toBe(4); exactBinding(library, second, true);
     await expectPluginStatus(member.page, "public-demo-reenabled", "Public demo v2");
-    for (const actor of [member, guest]) await denyAuthor(actor, host);
+    await denyAuthor(member, host);
     expect(authorRequests > 0 && !invalidAuthority).toBe(true);
-    for (const actor of [host, member, guest]) expect(await actor.page.evaluate(marker => Reflect.has(window, marker), nativeMarker)).toBe(false);
+    for (const actor of [host, member]) await assertNoNativeExecution(actor);
     await author.assertNotExecuted();
 
     async function denyAuthor(actor: Actor, currentHost: Actor) {
@@ -107,7 +111,7 @@ export async function publicDemoPluginLifecycle(origin: string, roomId: string, 
       expect(sha256(Buffer.from(JSON.stringify(await read(currentHost)))) === hash).toBe(true);
       await expectPluginStatus(member.page, "public-demo-denial-unchanged", "Public demo v2");
     }
-    return { denyAuthor, read,
+    return { denyAuthor, assertNoNativeExecution, read,
       assertNormalAuthorRequests() { expect(authorRequests > 0 && documentUploads > 0 && !invalidAuthority).toBe(true); },
       async close() { await cleanupAll([() => host.page.off("request", onRequest), () => author.close()]); } };
   } catch (error) { await cleanupAll([() => host.page.off("request", onRequest), () => author.close()], { error }); throw error; }

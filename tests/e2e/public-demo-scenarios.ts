@@ -1310,6 +1310,11 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
       }).toEqual(["not_joined", "not_joined"]);
     }
 
+    await waitForExactPresence([host, firstMember]);
+    setPhase("external-author-ui-lifecycle");
+    pluginLifecycle = await publicDemoPluginLifecycle(options.origin, roomId, host, firstMember);
+
+    setPhase("late-participant-join");
     let secondMemberPage = await contexts[2]!.newPage();
     const secondMember = await joinClientPage({
       context: contexts[2]!, page: secondMemberPage, role: "member", inviteLink: memberInvites[1] as string,
@@ -1327,8 +1332,9 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
     if (new Set(clients.map((client) => client.participantId)).size !== 4) throw new Error("public_demo_participant_ids_not_unique");
     await waitForExactPresence(clients);
 
-    setPhase("external-author-ui-lifecycle");
-    pluginLifecycle = await publicDemoPluginLifecycle(options.origin, roomId, host, firstMember, guest);
+    setPhase("guest-author-denial");
+    await pluginLifecycle.denyAuthor(guest, host);
+    await pluginLifecycle.assertNoNativeExecution(guest);
 
     setPhase("host-own-document-upload");
     await chooseMeetingPanel(host.page, "present", false);
