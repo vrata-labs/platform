@@ -4,8 +4,13 @@ import { resolve } from "node:path";
 
 // Exercise the compiled production reader in a real GPU-backed browser canvas.
 // The separate runtime/public-demo scenarios still prove application integration.
-const readerSource = readFileSync(resolve("apps/runtime-web/dist/canvas-readback.js"), "utf8")
-  .replace("export async function readCanvasPixels", "async function readCanvasPixels");
+// Playwright loads every spec for any --grep, and published suites run without a
+// build, so the compiled reader is read only when these tests actually execute.
+let readerSource = "";
+test.beforeAll(() => {
+  readerSource = readFileSync(resolve("apps/runtime-web/dist/canvas-readback.js"), "utf8")
+    .replace("export async function readCanvasPixels", "async function readCanvasPixels");
+});
 
 for (const attributes of [
   { alpha: false, premultipliedAlpha: true },
