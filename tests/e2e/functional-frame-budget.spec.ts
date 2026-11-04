@@ -48,6 +48,14 @@ test("functional frame budget reports an exception without losing the remaining 
   expect((await reported).message).toBe("owned_frame_callback_error");
 });
 
+test("functional frame budget honours a longer interval", async ({ page }) => {
+  await installFunctionalFrameBudget(page, 600); await page.goto("/health");
+  const gap = await page.evaluate(() => new Promise<number>(resolve => {
+    requestAnimationFrame(first => requestAnimationFrame(second => resolve(second - first)));
+  }));
+  expect(gap).toBeGreaterThanOrEqual(550);
+});
+
 test("functional context budget covers new pages and reloads", async ({ browser }) => {
   const context = await browser.newContext();
   try {

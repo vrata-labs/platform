@@ -19,7 +19,7 @@ async function harness() {
   };
   const context = { exports: {}, window, performance: { now: () => now }, setTimeout: window.setTimeout };
   vm.runInNewContext(source, context);
-  await context.exports.installFunctionalFrameBudget({ addInitScript: callback => callback() });
+  await context.exports.installFunctionalFrameBudget({ addInitScript: (callback, arg) => callback(arg) });
   return { window, frames, timers,
     work(ms) { now += ms; },
     frame(timestamp, dispatchAt = timestamp) {

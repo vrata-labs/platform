@@ -2,13 +2,13 @@ import type { Page } from "@playwright/test";
 
 /** Functional multi-client coverage renders real scenes, but does not measure
  * scene frame rate. Keep four software-rendered rooms from starving RTC/WS
- * tasks. Normal-DPR visual and locomotion/performance checks do not use this. */
-export async function installFunctionalFrameBudget(page: Pick<Page, "addInitScript">): Promise<void> {
-  await page.addInitScript(() => {
+ * tasks. Normal-DPR visual and locomotion/performance checks do not use this.
+ * A scenario with no rendering checks of its own may pass a longer interval. */
+export async function installFunctionalFrameBudget(page: Pick<Page, "addInitScript">, frameIntervalMs = 100): Promise<void> {
+  await page.addInitScript(intervalMs => {
     const nativeRequest = window.requestAnimationFrame.bind(window), nativeCancel = window.cancelAnimationFrame.bind(window);
     const pending = new Map<number, FrameRequestCallback>();
     let sequence = 0, nativeHandle: number | undefined, timer: number | undefined, lastFrameAt = -Infinity, dispatching = false;
-    const intervalMs = 100;
     const schedule = () => {
       if (dispatching || !pending.size || nativeHandle !== undefined || timer !== undefined) return;
       const request = () => {
@@ -40,5 +40,5 @@ export async function installFunctionalFrameBudget(page: Pick<Page, "addInitScri
         nativeHandle = undefined; timer = undefined;
       }
     };
-  });
+  }, frameIntervalMs);
 }

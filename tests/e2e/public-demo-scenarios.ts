@@ -704,8 +704,10 @@ async function reloadClientThroughInvite(client: DemoClient): Promise<void> {
 async function createTrackedContext(browser: Browser): Promise<BrowserContext> {
   const context = await browser.newContext({ viewport, deviceScaleFactor });
   // Use the same real-scene functional frame budget as the other multi-client
-  // meeting suites, on every page/reload without stacking RAF wrappers.
-  await installFunctionalFrameBudget(context);
+  // meeting suites, on every page/reload without stacking RAF wrappers. This
+  // scenario checks no rendered frames, and continuous software rendering of
+  // the real scene leaves its plugin leases and status updates too little time.
+  await installFunctionalFrameBudget(context, 2000);
   await installMeetingPerformanceObservation(context);
   await installFreshAudioObservation(context);
   context.setDefaultTimeout(120_000);
