@@ -46,7 +46,7 @@ async function withAutoSeatRoom(browser: Browser, value: RoomPluginOrigin,
   }, () => [() => author.close()]);
 }
 
-export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOrigin) {
+export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOrigin, simultaneousEntrants: 2 | 4) {
   const captures: RoomAuthorityCapture[] = [];
   const contexts: Array<{ close(): Promise<void> }> = [];
   await withCleanup(() => withAutoSeatRoom(browser, value, async (roomId, put) => {
@@ -58,15 +58,15 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
       const observations = new Map<Page, RoomAuthorityCapture>();
       const arrivalBeganAt = performance.now();
       const arrivalPhases: Record<string, number> = {};
-      const entries = [1, 2, 3, 4].map(index => enterPluginRoom(browser, value, roomId, "member", `Auto-seat member ${index}`, async (context, page) => {
+      const entries = Array.from({ length: simultaneousEntrants }, (_, index) => enterPluginRoom(browser, value, roomId, "member", `Auto-seat member ${index + 1}`, async (context, page) => {
         contexts.push(context); pages.push(page); observations.set(page, await observe(page));
         await installSeatAckObservation(page);
         await installSeatEntryObservation(page);
       }, async page => { preparedForms.add(page); await admissionGate; }));
       const settled = Promise.all(entries); void settled.catch(() => undefined);
       await withCleanup(async () => {
-        await expect.poll(() => pages.length === 4 && preparedForms.size === 4, { timeout: 90_000 }).toBe(true);
-        // All four normal invitation forms are filled and actionable BEFORE
+        await expect.poll(() => pages.length === simultaneousEntrants && preparedForms.size === simultaneousEntrants, { timeout: 90_000 }).toBe(true);
+        // All normal invitation forms are filled and actionable BEFORE
         // admission. Release real UI clicks, never post-ready HTTP or WS traffic.
         const prepared = await Promise.all(pages.map(page => page.evaluate(() => (window as any).__t16SeatEntryFacts())));
         expect(prepared.every(facts => facts.joinClicks.length === 0 && facts.admissionStarts.length === 0 && facts.discovery.length === 0)).toBe(true);
@@ -102,7 +102,7 @@ export async function runAutoSeatScenario(browser: Browser, value: RoomPluginOri
         }
         const seated = await Promise.all(members.map(member => seatState(member.page)));
         const seats = seated.map(state => state.currentSeatId!);
-        expect(new Set(seats).size).toBe(4);
+        expect(new Set(seats).size).toBe(simultaneousEntrants);
         const entryFacts = await Promise.all(members.map(member => member.page.evaluate(() => (window as any).__t16SeatEntryFacts())));
         expect(entryFacts.every(facts => facts.joinClicks.length === 1 && facts.joinClicks[0].trusted
           && facts.admissionStarts.length === 1 && facts.discovery.some((row: any) => row.responseMs !== null))).toBe(true);

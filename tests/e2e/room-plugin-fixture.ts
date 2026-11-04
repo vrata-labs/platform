@@ -11,7 +11,8 @@ import { cleanupAll, withCleanup } from "./test-cleanup";
 
 const secret = "owned-t07-room-runtime-state-secret-32-bytes";
 export type RoomPluginFixture = Awaited<ReturnType<typeof startRoomPluginFixture>>;
-export interface RoomPluginOrigin { origin: string; adminToken: string }
+/** Without lightScene the room gets the real meeting-room-basic scene. */
+export interface RoomPluginOrigin { origin: string; adminToken: string; lightScene?: { templateId: string; sceneBundleUrl: string } }
 
 /** Owned reference fixture; protocol 2 raises only this disposable schema, never a shared floor. */
 export async function startRoomPluginFixture(protocol: 1 | 2) {
@@ -33,7 +34,8 @@ export async function startRoomPluginFixture(protocol: 1 | 2) {
 
 export async function createOwnedPluginRoom(value: RoomPluginOrigin): Promise<string> {
   const created = await privateHttp(value.origin, "/api/rooms", "POST", { "x-vrata-admin-token": value.adminToken },
-    { tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Owned T07 runtime room", visibility: "private" });
+    { tenantId: "demo-tenant", templateId: value.lightScene?.templateId ?? "meeting-room-basic", name: "Owned T07 runtime room", visibility: "private",
+      ...(value.lightScene ? { sceneBundleUrl: value.lightScene.sceneBundleUrl } : {}) });
   expect(created.status).toBe(201); return created.json<{ roomId: string }>().roomId;
 }
 export async function deleteOwnedPluginRoom(value: RoomPluginOrigin, roomId: string): Promise<void> {

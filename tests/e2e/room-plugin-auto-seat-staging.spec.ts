@@ -14,7 +14,8 @@ async function publishedOrigin() {
 
 test("@staging-extended T16 external auto-seat: simultaneous entrants, protocol conflict, reconnect and no ghosts", async ({ browser }) => {
   test.setTimeout(600_000);
-  await runAutoSeatScenario(browser, await publishedOrigin());
+  // A reference room cannot take a lighter scene, so two entrants keep the real room affordable.
+  await runAutoSeatScenario(browser, await publishedOrigin(), 2);
 });
 
 test("@staging-extended T16 external auto-seat pending retirement suppresses intermediate late accept and leaves no ghosts", async ({ browser }) => {

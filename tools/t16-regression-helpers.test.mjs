@@ -278,9 +278,9 @@ test("local and published pending wrappers execute the same exported scenario wi
     test.use = () => {}; test.setTimeout = () => {}; test.skip = () => assert.fail("mandatory case cannot skip");
     loadHelper(`tests/e2e/room-plugin-auto-seat${published ? "-staging" : ""}.spec.ts`, {
       "@playwright/test": { test },
-      "./plugin-author-scenarios": {}, "./room-plugin-fixture": { startRoomPluginFixture: async protocol => { assert.equal(protocol, 2); return fixture; } },
+      "./plugin-author-scenarios": {}, "./room-plugin-fixture": {},
       "./room-plugin-auto-seat-scenarios": { runPendingAutoSeatScenario: async (browser, value) => pending.push({ browser, value }) },
-      "./room-plugin-no-anchor-fixture": {}, "./public-demo-scenarios": { assertExactActivePublicDemoCatalog: async origin => assert.equal(origin, fixture.origin) }
+      "./room-plugin-no-anchor-fixture": { startLightSceneRoomPluginFixture: async () => fixture }, "./public-demo-scenarios": { assertExactActivePublicDemoCatalog: async origin => assert.equal(origin, fixture.origin) }
     }, "", { process: { env: { BASE_URL: fixture.origin, STAGING_ADMIN_TOKEN: fixture.adminToken, VRATA_REFERENCE_CATALOG_ACTIVE: "1" } } });
     const selected = cases.filter(row => row.name.includes("pending retirement"));
     assert.equal(selected.length, 1); assert.equal(selected[0].name.includes("@staging-extended"), published);

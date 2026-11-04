@@ -1,7 +1,8 @@
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { bearer, pluginPath, privateHttp, type ExternalArtifact } from "./plugin-author-scenarios";
-import { enterOwnedPluginRoom, enterPluginRoom, expectPluginStatus, installPluginArtifact, startRoomPluginFixture, useOwnedActor } from "./room-plugin-fixture";
+import { enterOwnedPluginRoom, enterPluginRoom, expectPluginStatus, installPluginArtifact, useOwnedActor } from "./room-plugin-fixture";
+import { startLightSceneRoomPluginFixture } from "./room-plugin-no-anchor-fixture";
 import { captureRoomAuthority, type RoomAuthorityCapture } from "./room-state-observation";
 import { withCleanup } from "./test-cleanup";
 
@@ -16,7 +17,7 @@ const seatState = (page: Page) => page.evaluate(() => {
 });
 
 test("isolated v2 auto-seat seats only a newly entering participant through correlated platform seating", async ({ browser }) => {
-  test.setTimeout(420_000); const value = await startRoomPluginFixture(2);
+  test.setTimeout(420_000); const value = await startLightSceneRoomPluginFixture();
   try {
     const host = await enterOwnedPluginRoom(browser, value);
     await useOwnedActor(host, async () => {
