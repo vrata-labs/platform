@@ -11,8 +11,8 @@ import { cleanupAll, withCleanup } from "./test-cleanup";
 
 const secret = "owned-t07-room-runtime-state-secret-32-bytes";
 export type RoomPluginFixture = Awaited<ReturnType<typeof startRoomPluginFixture>>;
-/** Without lightScene the room gets the real meeting-room-basic scene. */
-export interface RoomPluginOrigin { origin: string; adminToken: string; lightScene?: { templateId: string; sceneBundleUrl: string } }
+/** Without lightScene the room gets the real meeting-room-basic scene; frameIntervalMs overrides the frame budget default. */
+export interface RoomPluginOrigin { origin: string; adminToken: string; lightScene?: { templateId: string; sceneBundleUrl: string }; frameIntervalMs?: number }
 
 /** Owned reference fixture; protocol 2 raises only this disposable schema, never a shared floor. */
 export async function startRoomPluginFixture(protocol: 1 | 2) {
@@ -55,7 +55,7 @@ export async function enterPluginRoom(browser: Browser, value: RoomPluginOrigin,
   expect(invite.status).toBe(201);
   const context = await browser.newContext({ viewport: { width: 800, height: 500 }, deviceScaleFactor: .4 });
   try {
-    const page = await context.newPage(); await installFunctionalFrameBudget(page); await installMeetingPerformanceObservation(page);
+    const page = await context.newPage(); await installFunctionalFrameBudget(page, value.frameIntervalMs); await installMeetingPerformanceObservation(page);
     await prepare?.(context, page);
     const requests = { plugin: 0, workers: 0, wasm: 0 };
     page.on("request", request => {

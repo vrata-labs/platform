@@ -9,7 +9,8 @@ async function publishedOrigin() {
   if (!origin || !adminToken || process.env.VRATA_REFERENCE_CATALOG_ACTIVE !== "1") throw new Error("t16_auto_seat_requires_published_active_catalog_and_credentials");
   if (new URL(origin).protocol !== "https:") throw new Error("t16_auto_seat_requires_https");
   await assertExactActivePublicDemoCatalog(origin);
-  return { origin, adminToken };
+  // Rare frames, as in the public demo: these cases check no rendered frames.
+  return { origin, adminToken, frameIntervalMs: 2000 };
 }
 
 test("@staging-extended T16 external auto-seat: simultaneous entrants, protocol conflict, reconnect and no ghosts", async ({ browser }) => {
