@@ -23,7 +23,7 @@ import traceback
 import urllib.request
 
 os.umask(0o077)
-SHA = "51668aa26f64dc6d56045ac9bff6a14b1038f129"
+SHA = "9d7b2db4c60df1d39dd5769f6f4676addfb0f03c"
 ORIGIN = "https://github.com/vrata-labs/platform.git"
 ROOT = Path(__file__).resolve().parent.parent
 DOCKER = ["/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe", "--host", "npipe:////./pipe/dockerDesktopLinuxEngine"]

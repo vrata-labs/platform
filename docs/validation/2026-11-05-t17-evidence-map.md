@@ -1,6 +1,6 @@
 # T17: карта приёмки
 
-Runtime: `51668aa26f64dc6d56045ac9bff6a14b1038f129` (main, PR #156). Docs/harness SHA записывается отдельно после фиксации оснастки. Изменение только отчёта не означает новую сборку runtime; любое исполняемое изменение продукта требует нового runtime SHA и повторных относящихся проверок.
+Runtime candidate: `9d7b2db4c60df1d39dd5769f6f4676addfb0f03c` с исправлением storage bootstrap (D-100), пока не опубликован в origin. Main `51668aa26f64dc6d56045ac9bff6a14b1038f129` (PR #156) — подтверждённый исторический baseline, не текущий кандидат приёмки. Docs/harness SHA записывается отдельно после фиксации оснастки (D-098). Изменение только отчёта не означает новую сборку runtime; исполняемое изменение продукта требует нового runtime SHA и повторных относящихся проверок.
 
 План: внешний `2026-09-25-working-meeting-and-room-plugins.md`, §3, T17, §8. Контракт: [JSON](2026-11-05-t17-product-acceptance.json). Основания: [пакет](../context/2026-11-05-t17-product-acceptance.json). Решения: [журнал](../reviews/2026-11-05-t17-acceptance-decisions.md).
 
@@ -23,20 +23,22 @@ Runtime: `51668aa26f64dc6d56045ac9bff6a14b1038f129` (main, PR #156). Docs/harnes
 
 ## Исходное состояние 2026-11-05
 
-- Новый отдельный clone получен с origin и переключён на exact runtime SHA; это ещё не self-host PASS.
+- Исторический отдельный clone origin получен на `51668aa`; его prepared env/state сохранены и не используются для `9d7b2db`. Для нового кандидата выделен отдельный delivery root `/tmp/opencode/vrata-t17-final-9d7b2db`, без source clone и prepared state до публикации SHA.
 - Штатные инструкции: `docs/self-hosting.md`, `docs/demo/README.md`, `docs/plugin-storage-lifecycle.md`; Compose selfhost+demo-local. Существующий `storage-lifecycle.spec.ts` использует fixture и не подменяет fresh clone.
 - Linux Docker socket отсутствует; доступен Windows Docker Engine 29.4.1 и Compose 5.1.3 через named pipe. Перезапуск Docker/WSL/сети не требуется.
-- Local/CI/stage и ручная встреча имеют отдельные подтверждения; здесь они не объявлены выполненными.
+- Package test на `51668aa` завершился exit 1 без таймаута: отсутствовали pinned rollback object `81c14b6ac8dbc537892f7b1f342ca8f718fdf0a6` и `VRATA_PLUGIN_ROLLBACK_STORAGE_MODULE`. Два API-теста остановились в `assertLocalPluginRollbackObject` до проверок совместимости (API: 1859 passed / 2 failed / 6 skipped; root tools после `&&` не запускались). Это отказ подготовки fixture, не доказанный дефект продукта и не произвольный таймаут. Источники: `rollback-fixture.test-helper.ts:14–18`, `rollback-compat.postgres.test.ts:27–54`, receipt `1793893065934247928-package-test-136b5e16.json` и `superseded-package-51668aa-analysis.private.json` в приватном пакете приёмки.
+- Незавершённый full-local `51668aa` отменён после смены кандидата; terminal `t17-full-local-51668aa-80ca1f9e/terminal.json` имеет blocked, package failure сохранён. Отмена не является PASS; источник — `superseded-full-local-51668aa.json`. Local/CI/Docker/stage на `9d7b2db` и ручная встреча требуют отдельных подтверждений.
 
 ## Запуск fresh self-host
 
 Оснастка: `tools/t17-selfhost-acceptance.py`; отдельный Playwright config: `tests/selfhost/playwright.config.ts` (без webServer/fixture). Продукт собирается штатными Dockerfiles из `git archive` exact runtime SHA. Author helpers сверяются побайтно с этим SHA; hashes самой оснастки записываются отдельно. Приватные env, state и логи — только в каталоге доставки вне репозитория.
 
 ```bash
-python3 tools/t17-selfhost-acceptance.py preflight
-python3 tools/t17-selfhost-acceptance.py run
+python3 tools/t17-selfhost-acceptance.py run --wait-lock --delivery /tmp/opencode/vrata-t17-final-9d7b2db
 ```
 
-Оба запуска по умолчанию берут `/tmp/opencode/vrata-t17-browser.lock` без ожидания; код 75 означает занятую очередь, не провал продукта. Долгий `run` выполняется последовательно с full local. Для асинхронной очереди главного процесса предусмотрен `run --wait-lock`; внутри дочерней задачи ожидание не запускается. Не оборачивайте runner во второй flock: он сам владеет lock. Он не ждёт CI/публикации образов: собирает новые собственные образы из source, поднимает штатный self-host и в любом исходе сохраняет результат/пытается очистить только свои ресурсы. Повтор завершённого сценария автоматически не выполняется; исходные отказы не затираются. Ручное завершение cleanup: та же команда с операцией `cleanup` после проверки приватного terminal record.
+Предусловия запуска: exact `9d7b2db` опубликован в origin, относящиеся local gates успешны. Команда пока не выполнялась. Runner создаст новый clone origin на этом SHA; старый clone, env и project подставлять нельзя. По умолчанию `preflight`/`run` берут `/tmp/opencode/vrata-t17-browser.lock` без ожидания; код 75 означает занятую очередь, не провал продукта. `run --wait-lock` сериализует self-host с full local; второй внешний flock не нужен. Код 0 означает успешную выбранную операцию, 1 — failed lifecycle, 2 — ошибку runner; preflight exit 0 не является lifecycle PASS. Runner собирает собственные образы из source, поднимает штатный self-host и сохраняет результат независимо от исхода, отдельно пытаясь очистить только свои ресурсы. Повтор завершённого сценария автоматически не выполняется; исходные отказы не затираются. Ручной cleanup: тот же delivery и операция `cleanup` без `--wait-lock`, после проверки приватного terminal record.
 
-Выполнены только подготовительные проверки: pristine clone/dependencies, штатный и изолированный rendered Compose model, свободные уникальные порты/отсутствие ресурсов project, Playwright collection 1 test. Они не равны install/run/restart PASS. Отдельная первоначальная проверка типов без workspace resolution завершилась ошибками разрешения зависимостей; её журналы сохранены. Полная проверка типов оснастки с pristine dependency/source mappings включена в runner до сборки контейнеров. Браузерный lifecycle передан в общую последовательную очередь: lock занят, ожидание и фоновый запуск не производились.
+Исторические подготовительные проверки `51668aa`: pristine clone/dependencies, stock/isolated Compose model, свободные порты/пустой project, collection 1 test. Первоначальные ошибки типов без workspace resolution сохранены; последующий полный tsc с mappings прошёл. Исправления оснастки `d3ec1ee` прошли 16/16 регрессий, полный tsc, два реальных read-only Compose config с одинаковым результатом при обычном и конфликтующем inherited env и ревью APPROVE без открытых замечаний. Вердикт не распространяется на bootstrap fix `9d7b2db` и не является self-host PASS.
+
+После смены target на `9d7b2db` выполнены 16/16 регрессий, Python syntax, полный harness tsc, JSON parse/проверка пакета оснований и diff check. Старый dependency mapping использован только для TYPECHECK: `git diff 51668aa..9d7b2db` по `apps`, `packages`, `tests/e2e` и dependency manifests пуст; clone остался pristine. Это не fresh clone `9d7b2db`, не проверка его сборки и не runtime lifecycle: install/run/update/restart/disable/delete/storage audit/cleanup ещё предстоят.

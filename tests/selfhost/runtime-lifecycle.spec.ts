@@ -8,7 +8,7 @@ import { uploadThroughUi, chooseVersion, act } from "../e2e/plugin-author-ui";
 import { captureRoomAuthority, expectExactRoomAuthority } from "../e2e/room-state-observation";
 import { chooseMeetingPanel } from "../e2e/meeting-tools-acceptance";
 
-const runtimeSha = "51668aa26f64dc6d56045ac9bff6a14b1038f129";
+const runtimeSha = "9d7b2db4c60df1d39dd5769f6f4676addfb0f03c";
 const origin = process.env.T17_SELFHOST_ORIGIN!;
 const output = process.env.T17_SELFHOST_OUTPUT!;
 const adminToken = process.env.VRATA_ADMIN_TOKEN!;
