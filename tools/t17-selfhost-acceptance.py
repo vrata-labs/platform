@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import signal
 import socket
@@ -28,27 +29,31 @@ ROOT = Path(__file__).resolve().parent.parent
 DOCKER = ["/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe", "--host", "npipe:////./pipe/dockerDesktopLinuxEngine"]
 NODE = "/usr/bin/node"
 PORTS = {"http": 47170, "state": 27170, "livekit": 27880, "rtc": 27881, "storage": 29170}
-HARNESS_FILES = ["tools/t17-selfhost-acceptance.py", "tests/selfhost/playwright.config.ts", "tests/selfhost/runtime-lifecycle.spec.ts"]
+HARNESS_FILES = ["tools/t17-selfhost-acceptance.py", "tools/t17-selfhost-acceptance.test.py", "tests/selfhost/playwright.config.ts", "tests/selfhost/runtime-lifecycle.spec.ts"]
 SHARED_HELPERS = ["tests/e2e/" + name + ".ts" for name in ["plugin-author-scenarios", "plugin-author-ui", "room-state-observation", "meeting-tools-acceptance", "test-cleanup"]]
-parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("operation", choices=["preflight", "run", "continuity", "restart", "cleanup"])
-parser.add_argument("--delivery", default="/tmp/opencode/vrata-t17-delivery")
-parser.add_argument("--wait-lock", action="store_true", help="Only for the main session's asynchronous run; default never waits")
-args = parser.parse_args()
-if args.wait_lock and args.operation != "run":
-    parser.error("--wait-lock is available only for an asynchronous run")
-BASE = Path(args.delivery).resolve()
-if not str(BASE).startswith("/tmp/opencode/"):
-    raise SystemExit("t17_private_delivery_required")
-Q = BASE / "selfhost"
-SOURCE = BASE / "selfhost-source"
-Q.mkdir(parents=True, exist_ok=True, mode=0o700)
-LOGS = Q / "logs"
-LOGS.mkdir(exist_ok=True, mode=0o700)
-ENVFILE = Q / "selfhost.private.env"
-OVERLAY = Q / "isolation.yml"
-STATE = Q / "runner.private.json"
 seq = 0
+
+
+def configure(argv=None):
+    global args, BASE, Q, SOURCE, LOGS, ENVFILE, OVERLAY, STATE
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("operation", choices=["preflight", "run", "continuity", "restart", "cleanup"])
+    parser.add_argument("--delivery", default="/tmp/opencode/vrata-t17-delivery")
+    parser.add_argument("--wait-lock", action="store_true", help="Only for the main session's asynchronous run; default never waits")
+    args = parser.parse_args(argv)
+    if args.wait_lock and args.operation != "run":
+        parser.error("--wait-lock is available only for an asynchronous run")
+    BASE = Path(args.delivery).resolve()
+    if not str(BASE).startswith("/tmp/opencode/"):
+        raise SystemExit("t17_private_delivery_required")
+    Q = BASE / "selfhost"
+    SOURCE = BASE / "selfhost-source"
+    Q.mkdir(parents=True, exist_ok=True, mode=0o700)
+    LOGS = Q / "logs"
+    LOGS.mkdir(exist_ok=True, mode=0o700)
+    ENVFILE = Q / "selfhost.private.env"
+    OVERLAY = Q / "isolation.yml"
+    STATE = Q / "runner.private.json"
 
 
 def write(name, value):
@@ -57,10 +62,10 @@ def write(name, value):
     path.chmod(0o600)
 
 
-def capture(argv, *, cwd=SOURCE, timeout=120, env=None, input=None):
+def capture(argv, *, cwd=None, timeout=120, env=None, input=None):
     global seq
     seq += 1
-    child = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL if input is None else subprocess.PIPE,
+    child = subprocess.Popen(argv, cwd=SOURCE if cwd is None else cwd, env=env, stdin=subprocess.DEVNULL if input is None else subprocess.PIPE,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
     timed_out = False
     try:
@@ -87,13 +92,51 @@ def win(path):
     return subprocess.check_output(["wslpath", "-w", str(path)], stdin=subprocess.DEVNULL, text=True).strip()
 
 
+def docker_environment():
+    # Shell values outrank --env-file. Do not inherit Compose controls, credentials,
+    # image/port knobs, NODE_OPTIONS or Docker endpoint overrides from the caller.
+    host_keys = {"HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "SYSTEMROOT", "WINDIR",
+                 "WSL_INTEROP", "WSL_DISTRO_NAME", "TEMP", "TMP"}
+    env = {key: value for key, value in os.environ.items() if key in host_keys}
+    env["PATH"] = "/usr/bin:/bin"
+    private = readenv()
+    # Also pin optional interpolation inputs absent from the generated env file.
+    # Forward them explicitly through WSLENV: docker.exe must not recover shell
+    # overrides from its Windows parent environment either.
+    for name in ["compose.selfhost.yml", "compose.demo-local.yml"]:
+        text = (SOURCE / "infra/docker" / name).read_text()
+        for key in re.findall(r"\$\{([A-Z][A-Z0-9_]*)", text):
+            env[key] = private.get(key, "")
+    env.update(private)
+    env.update(COMPOSE_FILE="", COMPOSE_PROFILES="", COMPOSE_ENV_FILES="", COMPOSE_DISABLE_ENV_FILE="1",
+               DOCKER_CONTEXT="", DOCKER_HOST="", DOCKER_TLS_VERIFY="", DOCKER_CERT_PATH="")
+    env["WSLENV"] = ":".join(sorted(set(env) - {"PATH", "HOME", "WSL_INTEROP", "WSL_DISTRO_NAME"}))
+    return env
+
+
 def docker(*parts, **kwargs):
-    return capture(DOCKER + list(parts), **kwargs)
+    return capture(DOCKER + list(parts), env=docker_environment(), **kwargs)
 
 
-def compose(*parts, **kwargs):
-    return docker("compose", "--env-file", win(ENVFILE), "-f", win(SOURCE / "infra/docker/compose.selfhost.yml"),
-                  "-f", win(SOURCE / "infra/docker/compose.demo-local.yml"), "-f", win(OVERLAY), *parts, **kwargs)
+def checked_project(project=None):
+    saved = json.loads(STATE.read_text())["project"] if project is None else project
+    assert re.fullmatch(r"vrata-demo-" + SHA[:8] + r"-[0-9a-f]{12}", saved), "t17_project_invalid"
+    assert saved == readenv()["COMPOSE_PROJECT_NAME"], "t17_saved_project_mismatch"
+    return saved
+
+
+def compose(*parts, project=None, stock=False, **kwargs):
+    project = checked_project(project)
+    command = ["compose", "-p", project, "--env-file", win(ENVFILE), "-f", win(SOURCE / "infra/docker/compose.selfhost.yml"),
+               "-f", win(SOURCE / "infra/docker/compose.demo-local.yml")]
+    if not stock:
+        command += ["-f", win(OVERLAY)]
+    # Including manual cleanup/restart: no mutation may use a model that disagrees
+    # with the persisted and validated namespace. All config calls use the same -p.
+    if not parts or parts[0] != "config":
+        model = json.loads(docker(*command, "config", "--format", "json"))
+        assert model.get("name") == project, "t17_rendered_project_mismatch"
+    return docker(*command, *parts, **kwargs)
 
 
 def readenv():
@@ -119,8 +162,8 @@ def setup():
     capture([NODE, "tools/public-demo-local-env.mjs", "--source-sha", SHA, "--output", str(ENVFILE)])
     original = readenv()
     # Validate the STOCK rendered profile before changing only isolation coordinates.
-    stock = docker("compose", "--env-file", win(ENVFILE), "-f", win(SOURCE / "infra/docker/compose.selfhost.yml"),
-                   "-f", win(SOURCE / "infra/docker/compose.demo-local.yml"), "config", "--format", "json")
+    stock = compose("config", "--format", "json", project=original["COMPOSE_PROJECT_NAME"], stock=True)
+    assert json.loads(stock).get("name") == original["COMPOSE_PROJECT_NAME"], "t17_stock_project_mismatch"
     stock_file = Q / "stock-compose.private.json"
     stock_file.write_bytes(stock)
     capture([NODE, "--input-type=module", "-e",
@@ -159,9 +202,11 @@ def setup():
 
 
 def model_preflight(state):
+    assert checked_project() == state["project"], "t17_state_project_mismatch"
     model = json.loads(compose("config", "--format", "json"))
-    write("compose.private.json", model)
+    assert model.get("name") == state["project"], "t17_rendered_project_mismatch"
     stock = json.loads((Q / "stock-compose.private.json").read_text())
+    assert stock.get("name") == state["project"], "t17_stock_project_mismatch"
     services = model["services"]
     assert set(services) == set(stock["services"])
     changed_env = {"api": {"API_CORS_ORIGIN", "API_PUBLIC_URL", "RUNTIME_BASE_URL", "ROOM_STATE_PUBLIC_URL", "LIVEKIT_URL", "ROOM_PLUGIN_ANONYMOUS_ENDPOINT"},
@@ -191,16 +236,21 @@ def model_preflight(state):
     for kind, command in [("container", ["ps", "-aq"]), ("volume", ["volume", "ls", "-q"]), ("network", ["network", "ls", "-q"])]:
         assert not docker(*command, "--filter", f"label=com.docker.compose.project={state['project']}").strip(), "project_not_fresh_" + kind
     proof = {"runtimeSha": SHA, "origin": ORIGIN, "cleanClone": True, "stockModelValidated": True,
-             "onlyIsolationCoordinatesChanged": True, "projectFresh": True, "ports": PORTS, "runId": state["runId"]}
+              "onlyIsolationCoordinatesChanged": True, "projectFresh": True, "ports": PORTS, "runId": state["runId"]}
+    write("compose.private.json", model)
     write("preflight.json", proof)
     return proof
 
 
 def inventory(state):
-    ids = compose("ps", "-aq").decode().split()
+    assert checked_project() == state["project"], "t17_state_project_mismatch"
+    # Include orphans too: Compose down --remove-orphans would remove them.
+    ids = docker("ps", "-aq", "--no-trunc", "--filter", f"label=com.docker.compose.project={state['project']}").decode().split()
     if not ids:
         return []
     rows = json.loads(docker("inspect", *ids))
+    assert {row["Id"] for row in rows} == set(ids), "t17_container_inventory_mismatch"
+    assert all(re.fullmatch(r"[0-9a-f]{64}", value) for value in ids), "t17_requires_full_container_ids"
     for row in rows:
         labels = row["Config"]["Labels"]
         assert labels.get("vrata.task") == "T17" and labels.get("vrata.run") == state["runId"]
@@ -228,6 +278,20 @@ def health():
         return json.load(response)
 
 
+def verify_fresh_identity_floor(state):
+    rows = inventory(state)
+    postgres = [row for row in rows if row["Config"]["Labels"].get("com.docker.compose.service") == "postgres"]
+    assert len(postgres) == 1, "t17_owned_postgres_required"
+    # The fresh floor-1 health contract deliberately omits identityProtocolVersion.
+    # Absence alone is not evidence of floor 1: query the actual singleton on our DB.
+    policy = docker("exec", postgres[0]["Id"], "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "vrata", "-d", "vrata",
+                    "-At", "-c", "select singleton, minimum_protocol from room_identity_protocol_policy;").decode().strip()
+    assert policy == "t|1", "not_fresh_identity_floor"
+    assert "identityProtocolVersion" not in health()["features"], "unexpected_fresh_identity_health"
+    write("fresh-identity-policy.json", {"runtimeSha": SHA, "runId": state["runId"], "project": state["project"],
+                                         "singleton": True, "minimumProtocol": 1, "healthProtocolFieldAbsent": True})
+
+
 def owner_child(state):
     assert state["phase"] == "browser-running" and os.environ.get("T17_RUN_ID") == state["runId"]
     os.kill(state["ownerPid"], 0)
@@ -251,12 +315,19 @@ def restart(state):
 
 
 def cleanup(state):
+    model = json.loads(compose("config", "--format", "json"))
+    assert model.get("name") == state["project"] == checked_project(), "t17_rendered_project_mismatch"
+    assert model == json.loads((Q / "compose.private.json").read_text()), "t17_cleanup_model_changed_since_preflight"
     inventory(state)  # Every container must match the ownership labels before down.
     for kind in ["volume", "network"]:
-        ids = docker(kind, "ls", "-q", "--filter", f"label=com.docker.compose.project={state['project']}").decode().split()
+        full_ids = ["--no-trunc"] if kind == "network" else []
+        ids = docker(kind, "ls", "-q", *full_ids, "--filter", f"label=com.docker.compose.project={state['project']}").decode().split()
         if ids:
-            for row in json.loads(docker(kind, "inspect", *ids)):
+            rows = json.loads(docker(kind, "inspect", *ids))
+            assert {row["Id" if kind == "network" else "Name"] for row in rows} == set(ids), "t17_resource_inventory_mismatch"
+            for row in rows:
                 labels = row.get("Labels", {})
+                assert labels.get("com.docker.compose.project") == state["project"]
                 assert labels.get("vrata.task") == "T17" and labels.get("vrata.run") == state["runId"]
     compose("down", "-v", "--remove-orphans", timeout=180)
     remaining = {}
@@ -356,8 +427,7 @@ def run(state):
         verify_harness_types()
         source_build(state)
         compose("up", "-d", "--no-build", "--pull", "missing", "--wait", "--wait-timeout", "180", timeout=600)
-        initial = health()
-        assert initial["features"]["identityProtocolVersion"] == 1, "not_fresh_identity_floor"
+        verify_fresh_identity_floor(state)
         for cli in ["identity/activate-v2.js", "identity/activate-media-codec.js"]:
             compose("exec", "-T", "api", "node", "apps/api/dist/" + cli, "--dry-run")
             compose("exec", "-T", "api", "node", "apps/api/dist/" + cli, "--confirm-irreversible")
@@ -384,32 +454,48 @@ def run(state):
     except Exception:
         (Q / "failure.private.log").write_text(traceback.format_exc())
     finally:
+        result["diagnosticsPassed"] = True
         try:
             rows = inventory(state)
             if rows:
                 # Preserve raw diagnostics privately before removing only owned resources.
                 write("terminal-containers.private.json", rows)
                 compose("logs", "--no-color", timeout=120)
+        except Exception:
+            record_failure(result, "diagnosticsPassed", "diagnostics-failure.private.log")
+        try:
             cleanup(state)
             result["cleanupPassed"] = True
         except Exception:
-            (Q / "cleanup-failure.private.log").write_text(traceback.format_exc())
-            result["cleanupPassed"] = False
-            result["status"] = "failed"
+            record_failure(result, "cleanupPassed", "cleanup-failure.private.log")
         state["phase"] = "complete"
         write("runner.private.json", state)
         result["finishedAt"] = time.time()
-        result["harnessSha256"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-        result["docsHarnessHead"] = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-        result["sourceStillClean"] = git("status", "--porcelain") == ""
-        result["harnessUnchanged"] = all(hashlib.sha256((ROOT / rel).read_bytes()).hexdigest() == digest for rel, digest in hashes.items())
-        if not result["harnessUnchanged"] or not result["sourceStillClean"]:
-            result["status"] = "failed"
-        link = ROOT / "node_modules"
-        if link.is_symlink() and link.resolve() == SOURCE / "node_modules":
-            link.unlink()
+        result.update(sourceStillClean=False, harnessUnchanged=False)
+        try:
+            result["harnessSha256"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+            result["docsHarnessHead"] = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+            result["sourceStillClean"] = git("status", "--porcelain") == ""
+            result["harnessUnchanged"] = all(hashlib.sha256((ROOT / rel).read_bytes()).hexdigest() == digest for rel, digest in hashes.items())
+            if not result["harnessUnchanged"] or not result["sourceStillClean"]:
+                result["status"] = "failed"
+            link = ROOT / "node_modules"
+            if link.is_symlink() and link.resolve() == SOURCE / "node_modules":
+                link.unlink()
+        except Exception:
+            record_failure(result, "terminalVerificationPassed", "terminal-verification-failure.private.log")
         write("terminal.json", result)
     return result
+
+
+def record_failure(result, field, filename):
+    result[field] = False
+    result["status"] = "failed"
+    try:
+        (Q / filename).write_text(traceback.format_exc())
+    except OSError:
+        # A diagnostic filesystem failure must not cancel the teardown attempt.
+        result[field + "LogSaved"] = False
 
 
 def main():
@@ -438,6 +524,7 @@ def main():
 
 
 if __name__ == "__main__":
+    configure()
     try:
         sys.exit(main())
     except Exception:
