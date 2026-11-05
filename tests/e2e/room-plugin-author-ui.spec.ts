@@ -1,7 +1,8 @@
-import { test, expect, type Locator, type Page } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import { randomUUID } from "node:crypto";
-import { bearer, createExternalAuthorProject, downloadPublicSdk, nativeMarker, pluginPath, privateHttp, type ExternalArtifact } from "./plugin-author-scenarios";
+import { bearer, createExternalAuthorProject, downloadPublicSdk, nativeMarker, pluginPath, privateHttp } from "./plugin-author-scenarios";
 import { enterOwnedPluginRoom, enterPluginRoom, expectPluginStatus, startRoomPluginFixture, useOwnedActor } from "./room-plugin-fixture";
+import { uploadThroughUi, chooseVersion, act } from "./plugin-author-ui";
 
 // Room invitations, RS2 and private config must never enter trace/video/snapshots.
 test.use({ trace: "off", screenshot: "off", video: "off" });
@@ -9,22 +10,7 @@ test.use({ trace: "off", screenshot: "off", video: "off" });
 const statusBody = (suffix: string) =>
   `export function init(context: RoomPluginContext) { return context.sdk.status.set(String(context.config.greeting) + ${JSON.stringify(suffix)}); }`;
 
-async function uploadThroughUi(page: Page, artifact: ExternalArtifact) {
-  await page.locator("#room-plugin-upload-input").setInputFiles({ name: `${artifact.pluginId}-${artifact.version}.vrata-plugin.json`,
-    mimeType: "application/json", buffer: artifact.bytes });
-  await page.locator("#room-plugin-upload-button").click();
-  await expect(page.locator("#room-plugin-author-message")).toContainText("Package uploaded", { timeout: 20_000 });
-}
-async function chooseVersion(entry: Locator, version: string) {
-  const option = entry.locator('[data-role="version"] option', { hasText: version });
-  await entry.locator('[data-role="version"]').selectOption(await option.getAttribute("value") ?? "");
-}
-async function act(page: Page, entry: Locator, action: string, expected: string) {
-  await entry.locator(`[data-action="${action}"]`).click();
-  await expect(page.locator("#room-plugin-author-message")).toContainText(expected, { timeout: 20_000 });
-}
-
-test("isolated v2 Host installs, updates, rolls back, disables and deletes external behaviors in the room UI; a Member sees them live", async ({ browser, request }) => {
+test("isolated v2 Host installs, updates, rolls back, disables and deletes external behaviors in the room UI; a Member sees them live", async ({ browser }) => {
   test.setTimeout(480_000); const value = await startRoomPluginFixture(2);
   let author: Awaited<ReturnType<typeof createExternalAuthorProject>> | undefined;
   try {
@@ -37,7 +23,7 @@ test("isolated v2 Host installs, updates, rolls back, disables and deletes exter
         await expect(member.page.locator("#room-plugin-author")).toBeHidden();
         expect(member.requests.workers).toBe(0); expect(member.requests.wasm).toBe(0);
 
-        author = await createExternalAuthorProject(await downloadPublicSdk(request));
+        author = await createExternalAuthorProject(await downloadPublicSdk(value.origin));
         const id = `external.t08-${randomUUID().replaceAll("-", "")}`;
         const v1 = await author.build(id, "1.0.0", ["status.set"], statusBody(" v1"));
         const v2 = await author.build(id, "1.0.1", ["status.set"], statusBody(" v2"));

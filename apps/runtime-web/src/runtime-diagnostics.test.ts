@@ -189,3 +189,94 @@ test("diagnostic subject follows identity adoption during refresh and matches th
   assert.equal(h.requests[0]!.body.participantId, "server-issued");
   assert.equal((h.requests[0]!.init.headers as Record<string, string>).authorization, "Bearer fresh-session");
 });
+
+test("a pending pixel capture yields without publishing a Promise as screenshot data", async t => {
+  const h = createDiagnosticsHarness(t), pixels = deferred<typeof h.screenshot>();
+  h.hooks.capture = () => pixels.promise;
+  const pending = h.runtime.reportDiagnostics("capturing");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(h.events, ["refresh", "capture"]);
+  assert.equal(h.requests.length, 0);
+  pixels.resolve(h.screenshot); await pending;
+  assert.deepEqual((h.requests[0]!.body.sceneDebug as { screenshot: unknown }).screenshot, h.screenshot);
+  assert.equal(h.requests[0]!.body.note, "capturing");
+});
+
+test("identity loss while pixels are pending prevents transport and debug screenshot mutation", async t => {
+  const h = createDiagnosticsHarness(t), pixels = deferred<typeof h.screenshot>();
+  h.hooks.capture = () => pixels.promise;
+  const previous = h.inputs.debugState.sceneDebug.screenshot;
+  const pending = h.runtime.reportDiagnostics("pending");
+  await new Promise(resolve => setImmediate(resolve));
+  h.inputs.sessionGate = { reason: "identity_recovery_required" };
+  pixels.resolve(h.screenshot); await pending;
+  assert.equal(h.requests.length, 0);
+  assert.equal(h.inputs.debugState.sceneDebug.screenshot, previous);
+});
+
+test("diagnostic subject and token are read together after asynchronous pixel capture", async t => {
+  const h = createDiagnosticsHarness(t), pixels = deferred<typeof h.screenshot>();
+  h.hooks.capture = () => pixels.promise;
+  const pending = h.runtime.reportDiagnostics("after-capture");
+  await new Promise(resolve => setImmediate(resolve));
+  h.inputs.participantId = "adopted-during-capture";
+  h.inputs.roomStateAccessToken = "adopted-session";
+  pixels.resolve(h.screenshot); await pending;
+  assert.equal(h.requests[0]!.body.participantId, "adopted-during-capture");
+  assert.equal(new Headers(h.requests[0]!.init.headers).get("authorization"), "Bearer adopted-session");
+});
+
+test("reports retain both notes and independent HTTP responses while sharing pending pixels", async t => {
+  const h = createDiagnosticsHarness(t), pixels = deferred<typeof h.screenshot>();
+  h.hooks.capture = () => pixels.promise;
+  const first = deferred<Response>(), second = deferred<Response>();
+  h.hooks.fetch = () => h.requests.length === 1 ? first.promise : second.promise;
+  const one = h.runtime.reportDiagnostics("one"), two = h.runtime.reportDiagnostics("two");
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(h.requests.length, 0);
+  pixels.resolve(h.screenshot); await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(h.requests.map(request => request.body.note), ["one", "two"]);
+  assert.equal(h.events.filter(event => event === "capture").length, 1);
+  assert.ok(h.requests.every(request => JSON.stringify((request.body.sceneDebug as { screenshot: unknown }).screenshot) === JSON.stringify(h.screenshot)));
+  second.resolve(new Response('{"reportId":"second"}')); await two;
+  assert.equal(h.inputs.debugState.lastReportId, "second");
+  first.resolve(new Response('{"reportId":"first"}')); await one;
+  assert.equal(h.inputs.debugState.lastReportId, "first");
+});
+
+test("an asynchronous capture rejection propagates unchanged and the next report can capture again", async t => {
+  const h = createDiagnosticsHarness(t), pixels = deferred<typeof h.screenshot>(), error = new Error("readback-failed");
+  h.hooks.capture = () => pixels.promise;
+  const rejected = assert.rejects(h.runtime.reportDiagnostics("failed-capture"), value => value === error);
+  await new Promise(resolve => setImmediate(resolve)); pixels.reject(error); await rejected;
+  assert.equal(h.requests.length, 0);
+  h.hooks.capture = () => h.screenshot;
+  await h.runtime.reportDiagnostics("recovered-capture");
+  assert.equal(h.requests.length, 1); assert.equal(h.requests[0]!.body.note, "recovered-capture");
+});
+
+test("a report cannot send an empty Bearer if the admitted token disappears during capture", async t => {
+  const h = createDiagnosticsHarness(t), pixels = deferred<typeof h.screenshot>();
+  h.hooks.capture = () => pixels.promise;
+  const pending = h.runtime.reportDiagnostics("token-lost");
+  await new Promise(resolve => setImmediate(resolve)); h.inputs.roomStateAccessToken = "";
+  pixels.resolve(h.screenshot); await pending;
+  assert.equal(h.requests.length, 0);
+});
+
+test("a scene replacement never reuses the pending pixels of the previous scene", async t => {
+  const h = createDiagnosticsHarness(t), first = deferred<typeof h.screenshot>(), second = deferred<typeof h.screenshot>();
+  h.inputs.activeSceneBundleRoot = new Object3D(); let captures = 0;
+  h.hooks.capture = () => ++captures === 1 ? first.promise : second.promise;
+  const one = h.runtime.reportDiagnostics("old-scene");
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(captures, 1);
+  h.inputs.activeSceneBundleRoot = new Object3D();
+  const two = h.runtime.reportDiagnostics("new-scene");
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(captures, 1);
+  first.resolve(h.screenshot); await one;
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(captures, 2);
+  assert.equal((h.requests[0]!.body.sceneDebug as { screenshot: unknown }).screenshot, null);
+  const fresh = { ...h.screenshot, darkPixelRatio: 0.75 };
+  second.resolve(fresh); await two;
+  assert.deepEqual((h.requests[1]!.body.sceneDebug as { screenshot: unknown }).screenshot, fresh);
+  assert.equal(h.inputs.debugState.sceneDebug.screenshot, fresh);
+});

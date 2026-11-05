@@ -99,3 +99,66 @@ test("snapshots use binding-scoped pseudonyms and minimize data for plugins with
   h.adapter.forget("binding-1");
   assert.notEqual(h.adapter.snapshot("binding-1", true).ownParticipantAlias, first.ownParticipantAlias, "a new instance gets new aliases");
 });
+
+test("arrival diagnostics retain causal monotonic transitions after closure without exposing world data", () => {
+  const h = harness({ ready: true }); h.advance(100); h.adapter.observe();
+  h.advance(250); h.adapter.activate();
+  h.advance(ROOM_PLUGIN_ARRIVAL.windowMs); const closed = h.adapter.diagnostics();
+  assert.equal(closed.grant, "closed"); assert.equal(closed.openedAtMs, null);
+  assert.equal(closed.firstReadyAtMs, 100);
+  assert.deepEqual(closed.activations, [350]);
+  assert.deepEqual(closed.transitions, [
+    { from: "waiting", to: "armed", reason: "platform-ready", atMs: 100 },
+    { from: "armed", to: "open", reason: "room-ready", atMs: 350 },
+    { from: "open", to: "closed", reason: "window-expired", atMs: 5350 }
+  ]);
+  closed.transitions.length = 0; closed.activations.length = 0;
+  for (let i = 0; i < 20; i++) { h.adapter.observe(); h.adapter.activate(); }
+  assert.equal(h.adapter.diagnostics().transitions.length, 3);
+  assert.equal(h.adapter.diagnostics().activations.length, 8);
+  assert.equal(JSON.stringify(h.adapter.diagnostics()).includes("self-private-id"), false);
+  const stale = harness({ ready: true }); stale.adapter.observe(); stale.advance(ROOM_PLUGIN_ARRIVAL.entryMs + 1); stale.adapter.activate();
+  assert.equal(stale.adapter.diagnostics().transitions.at(-1)?.reason, "entry-expired");
+  const manual = harness(); manual.adapter.manualIntent(); manual.world.ready = true;
+  assert.equal(manual.adapter.diagnostics().transitions.at(-1)?.reason, "manual-intent");
+  assert.equal(manual.adapter.diagnostics().firstReadyAtMs, 0);
+  const offline = harness({ ready: true }); offline.adapter.observe(); offline.adapter.stop("offline");
+  assert.equal(offline.adapter.diagnostics().transitions.at(-1)?.reason, "offline");
+});
+
+test("settlement diagnostics are bounded copies and distinguish owner cancellation from retirement", async () => {
+  const h = harness({ ready: true }); h.adapter.activate();
+  for (let i = 0; i < 8; i++) {
+    const pending = h.adapter.claim("seat-a", "private-owner-identity");
+    if (i % 2) h.adapter.retire("private-owner-identity"); else h.adapter.cancelOwn("private-owner-identity");
+    assert.deepEqual(await pending, { result: "cancelled" });
+  }
+  const first = h.adapter.diagnostics();
+  assert.equal(first.settlements.length, 8);
+  assert.deepEqual(first.settlements.map(row => row.reason), Array.from({ length: 8 }, (_, i) => i % 2 ? "retired" : "owner-cancel"));
+  first.settlements[0].reason = "lost-answer"; first.settlements.length = 0;
+  assert.equal(h.adapter.diagnostics().settlements[0].reason, "owner-cancel");
+  assert.deepEqual(await h.adapter.claim("seat-a"), { error: "arrival-not-allowed" });
+  assert.equal(h.adapter.diagnostics().settlements.length, 8);
+  assert.equal(JSON.stringify(h.adapter.diagnostics()).includes("private-owner-identity"), false);
+  assert.equal(JSON.stringify(h.adapter.diagnostics()).includes("self-private-id"), false);
+});
+
+test("claim phase diagnostics distinguish correlated acceptance, mismatched answers and late no-flight delivery without identities", async () => {
+  const h = harness({ ready: true }); h.adapter.activate(); h.advance(100);
+  const pending = h.adapter.claim("seat-a", "private-owner");
+  h.advance(20); h.adapter.settleClaim({ seatId: "seat-a", accepted: true, commandId: "private-other" });
+  h.advance(30); h.adapter.settleClaim({ seatId: "seat-a", accepted: true, commandId: h.claims[0][1] });
+  assert.deepEqual(await pending, { result: "accepted" });
+  h.advance(50); h.adapter.settleClaim({ seatId: "seat-a", accepted: true, commandId: h.claims[0][1] });
+  const facts = h.adapter.diagnostics();
+  assert.deepEqual(facts.claimPhases, [
+    { atMs: 100, phase: "requested", reason: "pending" }, { atMs: 120, phase: "answer", reason: "different-command" },
+    { atMs: 150, phase: "answer", reason: "accepted" }, { atMs: 200, phase: "answer", reason: "no-flight" }
+  ]);
+  facts.claimPhases[0].reason = "busy"; facts.claimPhases.length = 0;
+  for (let i = 0; i < 40; i++) h.adapter.settleClaim({ seatId: "private-seat", accepted: false, commandId: "private-other" });
+  assert.equal(h.adapter.diagnostics().claimPhases.length, 32);
+  assert.equal(h.adapter.diagnostics().claimPhases[0].reason, "pending");
+  for (const secret of ["private-owner", "private-other", "private-seat", h.claims[0][1]]) assert.equal(JSON.stringify(h.adapter.diagnostics()).includes(secret), false);
+});
