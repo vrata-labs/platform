@@ -317,6 +317,7 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     expect(phases.serverAccepted - phases.firstClaim < 15_000).toBe(true);
     expect(Boolean(disableTask)).toBe(true);
     await disableTask;
+    const runtimeObservationDeadline = phases.disableAck + 15_000;
     if (protocolError) throw protocolError;
     const actor = { ...member, participantId: member.session.participantId, authority: observations.get(member.page)! };
     await expect.poll(async () => (await seatState(actor.page)).running, { timeout: 15_000 }).toBe(0);
@@ -351,8 +352,11 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     expect(runtime.lastInstanceFailure, "pending instance must not fail before disabled revision").toBeNull();
     expect(Number.isSafeInteger(disabledRevision)).toBe(true);
     expect(runtime.revision).toBe(disabledRevision);
-    await Promise.all(runtimeReadsPending);
-    expect(runtimeReads.some(row => row.status === 200 && row.enabledBindings === 0 && row.revision === runtime!.revision)).toBe(true);
+    const runtimeObservationRemainingMs = runtimeObservationDeadline - performance.now();
+    expect(runtimeObservationRemainingMs > 0).toBe(true);
+    await expect.poll(() => performance.now() < runtimeObservationDeadline
+      && runtimeReads.some(row => row.status === 200 && row.enabledBindings === 0 && row.revision === runtime!.revision),
+      { timeout: runtimeObservationRemainingMs, intervals: [50] }).toBe(true);
     // Deliver ONLY occupied/accepted first. A later correct empty snapshot must
     // not conceal even one frame of applying the cancelled seating attempt.
     const acceptedIndex = queue.findIndex(message => message.type === "seat_claim_result"

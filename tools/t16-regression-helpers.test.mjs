@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve, dirname } from "node:path";
@@ -34,6 +35,123 @@ function loadHelper(relative, overrides = {}, append = "", globals = {}) {
   return module.exports;
 }
 const { cleanupAll, withCleanup } = loadHelper("tests/e2e/test-cleanup.ts");
+const pendingHttpExpect = require("@playwright/test").expect;
+
+// Execute the actual observer and wait; do not duplicate their acceptance predicate.
+function pendingHttpObservation(ackAt, clock = performance) {
+  const filename = resolve(root, "tests/e2e/room-plugin-auto-seat-scenarios.ts");
+  const text = readFileSync(filename, "utf8");
+  const source = ts.createSourceFile(filename, text, ts.ScriptTarget.ES2022, true), declarations = new Map();
+  const visit = node => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) declarations.set(node.name.text, node);
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  const observer = declarations.get("onRuntimeFinished").initializer.getText(source);
+  const deadline = declarations.get("runtimeObservationDeadline"), remaining = declarations.get("runtimeObservationRemainingMs");
+  assert(deadline && remaining, "deadline and remaining budget come from the actual helper");
+  assert(text.indexOf("await disableTask;") < deadline.pos);
+  assert(deadline.end < text.indexOf("await expect.poll(async () => (await seatState(actor.page)).running"));
+  const wait = text.slice(remaining.parent.parent.getStart(source), text.indexOf("// Deliver ONLY occupied/accepted first.", remaining.end));
+  const output = ts.transpileModule(`
+    let held = true; const roomId = "owned", runtime = { revision: 2 };
+    const phases = { disableAck: ackAt }, runtimeReads = [], runtimeReadsPending = new Set();
+    const pluginPath = (room, suffix) => '/api/rooms/' + room + '/plugins/' + suffix;
+    const onRuntimeFinished = ${observer};
+    const runtimeObservationDeadline = ${deadline.initializer.getText(source)};
+    return { runtimeReads, runtimeReadsPending, onRuntimeFinished, runtimeObservationDeadline, setHeld(value) { held = value; },
+      async wait() { ${wait} } };
+  `, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  return vm.compileFunction(output, ["ackAt", "expect", "performance", "URL"])(ackAt, pendingHttpExpect, clock, URL);
+}
+
+async function pendingHttpEndpoint(run) {
+  let requests = 0;
+  const server = createServer((request, response) => {
+    requests++;
+    const kind = new URL(request.url, "http://localhost").searchParams.get("kind");
+    response.writeHead(kind === "503" ? 503 : 200, { "content-type": "application/json", "cache-control": "no-store" });
+    response.end(JSON.stringify({ revision: kind === "revision" ? 1 : 2,
+      bindings: kind === "bindings" ? [{ enabled: true }] : [] }));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const endpoint = `http://127.0.0.1:${server.address().port}/api/rooms/owned/plugins/runtime`;
+  const request = async kind => {
+    const response = await fetch(`${endpoint}?kind=${kind}`), body = await response.text();
+    return { url: () => endpoint, response: async () => ({ status: () => response.status, json: async () => JSON.parse(body) }) };
+  };
+  try { await run(request, () => requests); }
+  finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+}
+
+test("pending HTTP proof waits for a delayed Node callback, not only the current pending set", async () => {
+  await pendingHttpEndpoint(async request => {
+    const f = pendingHttpObservation(performance.now() - 13_000), response = await request("valid");
+    await Promise.all(f.runtimeReadsPending);
+    assert.throws(() => assert.equal(f.runtimeReads.some(row => row.status === 200 && row.enabledBindings === 0 && row.revision === 2), true));
+    const delivery = new Promise(resolve => setTimeout(() => { f.onRuntimeFinished(response); resolve(); }, 30));
+    await f.wait(); await delivery;
+    assert.equal(f.runtimeReads.length, 1);
+    await Promise.allSettled(f.runtimeReadsPending);
+  });
+});
+
+for (const kind of ["revision", "bindings", "503", "no-callback", "expired", "late"]) {
+  test(`pending HTTP proof rejects ${kind} within the remaining CAS window`, async () => {
+    await pendingHttpEndpoint(async request => {
+      let now = performance.now();
+      const clock = kind === "late" ? { now: () => now } : performance;
+      const f = pendingHttpObservation(now - (kind === "expired" ? 15_001 : 14_800), clock);
+      const response = await request(kind);
+      const delivery = kind === "late" ? new Promise(resolve => setTimeout(() => {
+        now = f.runtimeObservationDeadline + 1; f.onRuntimeFinished(response); resolve();
+      }, 30)) : undefined;
+      if (!["no-callback", "late"].includes(kind)) f.onRuntimeFinished(response);
+      await assert.rejects(f.wait(), /Expected|toBe/);
+      await delivery;
+      assert(performance.now() < f.runtimeObservationDeadline + 250, "no fresh 15-second timeout is granted");
+      await Promise.allSettled(f.runtimeReadsPending);
+      if (["expired", "late"].includes(kind)) assert.equal(f.runtimeReads[0].revision, 2, "real but late evidence is not success");
+    });
+  });
+}
+
+test("pending HTTP proof skips requestfailed and sees the next normal 2000ms refresh", async () => {
+  await pendingHttpEndpoint(async (request, requests) => {
+    const f = pendingHttpObservation(performance.now() - 11_000), events = new EventEmitter();
+    events.on("requestfinished", f.onRuntimeFinished);
+    events.emit("requestfailed", await request("valid")); // A successful HTTP body alone is not a finished proof.
+    assert.equal(f.runtimeReads.length, 0); assert.equal(f.runtimeReadsPending.size, 0);
+    const refresh = new Promise((resolve, reject) => setTimeout(() => {
+      request("valid").then(response => { events.emit("requestfinished", response); resolve(); }, reject);
+    }, 2000));
+    await f.wait(); await refresh;
+    assert.equal(requests(), 2);
+    assert.deepEqual(f.runtimeReads.map(({ status, revision, enabledBindings }) => ({ status, revision, enabledBindings })),
+      [{ status: 200, revision: 2, enabledBindings: 0 }]);
+    events.removeAllListeners(); await Promise.allSettled(f.runtimeReadsPending);
+  });
+});
+
+for (const nonmatching of [7, 8]) {
+  test(`pending HTTP proof preserves the eight-row cap with ${nonmatching} nonmatching reads`, async () => {
+    await pendingHttpEndpoint(async request => {
+      const f = pendingHttpObservation(performance.now() - 14_500);
+      const wrong = await request("revision"), correct = await request("valid");
+      f.setHeld(false);
+      for (let i = 0; i < 20; i++) f.onRuntimeFinished(wrong);
+      assert.equal(f.runtimeReads.length, 0, "pre-claim callbacks use no slots");
+      f.setHeld(true);
+      for (let i = 0; i < nonmatching; i++) f.onRuntimeFinished(wrong);
+      f.onRuntimeFinished(correct);
+      if (nonmatching === 7) { await f.wait(); assert.equal(f.runtimeReads[7].revision, 2); }
+      else await assert.rejects(f.wait(), /Expected|toBe/);
+      f.onRuntimeFinished(correct);
+      assert.equal(f.runtimeReads.length, 8);
+      await Promise.allSettled(f.runtimeReadsPending);
+    });
+  });
+}
 
 test("cleanup attempts observers, every context, author and room even after multiple failures, preserving primary", async () => {
   const primary = new Error("entry_failed"), errors = [new Error("observer_failed"), new Error("context_failed"), new Error("room_failed")];
