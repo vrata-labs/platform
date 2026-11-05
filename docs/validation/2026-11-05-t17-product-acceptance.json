@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "task": "T17: итоговая продуктовая приёмка WM-01…12; runtime SHA 51668aa26f64dc6d56045ac9bff6a14b1038f129, документация и оснастка имеют отдельный docs/harness SHA",
+  "domain": "general",
+  "scope": ["."],
+  "criteria": [
+    {"id": "fresh-selfhost", "description": "Новый clone origin на exact runtime SHA, новые Postgres/S3 volumes, штатный production demo Compose. Внешний SDK скачан с этого self-host, пакет собран вне monorepo; normal onboarding/UI install/run/update, явное новое capability approval, API restart, disable/unbind/delete, соседняя комната и ownership-safe cleanup. Контейнеры/image IDs и StartedAt доказывают отсутствие rebuild/restart между author upload и эффектом; authority/no ghosts подтверждены существующим transport observer. Не API fixture и не staging", "required": true, "kind": "evidence"},
+    {"id": "final-local", "description": "Lint/typecheck/build/package tests и полный pnpm test:e2e на exact final runtime SHA с новым собственным PG; без переноса D-097, failed/skipped не превращаются в passed", "required": true, "kind": "evidence"},
+    {"id": "ci-docker", "description": "Успешные main CI и Docker Publish exact final runtime SHA; фактический checkout/run attempt и immutable image digests", "required": true, "kind": "evidence"},
+    {"id": "published-staging", "description": "Обычная exact-SHA поставка, accepted record/фактические image digests, полный G/X по актуальному контракту, key flows и Hall/BlueOffice/ArtGallery loaded; аренда и cleanup", "required": true, "kind": "evidence"},
+    {"id": "wm01-12-manual", "description": "Четыре реальных человека одновременно: desktop и физический Android, минимум два реальных микрофона и двусторонняя слышимость/mute/unmute, собственный PDF, Presenter handoff/revoke, настоящий screen capture/view, независимая доска/touch, Notes/export, рассадка/ручной выход, D01–D08. Обычная сцена/рендер и UI, не synthetic/viewport замена. WM-01…12 построчно и redacted device/SHA evidence", "required": true, "kind": "evidence"},
+    {"id": "quest", "description": "Реальная регрессия Quest ray/snap-turn/teleport/seating/controller alignment при затронутых pose/XR hooks; неприменимость требует проверки diff и отдельного обоснования, не наследуется из T16", "required": true, "kind": "evidence"},
+    {"id": "resources-cleanup", "description": "Собственные browser contexts, demo resources, containers/networks/volumes очищены после сверки labels/project; исходные отказы и приватные журналы сохранены. Чужие ресурсы и stage не изменены", "required": true, "kind": "evidence"}
+  ]
+}
