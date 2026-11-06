@@ -10,7 +10,11 @@ const STATE_SECRET = "owned-t14-orchestration-state-secret-32-bytes";
 test.use({ trace: "off", screenshot: "off", video: "off", launchOptions: { args: ["--autoplay-policy=no-user-gesture-required",
   "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--auto-select-desktop-capture-source=Entire screen"] } });
 // Only identity v2: floor 1 is not a supported product path, and a v1 twin repeated the whole scenario.
-for (const protocol of [2] as const) test(`v${protocol} independent wall, revision-bound consent and PDF/screen capture lifecycle`, async ({ browser, request }) => {
+for (const scenario of [
+  { title: "v2 independent wall, revision-bound consent and PDF/screen capture lifecycle", consentOnly: false },
+  { title: "v2 minimal revision-bound consent over real room transport", consentOnly: true }
+]) test(scenario.title, async ({ browser, request }) => {
+  const protocol = 2;
   test.setTimeout(600_000); expect(!!process.env.VRATA_TEST_POSTGRES_URL).toBe(true);
   const livekit = await startLocalLiveKitFixture();
   try {
@@ -29,7 +33,7 @@ for (const protocol of [2] as const) test(`v${protocol} independent wall, revisi
           await new PostgresStorage(pool).identityProtocol.raise(2);
         } finally { await pool.end(); }
       }
-      await toolOrchestrationScenario({ browser, request, origin: fixture.origin, adminToken: fixture.adminToken, expectedProtocol: protocol });
+      await toolOrchestrationScenario({ browser, request, origin: fixture.origin, adminToken: fixture.adminToken, expectedProtocol: protocol }, { consentOnly: scenario.consentOnly });
     }
     finally { await fixture.close(); }
   } finally { await livekit.close(); }

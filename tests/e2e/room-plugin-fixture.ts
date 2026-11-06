@@ -89,10 +89,11 @@ export async function enterPluginRoom(browser: Browser, value: RoomPluginOrigin,
 }
 
 /** Host actor that owns its room: closing it deletes the room and its plugin blobs. */
-export async function enterOwnedPluginRoom(browser: Browser, value: RoomPluginOrigin) {
+export async function enterOwnedPluginRoom(browser: Browser, value: RoomPluginOrigin,
+  prepare?: (context: BrowserContext, page: Page) => Promise<void>) {
   const roomId = await createOwnedPluginRoom(value);
   let actor: Awaited<ReturnType<typeof enterPluginRoom>>;
-  try { actor = await enterPluginRoom(browser, value, roomId); }
+  try { actor = await enterPluginRoom(browser, value, roomId, "host", "Owned plugin runtime Host", prepare); }
   catch (error) { await cleanupAll([() => deleteOwnedPluginRoom(value, roomId)], { error }); throw error; }
   return { ...actor, admin: { "x-vrata-admin-token": value.adminToken },
     async close() { await cleanupAll([() => actor.context.close(), () => deleteOwnedPluginRoom(value, roomId)]); } };

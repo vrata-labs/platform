@@ -8,6 +8,7 @@ import { startLocalLiveKitFixture } from "./local-livekit-fixture.js";
 import { startReferenceTemplateFixture } from "./reference-template-fixture.js";
 import { presenterMeetingScenario } from "./presenter-meeting-scenarios.js";
 import { chooseMeetingPanel } from "./meeting-tools-acceptance.js";
+import { observeFunctionalClient, writeFunctionalDiagnostics, mediaParticipantFacts, type FunctionalObservation } from "./functional-diagnostics.js";
 
 // Genuine self-hosted RTC and the built main runtime. Credentials/SDP/candidates remain in memory, never in artifacts.
 test.use({ trace: "off", screenshot: "off", video: "off", launchOptions: { args: ["--autoplay-policy=no-user-gesture-required", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] } });
@@ -279,10 +280,17 @@ test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone
   const { WebSocket } = createRequire(resolve("apps/room-state/package.json"))("ws");
   const sockets: any[] = [], stale = new Map<number, { socket: any; messages: any[] }>();
   const microphones = new Map<number, string[]>(), knownMicrophoneParticipants = new Set<string>(); let mediaRoom = "";
+  const diagnostics = new Map<Page, FunctionalObservation>();
   try {
     await h.activateV2();
     await presenterMeetingScenario({ browser, request, origin: h.fixture.origin, adminToken: h.fixture.adminToken }, {
       async failed(phase) {
+        // Hooks run before presenterMeetingScenario closes ANY of its four clients.
+        await writeFunctionalDiagnostics(`F1-${phase}`, {
+          clients: await Promise.all([...diagnostics.values()].map(value => value.snapshot())),
+          participants: mediaRoom ? mediaParticipantFacts(await h.service.listParticipants(mediaRoom)) : [],
+          observerFrames: await receiver.evaluate(() => (window as any).__sourceObserver?.frames).catch(() => null)
+        });
         const { Pool } = createRequire(resolve("apps/api/package.json"))("pg");
         const pool = new Pool({ connectionString: process.env.VRATA_TEST_POSTGRES_URL, connectionTimeoutMillis: 5000,
           options: `-c search_path=${h.fixture.schema},public -c statement_timeout=5000` });
@@ -297,6 +305,7 @@ test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone
         } finally { await pool.end(); }
       },
       async prepareActor(page, origin) {
+        diagnostics.set(page, await observeFunctionalClient(page));
         // Capture uses Chromium's fake device through the original native API,
         // not the application audiomock path or a getUserMedia replacement.
         await page.context().grantPermissions(["microphone"], { origin });
@@ -350,6 +359,7 @@ test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone
         await expect(actor.page.locator("#start-share")).toBeEnabled();
         const framesBefore = await receiver.evaluate(() => (window as any).__sourceObserver.frames);
         const screenStartedAt = Date.now();
+        for (const observation of diagnostics.values()) observation.mark(`presenter-${index + 1}-screen-start`);
         await actor.page.locator("#start-share").click();
         try { await expect.poll(() => actor.page.evaluate(() => (window as any).__VRATA_DEBUG__?.screenShare?.localPublishing), { timeout: screenPublishReadyTimeoutMs }).toBe(true); }
         catch (error) {
@@ -406,6 +416,7 @@ test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone
       }
     });
   } finally {
+    await Promise.allSettled([...diagnostics.values()].map(value => value.close()));
     for (const socket of sockets) socket.terminate();
     await receiver.close(); await h.fixture.close();
   }
