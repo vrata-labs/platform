@@ -4,6 +4,24 @@ import { createRequire } from "node:module";
 import { dirname, resolve, sep } from "node:path";
 import { parseSceneBundleManifest } from "../../apps/runtime-web/src/scene-bundle.js";
 import { startReferenceTemplateFixture } from "./reference-template-fixture.js";
+import { observeReferenceTest } from "./reference-test-observation";
+
+const observations = new Map<Page, ReturnType<typeof observeReferenceTest>>();
+const raySamples: unknown[] = [];
+function observation(page: Page) {
+  let value = observations.get(page);
+  if (!value) { value = observeReferenceTest(page); observations.set(page, value); }
+  return value;
+}
+async function attachPhaseDiagnostics(testInfo: TestInfo, name: string) {
+  const clients = [...observations.values()].map(value => value.snapshot());
+  await testInfo.attach(name, { body: JSON.stringify({ clients, raySamples }), contentType: "application/json" });
+}
+test.beforeEach(() => { observations.clear(); raySamples.length = 0; });
+test.afterEach(async ({}, testInfo) => {
+  for (const value of observations.values()) value.stop();
+  await attachPhaseDiagnostics(testInfo, "marker-phase-diagnostics");
+});
 
 // Explicit canvas captures below are the visual evidence. Automatic trace canvas
 // snapshots duplicate expensive software-WebGL readbacks for every API call.
@@ -13,11 +31,11 @@ test.use({ trace: process.env.PLAYWRIGHT_TRACE === "1"
   : "off" });
 
 async function capture(page: Page, testInfo: TestInfo, name: string, selector = "#scene > canvas") {
-  const dataUrl = await page.evaluate(selector => {
+  const dataUrl = await observation(page).measure("visual-capture", () => page.evaluate(selector => {
     const canvas = document.querySelector(selector);
     if (!(canvas instanceof HTMLCanvasElement)) throw new Error("marker_capture_canvas_missing");
     return canvas.toDataURL("image/png");
-  }, selector);
+  }, selector));
   expect(dataUrl.startsWith("data:image/png;base64,")).toBe(true);
   await testInfo.attach(name, { body: Buffer.from(dataUrl.split(",")[1]!, "base64"), contentType: "image/png" });
 }
@@ -77,7 +95,6 @@ test("seat marker component renders volume, forward chevron and state transition
 
 // The local fixture renders the same pinned reference assets; seat-marker-checks.yml also guards this path.
 for (const staging of [false]) test.describe(`${staging ? "@staging " : ""}seat markers in actual reference rooms`, () => {
-  test.describe.configure({ mode: "serial" });
   test.skip(staging && process.env.VRATA_REFERENCE_CATALOG_ACTIVE !== "1",
     "Wave 2 compatibility deployment precedes reference activation");
   let fixture: Pick<Awaited<ReturnType<typeof startReferenceTemplateFixture>>, "origin" | "close" | "fixtureFingerprint"> | undefined;
@@ -93,8 +110,10 @@ for (const staging of [false]) test.describe(`${staging ? "@staging " : ""}seat 
   });
   test.afterAll(async () => { test.setTimeout(120000); await fixture?.close(); });
 
-  for (const templateId of ["meeting-room-basic", "presentation-room-basic"]) {
-    test(`${templateId}: centre ray, authoritative occupancy, hidden marker and release`, async ({ page, request, browser, launchOptions, headless, channel }, testInfo) => {
+  // Independent default-suite checks share setup, not a renderer/readback queue.
+  // Both still use actual scenes and two live clients; visual is never a tiny fixture.
+  for (const templateId of ["meeting-room-basic", "presentation-room-basic"]) for (const visual of [false, true]) {
+    test(`${templateId}: ${visual ? "visual free, hovered, occupied, own and released views" : "centre ray, authoritative occupancy, blocked interaction and release"}`, async ({ page, request, browser, launchOptions, headless, channel }, testInfo) => {
       test.skip(!fixture, "Local reference checks require VRATA_TEST_POSTGRES_URL (provided by CI)");
       test.setTimeout(300000);
       const headers = { "x-vrata-admin-token": token! };
@@ -131,32 +150,53 @@ for (const staging of [false]) test.describe(`${staging ? "@staging " : ""}seat 
           await client.mouse.move(0, 0);
         }
         await waitFrames(page);
-        await capture(observer, testInfo, "room-free-perspective");
+        if (visual) await capture(observer, testInfo, "room-free-perspective");
         // This is a real pointer ray through the marker centre, not forcedSeatId.
         await page.mouse.move(320, 240);
         await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__.interactionRay.seatId)).toBe(seat.id);
-        await page.waitForTimeout(200); // Settle the explicitly specified 150ms material transition.
-        await capture(page, testInfo, "room-hovered-perspective");
+        if (visual) {
+          await page.waitForTimeout(200); // Settle the explicitly specified 150ms material transition.
+          await capture(page, testInfo, "room-hovered-perspective");
+        }
         await page.evaluate(() => (window as any).__VRATA_TEST__.confirmInteraction());
         await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__.currentSeatId), { timeout: 15000 }).toBe(seat.id);
         await expect.poll(() => observer.evaluate(id => (window as any).__VRATA_DEBUG__.seatOccupancy[id], seat.id), { timeout: 15000 }).toBe(initial.participantId);
-        await capture(observer, testInfo, "room-occupied-same-view");
-        await capture(page, testInfo, "room-own-seated-view");
-        const observerPose = await observer.evaluate(() => (window as any).__VRATA_DEBUG__.localPose.root);
-        await observer.mouse.move(320, 240);
-        await expect.poll(() => observer.evaluate(() => (window as any).__VRATA_DEBUG__.interactionRay.seatId)).toBe(null);
-        await observer.evaluate(() => (window as any).__VRATA_TEST__.confirmInteraction());
-        await waitFrames(observer);
-        expect(await observer.evaluate(() => (window as any).__VRATA_DEBUG__.currentSeatId)).toBe(null);
-        expect(await observer.evaluate(() => (window as any).__VRATA_DEBUG__.localPose.root)).toEqual(observerPose);
+        if (visual) {
+          await capture(observer, testInfo, "room-occupied-same-view");
+          await capture(page, testInfo, "room-own-seated-view");
+        } else {
+          const observerPose = await observer.evaluate(() => (window as any).__VRATA_DEBUG__.localPose.root);
+          await observer.mouse.move(320, 240);
+          await expect.poll(async () => {
+            const sample = await observation(observer).measure("occupied-ray", () => observer.evaluate(({ seatId, participantId }) => {
+              const d = (window as any).__VRATA_DEBUG__;
+              // Only the predicate's own evaluation supplies this snapshot. No extra
+              // page call is queued after a 5s timeout; pending latency stays in Node.
+              return { seatId: d.interactionRay.seatId, active: d.interactionRay.active,
+                mode: d.interactionRay.mode, targetKind: d.interactionRay.targetKind,
+                origin: d.interactionRay.origin, direction: d.interactionRay.direction,
+                occupiedByExpected: d.seatOccupancy[seatId] === participantId,
+                currentSeatId: d.currentSeatId, root: d.localPose.root };
+            }, { seatId: seat.id, participantId: initial.participantId }));
+            raySamples.push(sample); if (raySamples.length > 8) raySamples.shift();
+            return sample.seatId;
+          }, { timeout: 5000 }).toBe(null);
+          await observer.evaluate(() => (window as any).__VRATA_TEST__.confirmInteraction());
+          await waitFrames(observer);
+          expect(await observer.evaluate(() => (window as any).__VRATA_DEBUG__.currentSeatId)).toBe(null);
+          expect(await observer.evaluate(() => (window as any).__VRATA_DEBUG__.localPose.root)).toEqual(observerPose);
+        }
         expect(await page.evaluate(root => (window as any).__VRATA_TEST__.teleportToFloor(root.x, root.z), initial.root)).toBe(true);
         await expect.poll(() => observer.evaluate(id => (window as any).__VRATA_DEBUG__.seatOccupancy[id] ?? null, seat.id), { timeout: 15000 }).toBe(null);
         await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__.currentSeatId), { timeout: 15000 }).toBe(null);
         await observer.mouse.move(0, 0);
         await waitFrames(observer);
-        await capture(observer, testInfo, "room-released-same-view");
+        if (visual) await capture(observer, testInfo, "room-released-same-view");
         await testInfo.attach("room-review-settings", { body: JSON.stringify({ staging, templateId, seat, reviewPose, initial, fixture: fixture!.fixtureFingerprint, errors }, null, 2), contentType: "application/json" });
         expect(errors).toEqual([]);
+      } catch (error) {
+        await attachPhaseDiagnostics(testInfo, "marker-failure-before-cleanup");
+        throw error;
       } finally {
         await observerBrowser?.close();
         // The per-test request fixture can already be closed after a test timeout.
@@ -183,6 +223,7 @@ function seatReviewPose(seat: Seat) {
     y: eye.y - Math.cos(pitch) * 1.6, z: eye.z - Math.cos(yaw) * Math.sin(pitch) * 1.6 }, yaw, pitch, fovDegrees: 52 };
 }
 async function join(page: Page, url: string) {
+  observation(page);
   await page.goto(url);
   try {
     await expect.poll(() => page.evaluate(() => {
@@ -215,7 +256,7 @@ async function join(page: Page, url: string) {
     })).catch(() => {});
     throw error;
   }
-  await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected), { timeout: 30000 }).toBe(true);
+  await expect.poll(() => observation(page).measure("room-state", () => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected)), { timeout: 30000 }).toBe(true);
   expect(await page.evaluate(() => (window as any).__VRATA_DEBUG__.sceneDebug.missingAssets)).toEqual([]);
   await page.evaluate(() => {
     const hud = document.querySelector("details.hud");
