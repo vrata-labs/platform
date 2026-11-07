@@ -8,7 +8,8 @@ import { mkdtemp, readFile, readdir, stat, rm } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { collectedTransportFacts, finalizeFunctionalDiagnostics, guestSubscriptionFacts, mediaFacts, mediaParticipantFacts, observeFunctionalClient,
-  observeGuestSubscriptionPoll, observeMeetingPanelPoll, installFunctionalBrowserObservation, readGuestSubscriptionSample, writeFunctionalDiagnostics } from "./functional-diagnostics.ts";
+  observeGuestSubscriptionPoll, observeMeetingPanelPoll, installFunctionalBrowserObservation, readGuestSubscriptionSample, writeFunctionalDiagnostics,
+  failureMediaLifecycleFacts, withFailureMediaLifecycle } from "./functional-diagnostics.ts";
 
 test("media diagnostics correlate object/track/revision without retaining content or owner IDs", () => {
   const media = { surfaces: { wall: { surfaceId: "whiteboard-wall", activeObjectId: "object-private", textureId: 3 } },
@@ -543,10 +544,14 @@ function lifecycleFixture() {
 }
 
 function compiledGuestEvaluator() {
+  return compiledDiagnosticFunction("readGuestSubscriptionSample");
+}
+
+function compiledDiagnosticFunction(name: string) {
   const source = fs.readFileSync(resolve("tests/e2e/functional-diagnostics.ts"), "utf8");
   const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
   const ast = ts.createSourceFile("compiled.js", compiled, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS);
-  const declaration = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "readGuestSubscriptionSample");
+  const declaration = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
   assert.ok(declaration);
   return declaration.getText(ast).replace(/^export /, "");
 }
@@ -712,4 +717,191 @@ test("Guest Node sample interval only brackets configured boundary; browser-cloc
     assert.equal(resolved.facts.browserNowMs, 100); assert.equal(resolved.facts.mediaLifecycle.availability, "present");
     assert.equal(resolved.deadlineAtMs, undefined); await assert.rejects(predicate, /primary/);
   }
+});
+
+function failureBrowser(debug: any, times = [99, 101]) {
+  let now = 0;
+  return { window: { __VRATA_DEBUG__: debug, __handoffMicrophoneCalls: [], __sourceJoinClicks: 1 },
+    performance: { now: () => times[Math.min(now++, times.length - 1)], timeOrigin: 1_000_000 },
+    Date: { now: () => 1_000_101 }, document: { visibilityState: "visible", querySelector: () => null, querySelectorAll: () => [] },
+    navigator: { mediaDevices: {} }, isSecureContext: true };
+}
+
+function compiledFailureSerializer() {
+  const declarations = ["readGuestSubscriptionSample", "readFailureMediaLifecycle", "withFailureMediaLifecycle"].map(compiledDiagnosticFunction).join("\n");
+  return runInNewContext(`${declarations}; withFailureMediaLifecycle`) as typeof withFailureMediaLifecycle;
+}
+
+test("compiled failure evaluator reuses the actual serialized allowlist, getter once and browser bracket in the existing page call", () => {
+  const lifecycle: any = lifecycleFixture(); let reads = 0;
+  lifecycle.events.push({ generation: 1, execution: null, relation: "current", atMs: 90,
+    stage: "screen-share-binding", outcome: "rejected", reason: "no-physical-object", token: "private-token" });
+  const debug = { get mediaLifecycle() { reads++; return lifecycle; }, get nativePC() { throw new Error("no SDK/RTC inspection"); } };
+  const source = compiledFailureSerializer()(read => read());
+  const browser = JSON.parse(JSON.stringify(runInNewContext(source, failureBrowser(debug))));
+  const facts = failureMediaLifecycleFacts({ ...browser, token: "private-token", url: "https://private" });
+  assert.equal(reads, 1); assert.equal(facts.browserReadStartedAtMs, 99); assert.equal(facts.browserReadFinishedAtMs, 101);
+  assert.equal(facts.browserReadBracket, "valid"); assert.equal(facts.browserClockDomain, "browser:performance.now");
+  assert.equal(facts.browserTimeOriginMs, 1_000_000); assert.equal(facts.browserWallTimeMs, 1_000_101);
+  assert.equal(facts.samplePoint, "post-primary-failure"); assert.equal(facts.mediaLifecycle.selection, "current");
+  assert.equal(facts.mediaLifecycle.latestGeneration, 2); assert.equal(facts.mediaLifecycle.summaryGeneration, 1);
+  assert.equal(facts.mediaLifecycle.events[0].reason, "no-physical-object");
+  assert.doesNotMatch(JSON.stringify(facts), /private|token|https|deadline|ready|passed/);
+  lifecycle.events[0].reason = "matched"; assert.equal(facts.mediaLifecycle.events[0].reason, "no-physical-object");
+});
+
+test("failure phases retain latest STARTED execution and invalidated attempt; missing, drops, null ordinals and stale clocks are unknown", () => {
+  const serializer = compiledFailureSerializer();
+  for (const mode of ["failed", "stale-completion", "missing", "throws", "drops", "bounds", "null-ordinal", "clock", "before", "after", "backwards"] as const) {
+    const lifecycle: any = lifecycleFixture();
+    lifecycle.currentGeneration = null; lifecycle.generations[0].relation = "invalidated";
+    lifecycle.generations[0].invalidatedAtMs = 98; lifecycle.generations[0].invalidationReason = "failed";
+    lifecycle.generations[1].relation = "invalidated"; lifecycle.generations[1].invalidatedAtMs = 98;
+    lifecycle.generations[1].invalidationReason = "failed";
+    Object.assign(lifecycle.generations[1].stages.connect, { execution: 2, status: "failed", startedAtMs: 10, completedAtMs: 95 });
+    lifecycle.events.push({ generation: 2, execution: mode === "stale-completion" ? 1 : 2, relation: "attempt", atMs: 95,
+      stage: "connect", outcome: "failed", reason: null, error: "private-rejection-reason" });
+    if (mode === "drops") lifecycle.droppedEvents = 1;
+    if (mode === "bounds") { lifecycle.generations = Array(12).fill(lifecycle.generations[1]); lifecycle.events = Array(80).fill(lifecycle.events[0]); }
+    if (mode === "null-ordinal") lifecycle.generations[1].stages.connect.execution = null;
+    if (mode === "clock") lifecycle.clockValid = false;
+    if (mode === "before") lifecycle.observedAtMs = 98;
+    if (mode === "after") lifecycle.observedAtMs = 102;
+    let reads = 0;
+    const debug = { get mediaLifecycle() { reads++; if (mode === "throws") throw new Error("private-token"); return mode === "missing" ? undefined : lifecycle; } };
+    const browser = JSON.parse(JSON.stringify(runInNewContext(serializer(read => read()), failureBrowser(debug, mode === "backwards" ? [101, 99] : [99, 101]))));
+    const facts = failureMediaLifecycleFacts(browser);
+    assert.equal(reads, 1); assert.ok(facts.mediaLifecycle.generations.length <= 8); assert.ok(facts.mediaLifecycle.events.length <= 64);
+    if (mode === "missing" || mode === "throws") assert.equal(facts.mediaLifecycle.availability, mode === "missing" ? "missing" : "invalid");
+    else if (mode === "bounds") { assert.equal(facts.mediaLifecycle.availability, "invalid"); assert.equal(facts.mediaLifecycle.historyComplete, null); }
+    else {
+      assert.equal(facts.mediaLifecycle.selection, "latest-history-no-current");
+      const phase = facts.mediaLifecycle.generations[1].stages.connect;
+      assert.equal(phase.status, "failed"); assert.equal(phase.atSample, mode === "failed" ? "completed-before-or-at-sample" : "unknown", mode);
+      assert.equal(facts.mediaLifecycle.generations[1].invalidationReason, "failed");
+    }
+    if (["clock", "before", "after", "backwards", "missing", "throws"].includes(mode)) assert.equal(facts.browserReadBracket, "unknown");
+    assert.doesNotMatch(JSON.stringify(facts), /private|token|rejection-reason|"ready"|"passed"/);
+  }
+});
+
+function microphoneFailureTry() {
+  const spec = fs.readFileSync(resolve("tests/e2e/media-source-grants.spec.ts"), "utf8");
+  const ast = ts.createSourceFile("spec.ts", spec, ts.ScriptTarget.ES2022, true);
+  const matches: ts.TryStatement[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isTryStatement(node) && node.tryBlock.statements.length === 1 && node.tryBlock.getText(ast).includes('locator("#toggle-mute")')
+      && node.tryBlock.getText(ast).includes("microphoneReadyTimeoutMs")) matches.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(ast); assert.equal(matches.length, 1);
+  const source = matches[0].getText(ast);
+  assert.equal((source.match(/\.evaluate(?:<any>)?\(/g) ?? []).length, 1);
+  assert.doesNotMatch(source, /expect\.poll|flush|waitFor|setTimeout|retry|getStats/);
+  assert.match(spec, /const microphoneReadyTimeoutMs = 60_000;/);
+  assert.match(spec, /clients: await Promise\.all\(\[\.\.\.diagnostics.values\(\)\].map\(value => value.snapshot\(true\)\)\)/);
+  return ts.transpileModule(`async function failureBranch() { ${source} }`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
+}
+
+test("actual F1 mic failure before Guest projects once after original 60s assertion, preserves primary identity even if diagnostics fail", async () => {
+  const source = microphoneFailureTry(), primary = new Error("original mic disabled after 60s");
+  for (const mode of ["failed", "missing", "throws", "evaluate-rejects", "console-throws", "success"] as const) {
+    let reads = 0, evaluations = 0, assertionFailed = false, guestReached = false, nodeNow = 900_000;
+    const messages: any[] = [], lifecycle = lifecycleFixture();
+    const debug = { audioState: "degraded", media: { audioJoined: false, publishedAudio: false, audioSource: "none" },
+      get mediaLifecycle() { reads++; if (mode === "throws") throw new Error("private-token"); return mode === "missing" ? undefined : lifecycle; } };
+    const branch = runInNewContext(`${source}; failureBranch`, {
+      microphoneReadyTimeoutMs: 60_000, index: 0, withFailureMediaLifecycle: compiledFailureSerializer(), failureMediaLifecycleFacts,
+      Date: { now: () => ++nodeNow }, console: { warn: (label: string, raw: string) => {
+        assert.equal(assertionFailed, true); if (mode === "console-throws") throw new Error("private-diagnostic-error");
+        messages.push({ label, ...JSON.parse(raw) });
+      } }, actor: { page: { locator: (selector: string) => { assert.equal(selector, "#toggle-mute"); return selector; },
+        evaluate: async (expression: string) => {
+          evaluations++; assert.equal(assertionFailed, true);
+          if (mode === "evaluate-rejects") throw new Error("private-browser-error");
+          return JSON.parse(JSON.stringify(runInNewContext(expression, failureBrowser(debug))));
+        } } }, expect: () => ({ toBeEnabled: async (options: any) => {
+        assert.equal(options.timeout, 60_000); assert.equal(evaluations, 0); assert.equal(reads, 0); assert.equal(messages.length, 0);
+        if (mode !== "success") { assertionFailed = true; throw primary; }
+      } })
+    }) as () => Promise<void>;
+    const scenario = async () => { await branch(); guestReached = true; };
+    if (mode === "success") { await scenario(); assert.equal(guestReached, true); assert.equal(evaluations, 0); assert.equal(reads, 0); }
+    else {
+      await assert.rejects(scenario(), error => error === primary); assert.equal(guestReached, false); assert.equal(evaluations, 1);
+      assert.equal(reads, mode === "evaluate-rejects" ? 0 : 1);
+      if (mode !== "console-throws") {
+        assert.equal(messages.length, 1); const row = messages[0];
+        assert.equal(row.label, "presenter_microphone_join_failed"); assert.equal(row.presenter, 1);
+        assert.equal(row.nodeClockDomain, "node:Date.now"); assert.equal(row.sampleStartedAtMs, 900_001); assert.equal(row.sampleResolvedAtMs, 900_002);
+        assert.equal(row.mediaLifecycleSnapshot.samplePoint, "post-primary-failure");
+        assert.equal(row.mediaLifecycleSnapshot.mediaLifecycle.availability, mode === "failed" ? "present" : mode === "throws" ? "invalid" : "missing");
+        assert.doesNotMatch(JSON.stringify(row), /private|token|deadlineAtMs|"passed"/);
+      }
+    }
+  }
+});
+
+test("existing per-actor failure snapshot uses one serialized evaluate/getter, keeps 5s bound and does not add native stats", async context => {
+  const root = await mkdtemp("/tmp/opencode/presenter-failure-unit-"), previous = process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
+  process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR = root;
+  const cdp = Object.assign(new EventEmitter(), { send: async () => ({}), detach: async () => {} });
+  let reads = 0, evaluations = 0, stats = 0;
+  const lifecycle = lifecycleFixture(), browser = failureBrowser({ get mediaLifecycle() { reads++; return lifecycle; } });
+  Object.assign(browser.window, { __functionalObservation: { peers: [{ getStats: async () => { stats++; return new Map(); },
+    getReceivers: () => [], connectionState: "closed", iceConnectionState: "closed", signalingState: "closed" }] } });
+  const page = Object.assign(new EventEmitter(), { context: () => ({ newCDPSession: async () => cdp }), addInitScript: async () => {},
+    evaluate: async (expression: string | Function) => {
+      evaluations++; return JSON.parse(JSON.stringify(await runInNewContext(typeof expression === "string" ? expression : `(${expression.toString()})()`, browser)));
+    }, isClosed: () => false });
+  const client = await observeFunctionalClient(page as any);
+  try {
+    const plain = await client.snapshot(); assert.equal(reads, 0); assert.equal(plain.mediaLifecycleSnapshot, undefined);
+    // Execute the actual F1 failed-hook export before any Guest poll can start.
+    const spec = fs.readFileSync(resolve("tests/e2e/media-source-grants.spec.ts"), "utf8");
+    const ast = ts.createSourceFile("spec.ts", spec, ts.ScriptTarget.ES2022, true), exports: ts.CallExpression[] = [];
+    const visit = (node: ts.Node) => {
+      if (ts.isCallExpression(node) && node.expression.getText(ast) === "writeFunctionalDiagnostics" && node.arguments[0]?.getText(ast) === "`F1-${phase}`") exports.push(node);
+      ts.forEachChild(node, visit);
+    };
+    visit(ast); assert.equal(exports.length, 1);
+    const persistSource = ts.transpileModule(`async function persist() { return ${exports[0].getText(ast)}; }`, {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext }
+    }).outputText;
+    const persist = runInNewContext(`${persistSource}; persist`, { writeFunctionalDiagnostics, phase: "presenting-hook-1",
+      diagnostics: new Map([[page, client]]), mediaRoom: "", mediaParticipantFacts, receiver: { evaluate: async () => null } });
+    const primary = new Error("original mic failure before Guest");
+    await assert.rejects((async () => { try { throw primary; } finally { await persist(); } })(), error => error === primary);
+    const [file] = await readdir(root), exported = JSON.parse(await readFile(`${root}/${file}`, "utf8"));
+    assert.equal(exported.stage, "F1-presenting-hook-1"); assert.equal((await stat(`${root}/${file}`)).mode & 0o777, 0o600);
+    const snapshot = exported.facts.clients[0]; assert.equal(evaluations, 2); assert.equal(reads, 1); assert.equal(stats, 2);
+    assert.equal(snapshot.mediaLifecycleSnapshot.mediaLifecycle.availability, "present"); assert.equal(snapshot.nodeClockDomain, "node:Date.now");
+    assert.ok(snapshot.sampleResolvedAtMs >= snapshot.sampleStartedAtMs);
+    context.mock.timers.enable({ apis: ["setTimeout"] });
+    page.evaluate = async () => { evaluations++; return new Promise(() => {}); };
+    const pending = client.snapshot(true); context.mock.timers.tick(5000);
+    const timedOut = await pending; assert.equal(evaluations, 3); assert.equal(timedOut.sampleTimedOut, true);
+    assert.equal(timedOut.mediaLifecycleSnapshot.mediaLifecycle.availability, "missing"); assert.equal(reads, 1); assert.equal(stats, 2);
+    context.mock.timers.reset();
+  } finally {
+    await client.close();
+    if (previous === undefined) delete process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
+    else process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR = previous;
+    await rm(root, { recursive: true });
+  }
+});
+
+test("failure-before-Guest leaves its slow sink queued until the whole flow failed, and primary error survives export", async () => {
+  let protectedDone = false, writes = 0;
+  const rows: any[] = [], gate = deferred<void>(), primary = new Error("original early microphone failure");
+  const guest = observeGuestSubscriptionPoll(1, async row => { writes++; assert.equal(protectedDone, true); await gate.promise; rows.push(row); });
+  guest.lifecycle("media_connected_passive", 100); // possible receipt before Guest's poll is reached
+  const failed = (async () => {
+    try { assert.equal(writes, 0); throw primary; }
+    finally { protectedDone = true; await guest.flush(); }
+  })();
+  const rejected = assert.rejects(failed, error => error === primary);
+  await Promise.resolve(); assert.equal(writes, 1); gate.resolve(); await rejected;
+  assert.equal(rows.length, 1); assert.equal((rows[0] as any).configuredStartAtMs, null);
+  assert.equal((rows[0] as any).event, "passive-startup-report-observed");
 });

@@ -210,6 +210,42 @@ export function guestSubscriptionFacts(value: any) {
     surfaceHasTexture: boolean(value?.surfaceHasTexture), videoElements: count(value?.videoElements) };
 }
 
+/** Same allowlist in browser and Node. This is a POST-failure observation, not
+ * the original operation's deadline. Only the getter is inside this bracket. */
+export function readFailureMediaLifecycle(projector: typeof readGuestSubscriptionSample, input?: any) {
+  let sample = input;
+  if (sample === undefined) {
+    const browserReadStartedAtMs = performance.now();
+    let mediaLifecycle: unknown, lifecycleReadFailed = false;
+    try { mediaLifecycle = (window as any).__VRATA_DEBUG__?.mediaLifecycle; } catch { lifecycleReadFailed = true; }
+    const browserReadFinishedAtMs = performance.now();
+    sample = { mediaLifecycle, lifecycleReadFailed, browserReadStartedAtMs, browserReadFinishedAtMs,
+      browserNowMs: browserReadFinishedAtMs, browserWallTimeMs: Date.now(), browserTimeOriginMs: performance.timeOrigin };
+  }
+  const number = (v: unknown) => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= Number.MAX_SAFE_INTEGER ? v : null;
+  const before = number(sample?.browserReadStartedAtMs), after = number(sample?.browserReadFinishedAtMs);
+  const projected = projector({ project: sample }), observed = projected.mediaLifecycle.observedAtMs;
+  const bracketValid = before !== null && after !== null && before <= after && observed !== null && before <= observed && observed <= after
+    && projected.browserNowMs === after && projected.mediaLifecycle.clockValid;
+  // Keep raw status/times, but do not classify a phase against an invalid or
+  // stale clock bracket. Reprojection never copies arbitrary runtime fields.
+  const lifecycle = bracketValid ? projected.mediaLifecycle : projector({ project: { ...projected, browserNowMs: null } }).mediaLifecycle;
+  return { samplePoint: "post-primary-failure", browserClockDomain: projected.browserClockDomain,
+    browserReadStartedAtMs: before, browserReadFinishedAtMs: after, browserReadBracket: bracketValid ? "valid" : "unknown",
+    browserNowMs: projected.browserNowMs, browserWallTimeMs: projected.browserWallTimeMs,
+    browserTimeOriginMs: projected.browserTimeOriginMs, mediaLifecycle: lifecycle };
+}
+
+/** Embed actual compiled standalone functions, not an imported browser closure.
+ * The caller replaces its EXISTING evaluate body; this adds no page call. */
+export function withFailureMediaLifecycle<T>(evaluate: (read: () => ReturnType<typeof readFailureMediaLifecycle>) => T): string {
+  return `(${evaluate.toString()})(() => (${readFailureMediaLifecycle.toString()})(${readGuestSubscriptionSample.toString()}))`;
+}
+
+export function failureMediaLifecycleFacts(value: any) {
+  return readFailureMediaLifecycle(readGuestSubscriptionSample, value ?? {});
+}
+
 /** Observe only the original Guest promise. Keep bounded DTOs in memory until
  * flush AFTER the whole protected scenario, not between its assertions. Late
  * answers keep the original failure. Configured times are not Playwright internals. */
@@ -497,10 +533,11 @@ export async function observeFunctionalClient(page: Page, options: { transportAt
           peerConnections: (observation?.peerConnections ?? []).slice(0, 16) };
       }).catch(() => ({ unavailable: true } as any)), { unavailable: true, sampleTimedOut: true } as any));
     },
-    async snapshot() {
+    async snapshot(failure = false) {
       const begin = Date.now();
-      const facts = await bounded(page.evaluate(async () => {
+      const evaluate = async (readLifecycle?: () => ReturnType<typeof readFailureMediaLifecycle>) => {
         const d = (window as any).__VRATA_DEBUG__, observation = (window as any).__functionalObservation;
+        const mediaLifecycleSnapshot = readLifecycle?.();
         const peers = await Promise.all((observation?.peers ?? []).map(async (peer: RTCPeerConnection) => {
           const counters: any[] = [];
           try { (await peer.getStats()).forEach(value => {
@@ -512,7 +549,7 @@ export async function observeFunctionalClient(page: Page, options: { transportAt
             receivers: peer.getReceivers().map(receiver => ({ track: receiver.track?.id, kind: receiver.track?.kind, ready: receiver.track?.readyState, muted: receiver.track?.muted })), counters };
         }));
         const performanceState = (window as any).__meetingPerformance;
-        return { browserNowMs: performance.now(), browserWallTimeMs: Date.now(), scene: d?.sceneBundleState, connected: d?.roomStateConnected, role: d?.access?.role,
+        return { ...(mediaLifecycleSnapshot ? { mediaLifecycleSnapshot } : {}), browserNowMs: performance.now(), browserWallTimeMs: Date.now(), scene: d?.sceneBundleState, connected: d?.roomStateConnected, role: d?.access?.role,
           access: { lastDeniedPermission: d?.access?.lastDeniedPermission, lastSurfaceCommandAccepted: d?.access?.lastSurfaceCommandAccepted,
             canStartScreenShare: d?.access?.canStartScreenShare },
           controls: { selectedSurface: document.querySelector<HTMLSelectElement>("#media-surface-select")?.value,
@@ -536,7 +573,14 @@ export async function observeFunctionalClient(page: Page, options: { transportAt
           videos: [...document.querySelectorAll("video")].map(video => ({ width: video.videoWidth, height: video.videoHeight,
             ready: video.readyState, paused: video.paused, frames: video.getVideoPlaybackQuality().totalVideoFrames,
             tracks: video.srcObject instanceof MediaStream ? video.srcObject.getTracks().map(track => track.id) : [] })) };
-      }).catch(() => ({ unavailable: true } as any)), { unavailable: true, sampleTimedOut: true } as any);
+      };
+      const original = failure ? page.evaluate<any>(withFailureMediaLifecycle(evaluate)) : page.evaluate(evaluate, undefined);
+      const facts = await bounded(original.catch(() => ({ unavailable: true } as any)), { unavailable: true, sampleTimedOut: true } as any);
+      const resolvedAtMs = Date.now();
+      if (failure) {
+        facts.mediaLifecycleSnapshot = failureMediaLifecycleFacts(facts.mediaLifecycleSnapshot);
+        Object.assign(facts, { sampleStartedAtMs: begin, sampleResolvedAtMs: resolvedAtMs, nodeClockDomain: "node:Date.now" });
+      }
       const media = mediaFacts(facts.media); delete facts.media;
       if (facts.share) facts.share.track = ref(facts.share.track);
       for (const peer of facts.peers ?? []) {

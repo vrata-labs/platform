@@ -8,7 +8,8 @@ import { startLocalLiveKitFixture } from "./local-livekit-fixture.js";
 import { startReferenceTemplateFixture } from "./reference-template-fixture.js";
 import { presenterMeetingScenario } from "./presenter-meeting-scenarios.js";
 import { chooseMeetingPanel } from "./meeting-tools-acceptance.js";
-import { observeFunctionalClient, writeFunctionalDiagnostics, mediaParticipantFacts, readGuestSubscriptionSample, type FunctionalObservation } from "./functional-diagnostics.js";
+import { observeFunctionalClient, writeFunctionalDiagnostics, mediaParticipantFacts, readGuestSubscriptionSample,
+  withFailureMediaLifecycle, failureMediaLifecycleFacts, type FunctionalObservation } from "./functional-diagnostics.js";
 
 // Genuine self-hosted RTC and the built main runtime. Credentials/SDP/candidates remain in memory, never in artifacts.
 test.use({ trace: "off", screenshot: "off", video: "off", launchOptions: { args: ["--autoplay-policy=no-user-gesture-required", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] } });
@@ -288,7 +289,7 @@ test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone
       async failed(phase) {
         // Hooks run before presenterMeetingScenario closes ANY of its four clients.
         await writeFunctionalDiagnostics(`F1-${phase}`, {
-          clients: await Promise.all([...diagnostics.values()].map(value => value.snapshot())),
+          clients: await Promise.all([...diagnostics.values()].map(value => value.snapshot(true))),
           participants: mediaRoom ? mediaParticipantFacts(await h.service.listParticipants(mediaRoom)) : [],
           observerFrames: await receiver.evaluate(() => (window as any).__sourceObserver?.frames).catch(() => null)
         });
@@ -345,12 +346,19 @@ test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone
         await actor.page.locator("#join-muted").uncheck(); await actor.page.locator("#join-audio").click();
         try { await expect(actor.page.locator("#toggle-mute")).toBeEnabled({ timeout: microphoneReadyTimeoutMs }); }
         catch (error) {
-          console.warn("presenter_microphone_join_failed", JSON.stringify(await actor.page.evaluate(() => {
-            const debug = (window as any).__VRATA_DEBUG__;
-            return { audioState: debug?.audioState, joined: debug?.media?.audioJoined, published: debug?.media?.publishedAudio,
-              source: debug?.media?.audioSource, calls: (window as any).__handoffMicrophoneCalls,
-              clicks: (window as any).__sourceJoinClicks, visibility: document.visibilityState };
-          }).catch(() => ({ unavailable: true }))));
+          try {
+            const sampleStartedAtMs = Date.now();
+            const facts = await actor.page.evaluate<any>(withFailureMediaLifecycle(readLifecycle => {
+              const debug = (window as any).__VRATA_DEBUG__;
+              return { mediaLifecycleSnapshot: readLifecycle(), audioState: debug?.audioState, joined: debug?.media?.audioJoined, published: debug?.media?.publishedAudio,
+                source: debug?.media?.audioSource, calls: (window as any).__handoffMicrophoneCalls,
+                clicks: (window as any).__sourceJoinClicks, visibility: document.visibilityState };
+            })).catch(() => ({ unavailable: true }));
+            const sampleResolvedAtMs = Date.now();
+            facts.mediaLifecycleSnapshot = failureMediaLifecycleFacts(facts.mediaLifecycleSnapshot);
+            console.warn("presenter_microphone_join_failed", JSON.stringify({ ...facts, presenter: index + 1,
+              nodeClockDomain: "node:Date.now", sampleStartedAtMs, sampleResolvedAtMs }));
+          } catch { /* Diagnostics must never replace the original microphone assertion. */ }
           throw error;
         }
         console.info("presenter_microphone_ready", JSON.stringify({ presenter: index + 1, elapsedMs: Date.now() - joinStartedAt }));
