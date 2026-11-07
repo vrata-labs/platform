@@ -16,6 +16,7 @@ controller.rebuild([{ id: "seat", position: { x: 0, y: 0, z: 0 }, yaw: 0, seatHe
 scene.add(controller.root);
 const camera = new THREE.OrthographicCamera(-0.42, 0.42, 0.315, -0.315, 0.01, 10);
 let light = false;
+let state = null;
 const render = () => { scene.background = new THREE.Color(light ? 0xe1e3e4 : 0x18222a); renderer.render(scene, camera); };
 const setView = (name) => {
   camera.up.set(0, 1, 0);
@@ -30,17 +31,18 @@ window.markerHarness = {
   setView,
   setLight(value) { light = value; plane.material.color.setHex(light ? 0xbab3a7 : 0x605952); render(); },
   setState(name, timeSeconds) {
-    controller.update({
+    state = {
       hoveredSeatId: name === "hovered" ? "seat" : null,
       pendingSeatId: name === "pending" ? "seat" : null,
       currentSeatId: name === "current" ? "seat" : null,
       occupancy: name === "occupied" ? { seat: "other" } : {}, timeSeconds
-    });
+    };
+    controller.update(state);
     render();
   },
   snapshot() {
     const marker = controller.getMarker("seat");
-    return { visible: marker.group.visible, blocked: marker.hit.userData.seatMarkerBlocked,
+    return { state, visible: marker.group.visible, blocked: marker.hit.userData.seatMarkerBlocked,
       calls: renderer.info.render.calls, triangles: renderer.info.render.triangles,
       opacity: marker.top.material.opacity, color: marker.top.material.color.getHex(),
       camera: camera.position.toArray(), forward: camera.getWorldDirection(new THREE.Vector3()).toArray() };

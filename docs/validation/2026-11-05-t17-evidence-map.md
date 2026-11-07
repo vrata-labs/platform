@@ -29,6 +29,17 @@ Runtime candidate: `9d7b2db4c60df1d39dd5769f6f4676addfb0f03c` с исправл�
 - Package test на `51668aa` завершился exit 1 без таймаута: отсутствовали pinned rollback object `81c14b6ac8dbc537892f7b1f342ca8f718fdf0a6` и `VRATA_PLUGIN_ROLLBACK_STORAGE_MODULE`. Два API-теста остановились в `assertLocalPluginRollbackObject` до проверок совместимости (API: 1859 passed / 2 failed / 6 skipped; root tools после `&&` не запускались). Это отказ подготовки fixture, не доказанный дефект продукта и не произвольный таймаут. Источники: `rollback-fixture.test-helper.ts:14–18`, `rollback-compat.postgres.test.ts:27–54`, receipt `1793893065934247928-package-test-136b5e16.json` и `superseded-package-51668aa-analysis.private.json` в приватном пакете приёмки.
 - Незавершённый full-local `51668aa` отменён после смены кандидата; terminal `t17-full-local-51668aa-80ca1f9e/terminal.json` имеет blocked, package failure сохранён. Отмена не является PASS; источник — `superseded-full-local-51668aa.json`. Local/CI/Docker/stage на `9d7b2db` и ручная встреча требуют отдельных подтверждений.
 
+## Own marker: согласованный способ доказательства, D-103
+
+Скрытие собственного маркера обязательно и не подменяется occupied. Вместо floor-only own PNG владелец критерия согласовал два совместных основания:
+
+- Отдельный WebGL-переход видимого свободного маркера в current с пустой occupancy: PNG `component-before-current` и `component-current-hidden`, фактические входы и render snapshot в `component-current-proof`. Occupied проверяется отдельно, тоже после восстановления видимости.
+- Обе реальные reference-комнаты: `room-own-seat-authority-proof` связывает собственный participantId/currentSeatId и клиентскую occupancy с новым авторитетным room_state на существующем WebSocket; seated root соответствует штатному lock и сохраняется после кадров. Один HTTP-успех, чужая occupancy или отсутствие маркера за пределами кадра недостаточны.
+
+Новые component/current и room attachments ещё предстоит получить и проверить. Release должен показать тот же свободный маркер без перекрывающего аватара при неизменном observer pose/DPR/canvas. Ожидание новой received pose и playback/render settling не заменяет просмотра actual PNG и укладывается в прежние 15 секунд.
+
+Исторические RF 4/4 и visual 5/5 не удаляются и не становятся качественным PASS. Предыдущий визуальный набор сохраняет REWORK_REQUIRED; это неполнота доказательств, а не установленный runtime/art дефект. Принятый самостоятельный browser PNG нового дизайна маркера с provenance остаётся отдельным открытым source gate, не отменённым D-103. F1/F7, full F6, CI/Docker/stage и physical/device gates сохраняются; T17 NOT_READY.
+
 ## Запуск fresh self-host
 
 Оснастка: `tools/t17-selfhost-acceptance.py`; отдельный Playwright config: `tests/selfhost/playwright.config.ts` (без webServer/fixture). Продукт собирается штатными Dockerfiles из `git archive` exact runtime SHA. Author helpers сверяются побайтно с этим SHA; hashes самой оснастки записываются отдельно. Приватные env, state и логи — только в каталоге доставки вне репозитория.

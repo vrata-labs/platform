@@ -5,6 +5,9 @@ import { dirname, resolve, sep } from "node:path";
 import { parseSceneBundleManifest } from "../../apps/runtime-web/src/scene-bundle.js";
 import { startReferenceTemplateFixture } from "./reference-template-fixture.js";
 import { observeReferenceTest } from "./reference-test-observation";
+import { captureRoomAuthority, type RoomAuthorityCapture } from "./room-state-observation";
+import { isOwnSeatProof, ownSeatProof, type OwnSeatClient } from "./seat-marker-proof";
+import { cleanupAll } from "./test-cleanup";
 
 const observations = new Map<Page, ReturnType<typeof observeReferenceTest>>();
 const raySamples: unknown[] = [];
@@ -86,8 +89,20 @@ test("seat marker component renders volume, forward chevron and state transition
   await page.evaluate(() => (window as any).markerHarness.setState("pending", 0.3));
   await capture(page, testInfo, "component-pending", "canvas");
   for (const name of ["occupied", "current"]) {
+    // Each cause must hide a visible marker independently, not inherit occupied's hidden state.
+    await page.evaluate(() => (window as any).markerHarness.setState("free", 1));
+    const visible = await page.evaluate(() => (window as any).markerHarness.snapshot());
+    expect(visible).toMatchObject({ visible: true, blocked: false });
+    expect(visible.state).toMatchObject({ currentSeatId: null, occupancy: {} });
+    expect(visible.calls).toBeGreaterThan(1);
+    await capture(page, testInfo, `component-before-${name}`, "canvas");
     await page.evaluate(value => (window as any).markerHarness.setState(value, 1), name);
-    expect(await page.evaluate(() => (window as any).markerHarness.snapshot())).toMatchObject({ visible: false, blocked: true, calls: 1 });
+    const hidden = await page.evaluate(() => (window as any).markerHarness.snapshot());
+    expect(hidden).toMatchObject({ visible: false, blocked: true, calls: 1 });
+    expect(hidden.state).toMatchObject(name === "current"
+      ? { currentSeatId: "seat", occupancy: {} } : { currentSeatId: null, occupancy: { seat: "other" } });
+    await capture(page, testInfo, `component-${name}-hidden`, "canvas");
+    await testInfo.attach(`component-${name}-proof`, { body: JSON.stringify({ cause: name, visible, hidden }), contentType: "application/json" });
   }
   expect(errors).toEqual([]);
   await testInfo.attach("component-renderer", { body: JSON.stringify(hovered, null, 2), contentType: "application/json" });
@@ -124,6 +139,7 @@ for (const staging of [false]) test.describe(`${staging ? "@staging " : ""}seat 
       const room = await response.json();
       const roomUrl = `${room.roomLink}?debug=1&scenefit=0&onboard=0`;
       let observerBrowser: Browser | undefined;
+      let ownAuthority: RoomAuthorityCapture | undefined;
       const errors: string[] = [];
       page.on("pageerror", error => errors.push(error.message));
       try {
@@ -135,6 +151,7 @@ for (const staging of [false]) test.describe(`${staging ? "@staging " : ""}seat 
         observer.on("pageerror", error => errors.push(error.message));
         await page.setViewportSize({ width: 640, height: 480 });
         const manifestResponse = page.waitForResponse(value => /\/scene\.json(?:[?#]|$)/.test(value.url()));
+        if (visual) ownAuthority = await captureRoomAuthority(page);
         await join(page, roomUrl);
         const manifest = parseSceneBundleManifest(await (await manifestResponse).json());
         const seat = manifest.anchors!.seatAnchors[0] as Seat;
@@ -150,6 +167,8 @@ for (const staging of [false]) test.describe(`${staging ? "@staging " : ""}seat 
           await client.mouse.move(0, 0);
         }
         await waitFrames(page);
+        if (visual) await waitFrames(observer);
+        const fixedReviewView = visual ? await readReviewView(observer) : null;
         if (visual) await capture(observer, testInfo, "room-free-perspective");
         // This is a real pointer ray through the marker centre, not forcedSeatId.
         await page.mouse.move(320, 240);
@@ -158,12 +177,25 @@ for (const staging of [false]) test.describe(`${staging ? "@staging " : ""}seat 
           await page.waitForTimeout(200); // Settle the explicitly specified 150ms material transition.
           await capture(page, testInfo, "room-hovered-perspective");
         }
+        const beforeClaim = ownAuthority?.snapshot();
+        const claimBoundary = { generation: ownAuthority?.generation() ?? 0, sequence: beforeClaim?.sequence ?? 0 };
         await page.evaluate(() => (window as any).__VRATA_TEST__.confirmInteraction());
-        await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__.currentSeatId), { timeout: 15000 }).toBe(seat.id);
+        if (visual) {
+          await expect.poll(async () => isOwnSeatProof(ownSeatProof(await readOwnSeatClient(page, seat.id),
+            ownAuthority!.snapshot(), seat, claimBoundary)), { timeout: 15000 }).toBe(true);
+        } else await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__.currentSeatId), { timeout: 15000 }).toBe(seat.id);
         await expect.poll(() => observer.evaluate(id => (window as any).__VRATA_DEBUG__.seatOccupancy[id], seat.id), { timeout: 15000 }).toBe(initial.participantId);
         if (visual) {
+          // The real seated lock must still hold after frame execution, not a transient pose.
+          await waitFrames(page);
+          const proof = ownSeatProof(await readOwnSeatClient(page, seat.id), ownAuthority!.snapshot(), seat, claimBoundary);
+          expect(isOwnSeatProof(proof)).toBe(true);
+          expect(proof.client.participantId).toBe(initial.participantId);
+          await testInfo.attach("room-own-seat-authority-proof", { body: JSON.stringify(proof), contentType: "application/json" });
+          expect(await readReviewView(observer)).toEqual(fixedReviewView);
           await capture(observer, testInfo, "room-occupied-same-view");
-          await capture(page, testInfo, "room-own-seated-view");
+          // Own hiding is proved independently by component-current-hidden plus the
+          // real current-seat/authority DTO above. A floor-only seated PNG proves neither.
         } else {
           const observerPose = await observer.evaluate(() => (window as any).__VRATA_DEBUG__.localPose.root);
           await observer.mouse.move(320, 240);
@@ -186,30 +218,49 @@ for (const staging of [false]) test.describe(`${staging ? "@staging " : ""}seat 
           expect(await observer.evaluate(() => (window as any).__VRATA_DEBUG__.currentSeatId)).toBe(null);
           expect(await observer.evaluate(() => (window as any).__VRATA_DEBUG__.localPose.root)).toEqual(observerPose);
         }
+        const previousPoseSeq = visual ? await observer.evaluate(id =>
+          (window as any).__VRATA_DEBUG__.remoteAvatarParticipants.find((value: any) => value.participantId === id)?.lastPoseSeq ?? -1,
+        initial.participantId) : -1;
+        // Visual readiness shares the existing release budget; it gets no extra deadline.
+        const releaseDeadline = Date.now() + 15000;
+        const releaseTimeout = () => visual ? Math.max(1, releaseDeadline - Date.now()) : 15000;
         expect(await page.evaluate(root => (window as any).__VRATA_TEST__.teleportToFloor(root.x, root.z), initial.root)).toBe(true);
-        await expect.poll(() => observer.evaluate(id => (window as any).__VRATA_DEBUG__.seatOccupancy[id] ?? null, seat.id), { timeout: 15000 }).toBe(null);
-        await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__.currentSeatId), { timeout: 15000 }).toBe(null);
+        await expect.poll(() => observer.evaluate(id => (window as any).__VRATA_DEBUG__.seatOccupancy[id] ?? null, seat.id), { timeout: releaseTimeout() }).toBe(null);
+        await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__.currentSeatId), { timeout: releaseTimeout() }).toBe(null);
         await observer.mouse.move(0, 0);
         await waitFrames(observer);
-        if (visual) await capture(observer, testInfo, "room-released-same-view");
+        if (visual) {
+          const remainingMs = releaseDeadline - Date.now();
+          expect(remainingMs, "Release capture must not extend the authority deadline").toBeGreaterThan(0);
+          const remotePose = await waitForReleasedAvatar(observer, initial.participantId, initial.root, previousPoseSeq, remainingMs);
+          expect(await readReviewView(observer)).toEqual(fixedReviewView);
+          await testInfo.attach("room-release-view", { body: JSON.stringify({ fixedReviewView, parkedRoot: initial.root, remotePose }), contentType: "application/json" });
+          expect(Date.now(), "Release capture readiness must fit the original 15s").toBeLessThan(releaseDeadline);
+          await capture(observer, testInfo, "room-released-same-view");
+        }
         await testInfo.attach("room-review-settings", { body: JSON.stringify({ staging, templateId, seat, reviewPose, initial, fixture: fixture!.fixtureFingerprint, errors }, null, 2), contentType: "application/json" });
         expect(errors).toEqual([]);
       } catch (error) {
         await attachPhaseDiagnostics(testInfo, "marker-failure-before-cleanup");
         throw error;
       } finally {
-        await observerBrowser?.close();
-        // The per-test request fixture can already be closed after a test timeout.
-        const deleted = await fetch(new URL(`/api/rooms/${room.roomId}`, fixture!.origin), {
-          method: "DELETE", headers, signal: AbortSignal.timeout(15000)
-        });
-        expect([200, 204, 404]).toContain(deleted.status);
+        await cleanupAll([
+          () => ownAuthority?.close(),
+          () => observerBrowser?.close(),
+          async () => {
+            // The per-test request fixture can already be closed after a test timeout.
+            const deleted = await fetch(new URL(`/api/rooms/${room.roomId}`, fixture!.origin), {
+              method: "DELETE", headers, signal: AbortSignal.timeout(15000)
+            });
+            expect([200, 204, 404]).toContain(deleted.status);
+          }
+        ]);
       }
     });
   }
 });
 
-interface Seat { id: string; yaw: number; seatHeight: number; position: { x: number; y: number; z: number } }
+interface Seat { id: string; yaw: number; seatHeight: number; radius: number; position: { x: number; y: number; z: number } }
 function seatReviewPose(seat: Seat) {
   // Stand just outside the first chair, avoiding the meeting table. Compensate
   // the real pitch->camera(0,1.6,0) hierarchy instead of just subtracting 1.6 from Y.
@@ -262,6 +313,55 @@ async function join(page: Page, url: string) {
     const hud = document.querySelector("details.hud");
     if (hud instanceof HTMLDetailsElement) hud.open = false;
   });
+}
+async function readOwnSeatClient(page: Page, seatId: string): Promise<OwnSeatClient> {
+  return page.evaluate(id => {
+    const d = (window as any).__VRATA_DEBUG__;
+    return { participantId: d.participantId, currentSeatId: d.currentSeatId,
+      occupantId: d.seatOccupancy[id] ?? null, roomStateConnected: d.roomStateConnected,
+      root: { x: d.localPose.root.x, y: d.localPose.root.y, z: d.localPose.root.z } };
+  }, seatId);
+}
+async function readReviewView(page: Page) {
+  return page.evaluate(() => {
+    const d = (window as any).__VRATA_DEBUG__;
+    const canvas = document.querySelector("#scene > canvas") as HTMLCanvasElement;
+    return { root: d.localPose.root, pitch: d.localPose.head.pitch,
+      devicePixelRatio: window.devicePixelRatio, canvas: { width: canvas.width, height: canvas.height } };
+  });
+}
+async function waitForReleasedAvatar(page: Page, participantId: string,
+  parkedRoot: { x: number; y: number; z: number }, previousPoseSeq: number, timeoutMs: number) {
+  return page.evaluate(({ participantId, parkedRoot, previousPoseSeq, timeoutMs }) => new Promise((resolve, reject) => {
+    let readySince: number | null = null, settlingFrames = 0, frame = 0;
+    const timer = window.setTimeout(() => {
+      cancelAnimationFrame(frame);
+      reject(new Error("released_avatar_pose_not_settled_within_release_budget"));
+    }, timeoutMs);
+    const sample = (now: number) => {
+      const d = (window as any).__VRATA_DEBUG__;
+      // These are RECEIVED coordinates, not rendered mesh coordinates.
+      const remote = d.remoteParticipants.find((value: any) => value.participantId === participantId);
+      const transport = d.remoteAvatarParticipants.find((value: any) => value.participantId === participantId);
+      const received = remote?.hasVisualEntity && transport?.hasPoseFrame && transport.lastPoseSeq > previousPoseSeq
+        && Number.isFinite(transport.playbackDelayMs)
+        && Math.hypot(remote.root.x - parkedRoot.x, remote.root.y - parkedRoot.y, remote.root.z - parkedRoot.z) < 0.02;
+      if (!received) { readySince = null; settlingFrames = 0; }
+      else {
+        readySince ??= now;
+        // Normal playback delay then real render frames; PNG review still decides occlusion.
+        if (now - readySince >= 2 * transport.playbackDelayMs) settlingFrames++;
+        if (settlingFrames >= 16) {
+          window.clearTimeout(timer);
+          resolve({ receivedRoot: remote.root, lastPoseSeq: transport.lastPoseSeq,
+            playbackDelayMs: transport.playbackDelayMs, settlingFrames, stableMs: now - readySince });
+          return;
+        }
+      }
+      frame = requestAnimationFrame(sample);
+    };
+    frame = requestAnimationFrame(sample);
+  }), { participantId, parkedRoot, previousPoseSeq, timeoutMs });
 }
 async function waitFrames(page: Page) {
   await page.evaluate(() => new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
