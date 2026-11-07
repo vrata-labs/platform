@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 const ref = (value: unknown) => typeof value === "string" ? createHash("sha256").update(value).digest("hex").slice(0, 16) : null;
@@ -42,8 +43,124 @@ export async function writeFunctionalDiagnostics(stage: string, facts: unknown) 
     JSON.stringify({ schema: 1, stage, at: Date.now(), facts }, null, 2) + "\n", { mode: 0o600, flag: "wx" });
 }
 
+/** Observe the ORIGINAL poll promises on Node's clock; never retry or settle them.
+ * Each transition is persisted independently, including after a failure attachment.
+ * The bounded log contains only fixed actor/section labels and five booleans. */
+export function observeMeetingPanelPoll(context: { actor?: string; section: string; touch: boolean },
+  sink?: (event: object) => void, now = Date.now) {
+  const actor = ["host", "member-1", "member-2", "guest"].includes(context.actor ?? "") ? context.actor : "unspecified";
+  const section = ["audio", "present", "board", "notes", "people"].includes(context.section) ? context.section : "other";
+  const root = process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
+  const file = root && resolve(root, `panel-poll-${randomUUID()}.jsonl`);
+  let count = 0, attempts = 0, outcome = "pending";
+  const record = (event: object) => {
+    if (count++ >= 128) return;
+    const row = { actor, section, touch: context.touch === true, atMs: now(), outcome, ...event };
+    if (sink) sink(row);
+    else if (file) {
+      mkdirSync(root!, { recursive: true, mode: 0o700 });
+      appendFileSync(file, JSON.stringify(row) + "\n", { mode: 0o600 });
+    }
+  };
+  // Diagnostic I/O must not change the original assertion's result.
+  const safeRecord = (event: object) => { try { record(event); } catch { console.warn("panel_poll_diagnostic_write_failed"); } };
+  return {
+    sample<T>(action: () => Promise<T>): Promise<T> {
+      const attempt = ++attempts, startedAtMs = now();
+      safeRecord({ event: "start", attempt, startedAtMs });
+      let original: Promise<T>;
+      try { original = action(); }
+      catch (error) { safeRecord({ event: "reject", attempt, startedAtMs }); throw error; }
+      void original.then(value => {
+        const booleans = Object.fromEntries(["open", "focused", "headingBelowNavigation", "targetWideEnough", "targetTallEnough"]
+          .map(key => [key, typeof (value as any)?.[key] === "boolean" ? (value as any)[key] : null]));
+        safeRecord({ event: "resolve", attempt, startedAtMs, booleans });
+      }, () => safeRecord({ event: "reject", attempt, startedAtMs }));
+      return original;
+    },
+    finish(passed: boolean) { outcome = passed ? "passed" : "failed"; safeRecord({ event: "predicate-finished" }); }
+  };
+}
+
+/** Standalone init function so the exact browser instrumentation has pure controls. */
+export function installFunctionalBrowserObservation(sampleFirstIceConnected = false) {
+    const peers: RTCPeerConnection[] = [], events: any[] = [], peerConnections: any[] = [];
+    const add = (event: object) => { events.push({ atMs: performance.now(), ...event }); if (events.length > 128) events.shift(); };
+    (window as any).__functionalObservation = { peers, events, peerConnections };
+    const Native = window.RTCPeerConnection;
+    if (Native) window.RTCPeerConnection = new Proxy(Native, { construct(target, args) {
+      const peer = Reflect.construct(target, args) as RTCPeerConnection, index = peers.length;
+      if (index >= 16) return peer;
+      peers.push(peer);
+      const facts = { index, firstIceConnectedAtMs: null as number | null, pcConnectedAtMs: null as number | null,
+        transportSample: null as any };
+      peerConnections.push(facts);
+      const sampleTransport = () => {
+        if (!sampleFirstIceConnected || facts.firstIceConnectedAtMs !== null || peer.iceConnectionState !== "connected") return;
+        facts.firstIceConnectedAtMs = performance.now();
+        const sample = facts.transportSample = { startedAtMs: performance.now(), resolvedAtMs: null as number | null,
+          connectionAtStart: peer.connectionState, iceAtStart: peer.iceConnectionState,
+          status: "pending", transports: [] as object[] };
+        add({ kind: "rtc-transport-start", index, startedAtMs: sample.startedAtMs });
+        let settled = false;
+        const timer = setTimeout(() => finish("timed-out"), 5000);
+        const finish = (status: string, transports: object[] = []) => {
+          if (settled) return;
+          settled = true; clearTimeout(timer);
+          Object.assign(sample, { status, resolvedAtMs: performance.now(), connectionAtResolve: peer.connectionState, iceAtResolve: peer.iceConnectionState, transports });
+          add({ kind: "rtc-transport-result", index, ...sample });
+        };
+        const state = (value: unknown, allowed: string[]) => typeof value === "string" && allowed.includes(value) ? value : null;
+        const number = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : null;
+        try {
+          void peer.getStats().then(report => {
+            const transports: object[] = [];
+            report.forEach(value => {
+              if (value.type !== "transport" || transports.length >= 4) return;
+              const pair = report.get(value.selectedCandidatePairId);
+              transports.push({ type: "transport", dtlsState: state(value.dtlsState, ["new", "connecting", "connected", "closed", "failed"]),
+                selectedPair: pair?.type === "candidate-pair" ? { type: "candidate-pair",
+                  state: state(pair.state, ["frozen", "waiting", "in-progress", "failed", "succeeded"]),
+                  nominated: typeof pair.nominated === "boolean" ? pair.nominated : null,
+                  bytesSent: number(pair.bytesSent), bytesReceived: number(pair.bytesReceived) } : null });
+            });
+            finish("resolved", transports);
+          }, () => finish("rejected")).catch(() => finish("rejected"));
+        } catch { finish("rejected"); }
+      };
+      for (const event of ["connectionstatechange", "iceconnectionstatechange", "signalingstatechange", "track"]) {
+        peer.addEventListener(event, () => {
+          if (event === "connectionstatechange" && peer.connectionState === "connected" && facts.pcConnectedAtMs === null) facts.pcConnectedAtMs = performance.now();
+          add({ kind: "rtc", index, event, connection: peer.connectionState, ice: peer.iceConnectionState, signaling: peer.signalingState });
+          if (event === "iceconnectionstatechange") sampleTransport();
+        });
+      }
+      return peer;
+    } });
+    // Observe only the trusted plugin kernel's phase headers, not author code/config/effects.
+    const WorkerClass = window.Worker;
+    if (WorkerClass) window.Worker = new Proxy(WorkerClass, { construct(target, args) {
+      const worker = Reflect.construct(target, args) as Worker;
+      if (!/room-plugin-(?:worker|kernel)-/.test(String(args[0]))) return worker;
+      const index = workerIndex++;
+      add({ kind: "worker-created", index });
+      const record = (direction: string, value: any) => add({ kind: "worker", index, direction,
+        type: ["prepare", "prepared", "init", "event", "result", "failed", "closed", "terminate", "requests", "respond", "cancel"].includes(value?.type) ? value.type : "other",
+        id: typeof value?.id === "number" ? value.id : null,
+        hostPhase: typeof value?.hostPhase === "string" && /^[a-z-]{1,60}$/.test(value.hostPhase) ? value.hostPhase : null,
+        failure: typeof value?.failure === "string" && /^[a-z_-]{1,60}$/.test(value.failure) ? value.failure : null,
+        moduleAgeMs: typeof value?.startupTiming?.moduleAgeMs === "number" ? value.startupTiming.moduleAgeMs : null,
+        prepareMs: typeof value?.startupTiming?.prepareMs === "number" ? value.startupTiming.prepareMs : null });
+      worker.addEventListener("message", event => record("received", event.data));
+      const post = worker.postMessage;
+      worker.postMessage = function (...args: any[]) { record("sent", args[0]); return Reflect.apply(post, this, args); };
+      return worker;
+    } });
+    let workerIndex = 0;
+}
+
 /** Passive observation of EXISTING transports. No new participant, socket, route or mocked transport. */
-export async function observeFunctionalClient(page: Page) {
+export async function observeFunctionalClient(page: Page, options: { transportAtFirstIceConnected?: boolean } = {}) {
   const started = Date.now(), events: any[] = [], sockets = new Set<string>();
   const add = (event: object) => { events.push({ atMs: Date.now() - started, ...event }); if (events.length > 256) events.shift(); };
   const cdp = await page.context().newCDPSession(page);
@@ -99,40 +216,7 @@ export async function observeFunctionalClient(page: Page) {
     pending.add(job); void job.finally(() => pending.delete(job));
   };
   page.on("request", request); page.on("response", response); page.on("requestfailed", failedRequest);
-  await page.addInitScript(() => {
-    const peers: RTCPeerConnection[] = [], events: any[] = [];
-    const add = (event: object) => { events.push({ atMs: performance.now(), ...event }); if (events.length > 128) events.shift(); };
-    (window as any).__functionalObservation = { peers, events };
-    const Native = window.RTCPeerConnection;
-    if (Native) window.RTCPeerConnection = new Proxy(Native, { construct(target, args) {
-      const peer = Reflect.construct(target, args) as RTCPeerConnection, index = peers.length;
-      if (peers.length < 16) peers.push(peer);
-      for (const event of ["connectionstatechange", "iceconnectionstatechange", "signalingstatechange", "track"]) {
-        peer.addEventListener(event, () => add({ kind: "rtc", index, event, connection: peer.connectionState, ice: peer.iceConnectionState, signaling: peer.signalingState }));
-      }
-      return peer;
-    } });
-    // Observe only the trusted plugin kernel's phase headers, not author code/config/effects.
-    const WorkerClass = window.Worker;
-    if (WorkerClass) window.Worker = new Proxy(WorkerClass, { construct(target, args) {
-      const worker = Reflect.construct(target, args) as Worker;
-      if (!/room-plugin-(?:worker|kernel)-/.test(String(args[0]))) return worker;
-      const index = workerIndex++;
-      add({ kind: "worker-created", index });
-      const record = (direction: string, value: any) => add({ kind: "worker", index, direction,
-        type: ["prepare", "prepared", "init", "event", "result", "failed", "closed", "terminate", "requests", "respond", "cancel"].includes(value?.type) ? value.type : "other",
-        id: typeof value?.id === "number" ? value.id : null,
-        hostPhase: typeof value?.hostPhase === "string" && /^[a-z-]{1,60}$/.test(value.hostPhase) ? value.hostPhase : null,
-        failure: typeof value?.failure === "string" && /^[a-z_-]{1,60}$/.test(value.failure) ? value.failure : null,
-        moduleAgeMs: typeof value?.startupTiming?.moduleAgeMs === "number" ? value.startupTiming.moduleAgeMs : null,
-        prepareMs: typeof value?.startupTiming?.prepareMs === "number" ? value.startupTiming.prepareMs : null });
-      worker.addEventListener("message", event => record("received", event.data));
-      const post = worker.postMessage;
-      worker.postMessage = function (...args: any[]) { record("sent", args[0]); return Reflect.apply(post, this, args); };
-      return worker;
-    } });
-    let workerIndex = 0;
-  });
+  await page.addInitScript(installFunctionalBrowserObservation, options.transportAtFirstIceConnected === true);
   return {
     mark(label: string) { add({ kind: "checkpoint", label }); },
     async snapshot() {
@@ -163,7 +247,7 @@ export async function observeFunctionalClient(page: Page) {
             state: { status: o.state?.status, mediaTrackSid: o.state?.mediaTrackSid, notes: o.state?.notes?.map(() => null), strokes: o.state?.strokes?.map(() => null) } })) },
           share: { publishing: d?.screenShare?.localPublishing, subscribed: d?.screenShare?.remoteSubscribedTrackCount,
             track: d?.screenShare?.publishedTrackSid, error: d?.screenShare?.errorCode },
-          plugins: d?.plugins, peers, events: observation?.events,
+          plugins: d?.plugins, peers, events: observation?.events, peerConnections: observation?.peerConnections,
           audio: { joined: d?.media?.audioJoined, source: d?.media?.audioSource, subscribed: d?.media?.subscribedAudioCount },
           proxy: { resets: d?.mediaObjects?.runtimeResetCount, missingPhysical: d?.mediaObjects?.logicalSurfaceIdsWithoutPhysicalView,
             missingLogical: d?.mediaObjects?.physicalSurfaceIdsWithoutLogicalState, unrenderedCount: d?.mediaObjects?.unrenderedObjectIds?.length },

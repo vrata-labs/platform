@@ -200,7 +200,7 @@ export async function toolOrchestrationScenario(input: Input, options: { consent
 export async function nativeToolCaptureScenario(input: Input) {
   const diagnostics: FunctionalObservation[] = [];
   const meeting = await createDocumentMeeting({ ...input, mobile: false,
-    async preparePage(page) { diagnostics.push(await observeFunctionalClient(page)); } });
+    async preparePage(page) { diagnostics.push(await observeFunctionalClient(page, { transportAtFirstIceConnected: true })); } });
   const pages: Page[] = [];
   try {
     const host = await meeting.enter("host"), guest = await meeting.enter("guest");
