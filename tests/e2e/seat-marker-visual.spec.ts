@@ -1,5 +1,5 @@
 import { expect, test, type Browser, type Page, type TestInfo } from "@playwright/test";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, resolve, sep } from "node:path";
 import { parseSceneBundleManifest } from "../../apps/runtime-web/src/scene-bundle.js";
@@ -7,6 +7,7 @@ import { startReferenceTemplateFixture } from "./reference-template-fixture.js";
 import { observeReferenceTest } from "./reference-test-observation";
 import { captureRoomAuthority, type RoomAuthorityCapture } from "./room-state-observation";
 import { isOwnSeatProof, ownSeatProof, type OwnSeatClient } from "./seat-marker-proof";
+import { finishReleasedAvatar, observeReleasedAvatar } from "./seat-release-observation";
 import { cleanupAll } from "./test-cleanup";
 
 const observations = new Map<Page, ReturnType<typeof observeReferenceTest>>();
@@ -232,7 +233,14 @@ for (const staging of [false]) test.describe(`${staging ? "@staging " : ""}seat 
         if (visual) {
           const remainingMs = releaseDeadline - Date.now();
           expect(remainingMs, "Release capture must not extend the authority deadline").toBeGreaterThan(0);
-          const remotePose = await waitForReleasedAvatar(observer, initial.participantId, initial.root, previousPoseSeq, remainingMs);
+          const release = await observer.evaluate(observeReleasedAvatar, {
+            participantId: initial.participantId, parkedRoot: initial.root, previousPoseSeq, timeoutMs: remainingMs
+          });
+          const remotePose = await finishReleasedAvatar(release, async evidence => {
+            const path = testInfo.outputPath("room-release-readiness.json");
+            await writeFile(path, JSON.stringify(evidence), { mode: 0o600, flag: "wx" });
+            await testInfo.attach("room-release-readiness", { path, contentType: "application/json" });
+          });
           expect(await readReviewView(observer)).toEqual(fixedReviewView);
           await testInfo.attach("room-release-view", { body: JSON.stringify({ fixedReviewView, parkedRoot: initial.root, remotePose }), contentType: "application/json" });
           expect(Date.now(), "Release capture readiness must fit the original 15s").toBeLessThan(releaseDeadline);
@@ -241,7 +249,7 @@ for (const staging of [false]) test.describe(`${staging ? "@staging " : ""}seat 
         await testInfo.attach("room-review-settings", { body: JSON.stringify({ staging, templateId, seat, reviewPose, initial, fixture: fixture!.fixtureFingerprint, errors }, null, 2), contentType: "application/json" });
         expect(errors).toEqual([]);
       } catch (error) {
-        await attachPhaseDiagnostics(testInfo, "marker-failure-before-cleanup");
+        await attachPhaseDiagnostics(testInfo, "marker-failure-before-cleanup").catch(() => {});
         throw error;
       } finally {
         await cleanupAll([
@@ -329,39 +337,6 @@ async function readReviewView(page: Page) {
     return { root: d.localPose.root, pitch: d.localPose.head.pitch,
       devicePixelRatio: window.devicePixelRatio, canvas: { width: canvas.width, height: canvas.height } };
   });
-}
-async function waitForReleasedAvatar(page: Page, participantId: string,
-  parkedRoot: { x: number; y: number; z: number }, previousPoseSeq: number, timeoutMs: number) {
-  return page.evaluate(({ participantId, parkedRoot, previousPoseSeq, timeoutMs }) => new Promise((resolve, reject) => {
-    let readySince: number | null = null, settlingFrames = 0, frame = 0;
-    const timer = window.setTimeout(() => {
-      cancelAnimationFrame(frame);
-      reject(new Error("released_avatar_pose_not_settled_within_release_budget"));
-    }, timeoutMs);
-    const sample = (now: number) => {
-      const d = (window as any).__VRATA_DEBUG__;
-      // These are RECEIVED coordinates, not rendered mesh coordinates.
-      const remote = d.remoteParticipants.find((value: any) => value.participantId === participantId);
-      const transport = d.remoteAvatarParticipants.find((value: any) => value.participantId === participantId);
-      const received = remote?.hasVisualEntity && transport?.hasPoseFrame && transport.lastPoseSeq > previousPoseSeq
-        && Number.isFinite(transport.playbackDelayMs)
-        && Math.hypot(remote.root.x - parkedRoot.x, remote.root.y - parkedRoot.y, remote.root.z - parkedRoot.z) < 0.02;
-      if (!received) { readySince = null; settlingFrames = 0; }
-      else {
-        readySince ??= now;
-        // Normal playback delay then real render frames; PNG review still decides occlusion.
-        if (now - readySince >= 2 * transport.playbackDelayMs) settlingFrames++;
-        if (settlingFrames >= 16) {
-          window.clearTimeout(timer);
-          resolve({ receivedRoot: remote.root, lastPoseSeq: transport.lastPoseSeq,
-            playbackDelayMs: transport.playbackDelayMs, settlingFrames, stableMs: now - readySince });
-          return;
-        }
-      }
-      frame = requestAnimationFrame(sample);
-    };
-    frame = requestAnimationFrame(sample);
-  }), { participantId, parkedRoot, previousPoseSeq, timeoutMs });
 }
 async function waitFrames(page: Page) {
   await page.evaluate(() => new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
