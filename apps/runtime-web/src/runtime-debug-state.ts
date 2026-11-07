@@ -17,6 +17,7 @@ import type { ClientCompatibilitySummary } from "./client-capabilities.js";
 import type { PresenceState, RuntimeNoteScope } from "./index.js";
 import { createSurfaceInputDebugState } from "./input/surface-input.js";
 import type { BrowserMediaCapabilities } from "./media-capabilities.js";
+import type { MediaLifecycleSnapshot } from "./media/media-lifecycle-diagnostics.js";
 import type { NotesSaveState } from "./notes.js";
 import type { SurfaceCommandResult } from "./room-state-client.js";
 import type { RuntimeIssue } from "./runtime-errors.js";
@@ -83,6 +84,7 @@ export function createRuntimeDebugState<FeatureFlags extends Record<string, bool
     roomStateUrl: "",
     roomStateMode: "disconnected",
     audioState: "idle",
+    mediaLifecycle: null as MediaLifecycleSnapshot | null,
     localMicLevel: 0,
     speakerOutputLevel: 0,
     media: {
