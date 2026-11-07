@@ -281,6 +281,7 @@ test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone
   const sockets: any[] = [], stale = new Map<number, { socket: any; messages: any[] }>();
   const microphones = new Map<number, string[]>(), knownMicrophoneParticipants = new Set<string>(); let mediaRoom = "";
   const diagnostics = new Map<Page, FunctionalObservation>();
+  let primaryFailed = false;
   try {
     await h.activateV2();
     await presenterMeetingScenario({ browser, request, origin: h.fixture.origin, adminToken: h.fixture.adminToken }, {
@@ -375,7 +376,7 @@ test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone
         await expect.poll(() => receiver.evaluate(() => (window as any).__sourceObserver.frames), { timeout: 20_000 }).toBeGreaterThan(framesBefore + 2);
         const guestPoll = diagnostics.get(guest.page)!.observeGuestSubscription(index + 1);
         try {
-          await expect.poll(() => guestPoll.sample(() => guest.page.evaluate(() => {
+          await guestPoll.start(() => expect.poll(() => guestPoll.sample(() => guest.page.evaluate(() => {
             const debug = (window as any).__VRATA_DEBUG__;
             const surface = debug?.mediaObjects?.surfaces?.find((item: any) => item.surfaceId === "debug-main");
             const active = debug?.mediaObjects?.objects?.find((item: any) => item.objectId === surface?.activeObjectId);
@@ -385,7 +386,7 @@ test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone
               passiveStartupFailed: debug?.lastRecoveryAction === "media_passive_connect_failed",
               shareErrorPresent: !!debug?.screenShare?.errorCode, activeScreenPresent: active?.type === "screen-share",
               surfaceHasTexture: typeof surface?.textureId === "number", videoElements: document.querySelectorAll("video").length };
-          })).then(value => value.subscribed), { timeout: 20_000 }).toBe(1);
+          })).then(value => value.subscribed), { timeout: 20_000 }).toBe(1));
           guestPoll.finish(true);
         } catch (error) { guestPoll.finish(false); throw error; }
         await expect.poll(async () => (await h.service.listParticipants(mediaRoom)).flatMap((person: any) => person.tracks.filter((track: any) => track.source === 2)).length, { timeout: 20_000 }).toBe(index + 1);
@@ -429,10 +430,16 @@ test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone
         expect((await denied.json()).reason).toBe("media_publish_not_allowed");
       }
     });
-  } finally {
-    await Promise.allSettled([...diagnostics.values()].map(value => value.close()));
+  } catch (error) { primaryFailed = true; throw error; }
+  finally {
+    const closed = await Promise.allSettled([...diagnostics.values()].map(value => value.close()));
     for (const socket of sockets) socket.terminate();
     await receiver.close(); await h.fixture.close();
+    const diagnosticFailure = closed.find(result => result.status === "rejected");
+    if (diagnosticFailure?.status === "rejected") {
+      if (!primaryFailed) throw diagnosticFailure.reason;
+      console.warn("guest_subscription_diagnostic_cleanup_failed");
+    }
   }
 });
 

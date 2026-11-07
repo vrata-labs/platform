@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { mkdtemp, readFile, readdir, stat, rm } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
 import { collectedTransportFacts, finalizeFunctionalDiagnostics, guestSubscriptionFacts, mediaFacts, mediaParticipantFacts, observeFunctionalClient,
@@ -186,22 +188,27 @@ test("original Guest 20s predicate retains late true after failure independently
     let time = 1000, calls = 0;
     const observation = observeGuestSubscriptionPoll(1, undefined, () => time);
     const evaluate = deferred<any>(), timeout = deferred<never>();
-    const original = observation.sample(() => { calls++; return evaluate.promise; });
+    const original = observation.start(() => observation.sample(() => { calls++; return evaluate.promise; }));
     assert.equal(original, evaluate.promise);
     const predicate = Promise.race([original.then(value => value.subscribed), timeout.promise]);
     time = 21000; timeout.reject(new Error("original predicate expired"));
     await assert.rejects(predicate, /original predicate expired/); observation.finish(false);
+    assert.deepEqual(await readdir(root), []); // no filesystem work in the protected lifecycle
+    await observation.flush();
     const [file] = await readdir(root), attachment = await readFile(`${root}/${file}`, "utf8");
     time = 21001;
     evaluate.resolve({ subscribed: 1, passiveStartupCompleted: true, videoElements: 1,
       url: "https://private/invite?session=secret", participantId: "private", sdp: "secret" });
     await original;
     observation.lifecycle("media_connected_passive", time); observation.finish(true);
+    await observation.flush();
     await assert.rejects(predicate, /original predicate expired/);
     const raw = await readFile(`${root}/${file}`, "utf8"), rows = raw.trim().split("\n").map(line => JSON.parse(line));
     assert.deepEqual(rows.map(row => row.event), ["poll-start", "sample-start", "predicate-finished", "sample-resolve", "passive-startup-report-observed"]);
-    assert.equal(calls, 1); assert.equal(rows[0].startedAtMs, 1000); assert.equal(rows[0].deadlineAtMs, 21000);
-    assert.equal(rows[2].afterDeadline, false); assert.equal(rows[3].afterDeadline, true);
+    assert.equal(calls, 1); assert.equal(rows[0].configuredStartAtMs, 1000); assert.equal(rows[0].configuredDeadlineAtMs, 21000);
+    assert.equal(rows[2].afterConfiguredDeadline, false); assert.equal(rows[3].afterConfiguredDeadline, true);
+    assert.equal(rows[1].afterPredicateFinished, false); assert.equal(rows[3].afterPredicateFinished, true);
+    assert.equal(rows[3].predicateFinishedAtMs, 21000);
     assert.equal(rows[3].outcome, "failed"); assert.equal(rows[3].facts.subscribed, 1);
     assert.equal(rows[3].facts.passiveStartupCompleted, true); assert.equal(rows[4].outcome, "failed");
     assert.doesNotMatch(attachment, /sample-resolve/); assert.doesNotMatch(raw, /private|secret|invite|session|sdp|participantId/);
@@ -216,6 +223,7 @@ test("original Guest 20s predicate retains late true after failure independently
 test("Guest samples preserve raw result/rejection, do not infer installation from negative/absent data, and bound records", async () => {
   let time = 0;
   const rows: any[] = [], observation = observeGuestSubscriptionPoll(999, row => rows.push(row), () => time);
+  observation.start(() => {});
   const error = new Error("private native/session error"), rejected = Promise.reject(error);
   assert.equal(observation.sample(() => rejected), rejected);
   await assert.rejects(rejected, value => value === error);
@@ -224,8 +232,9 @@ test("Guest samples preserve raw result/rejection, do not infer installation fro
   for (let index = 0; index < 100; index++) observation.lifecycle("media_connected_passive", time);
   observation.lifecycle("private", time);
   time = 20000; observation.finish(false);
+  assert.equal(rows.length, 0); await observation.flush();
   assert.equal(rows.length, 146); // start + 64 starts/results + 16 lifecycle + terminal
-  assert.equal(rows.at(-1).omittedSamples, 38); assert.equal(rows.at(-1).afterDeadline, false);
+  assert.equal(rows.at(-1).omittedSamples, 38); assert.equal(rows.at(-1).afterConfiguredDeadline, false);
   assert.equal(rows[1].presenter, null); assert.equal(rows[2].event, "sample-reject");
   assert.doesNotMatch(JSON.stringify(rows), /private|native\/session/);
   assert.deepEqual(guestSubscriptionFacts(null), { subscribed: null, browserNowMs: null, browserWallTimeMs: null,
@@ -236,15 +245,179 @@ test("Guest samples preserve raw result/rejection, do not infer installation fro
   assert.equal(facts.passiveStartupFailed, false); assert.equal(facts.surfaceHasTexture, true); assert.equal(facts.videoElements, 1024);
 });
 
-test("Guest original success at the configured deadline remains success; diagnostic sink errors never replace result", async () => {
+test("Guest configured boundary begins at original expect invocation, not observation/preconstruction; sink failure is separate", async () => {
   let time = 0;
   const rows: any[] = [], observation = observeGuestSubscriptionPoll(2, row => rows.push(row), () => time);
-  time = 20000;
+  time = 3000; // construction/preparation is outside the configured poll budget
+  let actualInvocationAtMs = 0;
+  observation.start(() => { actualInvocationAtMs = time; });
+  time = 23000;
   const value = { subscribed: 1 }, original = Promise.resolve(value);
   assert.equal(observation.sample(() => original), original); assert.equal(await original, value); observation.finish(true);
-  assert.equal(rows.at(-1).outcome, "passed"); assert.equal(rows.at(-1).afterDeadline, false);
+  assert.equal(rows.length, 0); await observation.flush();
+  assert.equal(rows[0].configuredStartAtMs, actualInvocationAtMs); assert.equal(rows[0].configuredDeadlineAtMs, 23000);
+  assert.equal(rows[0].clockBasis, "node-before-expect-poll-call"); assert.equal(rows[0].deadlineAtMs, undefined);
+  assert.equal(rows.at(-1).outcome, "passed"); assert.equal(rows.at(-1).afterConfiguredDeadline, false);
   const broken = observeGuestSubscriptionPoll(1, () => { throw new Error("disk failure"); });
   assert.equal(broken.sample(() => original), original); await original; broken.finish(true);
+  await assert.rejects(broken.flush(), /guest_subscription_diagnostic_persistence_failed/);
+});
+
+test("Guest slow sink cannot run before original evaluate, predicate consumer or next protected assertion", async () => {
+  let sinkCalls = 0, calls = 0, consumerCalls = 0, protectedDone = false;
+  const gate = deferred<void>(), rows: any[] = [];
+  const observation = observeGuestSubscriptionPoll(1, row => {
+    sinkCalls++; assert.equal(protectedDone, true);
+    return gate.promise.then(() => { rows.push(row); });
+  });
+  assert.equal(sinkCalls, 0, "construction must not invoke the sink");
+  observation.start(() => {});
+  for (let index = 0; index < 2; index++) {
+    const value = { subscribed: index }, original = Promise.resolve(value);
+    const result = observation.sample(() => { calls++; assert.equal(sinkCalls, 0); return original; });
+    assert.equal(result, original);
+    await result.then(actual => { consumerCalls++; assert.equal(actual, value); assert.equal(sinkCalls, 0); });
+  }
+  observation.finish(true);
+  await Promise.resolve(); // stand-in for the next protected assertion, not a diagnostic flush
+  assert.equal(sinkCalls, 0); assert.equal(calls, 2); assert.equal(consumerCalls, 2);
+  protectedDone = true;
+  const flushed = observation.flush();
+  await Promise.resolve(); assert.equal(sinkCalls, 1);
+  gate.resolve(); await flushed;
+  assert.equal(rows.length, 6); assert.equal(rows.at(-1).outcome, "passed");
+});
+
+test("Guest original evaluate runs without synchronous filesystem access, including the resolve reaction", async () => {
+  const previous = process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
+  const root = await mkdtemp("/tmp/opencode/guest-no-sync-unit-");
+  process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR = root;
+  const mkdirSync = fs.mkdirSync, appendFileSync = fs.appendFileSync;
+  let syncCalls = 0, calls = 0;
+  try {
+    fs.mkdirSync = (() => { syncCalls++; throw new Error("sync mkdir in protected lifecycle"); }) as typeof fs.mkdirSync;
+    fs.appendFileSync = (() => { syncCalls++; throw new Error("sync append in protected lifecycle"); }) as typeof fs.appendFileSync;
+    syncBuiltinESMExports();
+    const observation = observeGuestSubscriptionPoll(1);
+    const original = observation.start(() => observation.sample(() => { calls++; assert.equal(syncCalls, 0); return Promise.resolve({ subscribed: 1 }); }));
+    await original.then(value => { assert.equal(value.subscribed, 1); assert.equal(syncCalls, 0); });
+    observation.finish(true);
+    assert.equal(calls, 1); assert.equal(syncCalls, 0); assert.deepEqual(await readdir(root), []);
+    await observation.flush(); assert.equal(syncCalls, 0);
+    assert.equal((await readdir(root)).length, 1);
+  } finally {
+    fs.mkdirSync = mkdirSync; fs.appendFileSync = appendFileSync; syncBuiltinESMExports();
+    if (previous === undefined) delete process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
+    else process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR = previous;
+    await rm(root, { recursive: true });
+  }
+});
+
+test("Guest pending queue stays bounded with a stalled writer and 64 late promises; late true before configured deadline is not PASS", async () => {
+  let time = 0, writes = 0;
+  const gate = deferred<void>(), rows: any[] = [], evaluations = Array.from({ length: 100 }, () => deferred<any>());
+  const observation = observeGuestSubscriptionPoll(1, async row => { writes++; await gate.promise; rows.push(row); }, () => time);
+  observation.start(() => {});
+  for (const evaluate of evaluations) assert.equal(observation.sample(() => evaluate.promise), evaluate.promise);
+  for (let index = 0; index < 100; index++) observation.lifecycle("media_connected_passive", time);
+  time = 100; observation.finish(false);
+  const flushed = observation.flush(); await Promise.resolve(); assert.equal(writes, 1);
+  time = 101;
+  for (const evaluate of evaluations) evaluate.resolve({ subscribed: 1, token: "secret" });
+  await Promise.all(evaluations.map(value => value.promise));
+  observation.finish(true); assert.equal(writes, 1);
+  gate.resolve(); await flushed;
+  assert.equal(rows.length, 146); assert.equal(writes, 146);
+  const finish = rows.find(row => row.event === "predicate-finished");
+  assert.equal(finish.omittedSamples, 36); assert.equal(finish.attempts, 100);
+  const late = rows.filter(row => row.event === "sample-resolve");
+  assert.equal(late.length, 64);
+  for (const row of late) {
+    assert.equal(row.outcome, "failed"); assert.equal(row.afterPredicateFinished, true);
+    assert.equal(row.predicateFinishedAtMs, 100); assert.equal(row.afterConfiguredDeadline, false);
+  }
+  assert.doesNotMatch(JSON.stringify(rows), /secret|token/);
+});
+
+test("Guest late result automatically persists after initial failure flush, with handled late output rejection", async () => {
+  for (const broken of [false, true]) {
+    const evaluate = deferred<any>(), lateWrite = deferred<void>(), rows: any[] = [];
+    const observation = observeGuestSubscriptionPoll(1, row => {
+      rows.push(row);
+      if ((row as any).event === "sample-resolve") {
+        lateWrite.resolve();
+        if (broken) return Promise.reject(new Error("private late output error"));
+      }
+    });
+    const original = observation.start(() => observation.sample(() => evaluate.promise));
+    observation.finish(false); await observation.flush();
+    assert.doesNotMatch(JSON.stringify(rows), /sample-resolve/); // failure attachment is already exported
+    evaluate.resolve({ subscribed: 1 }); await original;
+    await lateWrite.promise; // no second flush needed to initiate the late write
+    assert.equal(rows.at(-1).outcome, "failed"); assert.equal(rows.at(-1).afterPredicateFinished, true);
+    if (broken) await assert.rejects(observation.flush(), /guest_subscription_diagnostic_persistence_failed/);
+    else await observation.flush();
+  }
+});
+
+test("Guest without a configured file exports allowlisted console records only after the protected lifecycle", async context => {
+  const previous = process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
+  delete process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
+  const messages: unknown[][] = [];
+  context.mock.method(console, "warn", (...args: unknown[]) => { messages.push(args); });
+  try {
+    const observation = observeGuestSubscriptionPoll(1);
+    const original = observation.start(() => observation.sample(() => Promise.resolve({ subscribed: 1, token: "secret" })));
+    await original; observation.finish(true);
+    assert.equal(messages.length, 0);
+    await observation.flush();
+    assert.equal(messages.length, 4); assert.equal(messages[0][0], "guest_subscription_diagnostic");
+    assert.doesNotMatch(JSON.stringify(messages), /secret|token/);
+  } finally {
+    if (previous === undefined) delete process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
+    else process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR = previous;
+  }
+});
+
+test("Guest persistence errors surface only outside assertions; async failure/timeout are handled and cleanup detaches", async context => {
+  const primary = new Error("original predicate failure"), seen: string[] = [];
+  for (const sink of [() => { throw new Error("private output error"); }, async () => { throw new Error("private async error"); }]) {
+    const observation = observeGuestSubscriptionPoll(1, sink);
+    observation.start(() => {}); observation.finish(false);
+    await assert.rejects((async () => {
+      try { throw primary; }
+      finally { try { await observation.flush(); } catch { seen.push("diagnostic-failure"); } }
+    })(), error => error === primary);
+    await assert.rejects(observation.flush(), /guest_subscription_diagnostic_persistence_failed/);
+  }
+  assert.equal(seen.length, 2);
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const stalled = deferred<void>(); let writes = 0;
+  const observation = observeGuestSubscriptionPoll(1, () => { writes++; return stalled.promise; });
+  observation.start(() => {}); observation.finish(true);
+  const flushed = observation.flush(); await Promise.resolve();
+  const rejected = assert.rejects(flushed, /guest_subscription_diagnostic_persistence_failed/);
+  context.mock.timers.tick(5000); await rejected;
+  stalled.resolve(); await stalled.promise; await Promise.resolve(); assert.equal(writes, 1);
+  context.mock.timers.reset();
+
+  const root = await mkdtemp("/tmp/opencode/guest-output-error-"), previous = process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
+  await fs.promises.writeFile(`${root}/not-directory`, "occupied");
+  process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR = `${root}/not-directory`;
+  let detached = 0;
+  const cdp = Object.assign(new EventEmitter(), { send: async () => ({}), detach: async () => { detached++; } });
+  const page = Object.assign(new EventEmitter(), { context: () => ({ newCDPSession: async () => cdp }), addInitScript: async () => {}, isClosed: () => false });
+  try {
+    const client = await observeFunctionalClient(page as any), poll = client.observeGuestSubscription(1);
+    await poll.start(() => poll.sample(() => Promise.resolve({ subscribed: 1 }))); poll.finish(true);
+    await assert.rejects(client.close(), /guest_subscription_diagnostic_persistence_failed/);
+    assert.equal(detached, 1); assert.equal(page.listenerCount("request"), 0);
+    assert.equal(cdp.listenerCount("Network.webSocketFrameReceived"), 0);
+  } finally {
+    if (previous === undefined) delete process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
+    else process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR = previous;
+    await rm(root, { recursive: true });
+  }
 });
 
 test("existing diagnostic request receipt is correlated with the Guest poll, not treated as an exact install timestamp", async () => {
@@ -259,13 +432,16 @@ test("existing diagnostic request receipt is correlated with the Guest poll, not
       postDataJSON: () => ({ note, participantId: "private", authorization: "secret" }) });
     page.emit("request", request("media_connected_passive")); // before the original poll
     const poll = observation.observeGuestSubscription(1);
+    poll.start(() => {});
     poll.finish(false);
     page.emit("request", request("media_connected_passive")); // after the predicate failed
     page.emit("request", request("private"));
+    await poll.flush();
     const [file] = await readdir(root), raw = await readFile(`${root}/${file}`, "utf8");
     const rows = raw.trim().split("\n").map(line => JSON.parse(line));
-    assert.deepEqual(rows.map(row => row.event), ["poll-start", "passive-startup-report-observed", "predicate-finished", "passive-startup-report-observed"]);
-    assert.ok(rows[1].observedAtMs <= rows[1].atMs); assert.equal(rows[3].outcome, "failed");
+    assert.deepEqual(rows.map(row => row.event), ["passive-startup-report-observed", "poll-start", "predicate-finished", "passive-startup-report-observed"]);
+    assert.equal(rows[0].configuredStartAtMs, null);
+    assert.ok(rows[0].observedAtMs <= rows[0].atMs); assert.equal(rows[3].outcome, "failed");
     assert.doesNotMatch(raw, /private|secret|authorization|participantId|http/);
   } finally {
     await observation.close(); assert.equal(page.listenerCount("request"), 0);

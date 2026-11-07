@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -95,35 +95,69 @@ export function guestSubscriptionFacts(value: any) {
     surfaceHasTexture: boolean(value?.surfaceHasTexture), videoElements: count(value?.videoElements) };
 }
 
-/** Observe only the original 20s Guest predicate. No timer, retry, extra evaluate
- * or changed deadline. Late answers are independent records, never a PASS. */
-export function observeGuestSubscriptionPoll(presenter: number, sink?: (event: object) => void, now = Date.now) {
-  const startedAtMs = now(), deadlineAtMs = startedAtMs + 20_000;
+/** Observe only the original Guest promise. Keep bounded DTOs in memory until
+ * flush AFTER the whole protected scenario, not between its assertions. Late
+ * answers keep the original failure. Configured times are not Playwright internals. */
+export function observeGuestSubscriptionPoll(presenter: number, sink?: (event: object) => unknown, now = Date.now) {
   const root = process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
   const file = root && resolve(root, `guest-subscription-poll-${randomUUID()}.jsonl`);
   let attempts = 0, outcome = "pending", lifecycleEvents = 0;
-  const record = (event: object) => {
-    try {
-      const atMs = now(), row = { actor: "guest", presenter: presenter === 1 || presenter === 2 ? presenter : null,
-        startedAtMs, deadlineAtMs, timeoutMs: 20_000, atMs, afterDeadline: atMs > deadlineAtMs, outcome, ...event };
-      if (sink) sink(row);
-      else if (file) {
-        mkdirSync(root!, { recursive: true, mode: 0o700 });
-        appendFileSync(file, JSON.stringify(row) + "\n", { mode: 0o600 });
-      }
-    } catch { console.warn("guest_subscription_diagnostic_write_failed"); }
+  let configuredStartAtMs: number | null = null, predicateFinishedAtMs: number | null = null;
+  const queue: object[] = [], maxPending = 146; // 64 sample pairs + 16 lifecycle + start/finish
+  let enabled = false, draining: Promise<void> | null = null, diagnosticFailure: Error | null = null;
+  let failureReported = false;
+  const reportFailure = () => {
+    if (enabled && diagnosticFailure && !failureReported) {
+      failureReported = true; console.warn("guest_subscription_diagnostic_persistence_failed");
+    }
   };
-  record({ event: "poll-start" });
+  const fail = () => {
+    diagnosticFailure = new Error("guest_subscription_diagnostic_persistence_failed");
+    queue.length = 0; reportFailure();
+  };
+  const drain = () => {
+    if (!enabled || draining || diagnosticFailure || !queue.length) return;
+    // Never execute a supplied sink in sample()/the original promise reaction.
+    draining = Promise.resolve().then(async () => {
+      if (!sink && file) await mkdir(root!, { recursive: true, mode: 0o700 });
+      while (queue.length && !diagnosticFailure) {
+        const row = queue[0];
+        if (sink) await sink(row);
+        else if (file) await appendFile(file, JSON.stringify(row) + "\n", { mode: 0o600 });
+        else console.warn("guest_subscription_diagnostic", JSON.stringify(row));
+        queue.shift();
+      }
+    }).catch(fail).finally(() => { draining = null; drain(); });
+  };
+  const record = (event: object) => {
+    if (diagnosticFailure) return;
+    if (queue.length >= maxPending) { fail(); return; }
+    const atMs = now(), configuredDeadlineAtMs = configuredStartAtMs === null ? null : configuredStartAtMs + 20_000;
+    queue.push({ actor: "guest", presenter: presenter === 1 || presenter === 2 ? presenter : null,
+      configuredStartAtMs, configuredDeadlineAtMs, timeoutMs: 20_000, clockBasis: "node-before-expect-poll-call",
+      atMs, afterConfiguredDeadline: configuredDeadlineAtMs === null ? null : atMs > configuredDeadlineAtMs,
+      predicateFinishedAtMs, afterPredicateFinished: predicateFinishedAtMs !== null, outcome, ...event });
+    drain();
+  };
   return {
+    start<T>(predicate: () => T): T {
+      configuredStartAtMs = now();
+      record({ event: "poll-start" });
+      return predicate();
+    },
     sample<T>(action: () => Promise<T>): Promise<T> {
       const attempt = ++attempts, sampleStartedAtMs = now(), retained = attempt <= 64;
-      if (retained) record({ event: "sample-start", attempt, sampleStartedAtMs });
       let original: Promise<T>;
       try { original = action(); }
-      catch (error) { if (retained) record({ event: "sample-reject", attempt, sampleStartedAtMs }); throw error; }
-      void original.then(value => {
-        if (retained) record({ event: "sample-resolve", attempt, sampleStartedAtMs, facts: guestSubscriptionFacts(value) });
-      }, () => { if (retained) record({ event: "sample-reject", attempt, sampleStartedAtMs }); });
+      catch (error) {
+        if (retained) { record({ event: "sample-start", attempt, sampleStartedAtMs }); record({ event: "sample-reject", attempt, sampleStartedAtMs }); }
+        throw error;
+      }
+      if (retained) {
+        record({ event: "sample-start", attempt, sampleStartedAtMs });
+        void original.then(value => record({ event: "sample-resolve", attempt, sampleStartedAtMs, facts: guestSubscriptionFacts(value) }),
+          () => record({ event: "sample-reject", attempt, sampleStartedAtMs }));
+      }
       return original;
     },
     // HTTP receipt is an upper bound on startup completion, not its timestamp:
@@ -135,7 +169,15 @@ export function observeGuestSubscriptionPoll(presenter: number, sink?: (event: o
     finish(passed: boolean) {
       if (outcome !== "pending") return;
       outcome = passed ? "passed" : "failed";
+      predicateFinishedAtMs = now();
       record({ event: "predicate-finished", attempts, omittedSamples: Math.max(0, attempts - 64) });
+    },
+    /** Call only after ALL protected assertions. Subsequent late rows use the
+     * same handled queue, including after a failure attachment/initial flush. */
+    async flush() {
+      enabled = true; reportFailure(); drain();
+      if (!await bounded((async () => { while (draining) await draining; return true; })(), false)) fail();
+      if (diagnosticFailure) throw diagnosticFailure;
     }
   };
 }
@@ -386,11 +428,12 @@ export async function observeFunctionalClient(page: Page, options: { transportAt
       return { ...facts, media, observationStartedAtMs: started, sampleMs: Date.now() - begin, events: [...events], browserEvents: facts.events };
     },
     async close() {
-      guestPolls.clear();
+      const polls = [...guestPolls]; guestPolls.clear();
       page.off("request", request); page.off("response", response); page.off("requestfailed", failedRequest);
       cdp.off("Network.webSocketCreated", created); cdp.off("Network.webSocketClosed", closed);
       cdp.off("Network.webSocketFrameSent", sent); cdp.off("Network.webSocketFrameReceived", received);
       await bounded(Promise.allSettled([...pending]), [], 1000); if (!page.isClosed()) await cdp.detach();
+      await Promise.all(polls.map(poll => poll.flush()));
     }
   };
 }
