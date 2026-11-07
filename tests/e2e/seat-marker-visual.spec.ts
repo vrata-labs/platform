@@ -236,15 +236,28 @@ for (const staging of [false]) test.describe(`${staging ? "@staging " : ""}seat 
           const release = await observer.evaluate(observeReleasedAvatar, {
             participantId: initial.participantId, parkedRoot: initial.root, previousPoseSeq, timeoutMs: remainingMs
           });
-          const remotePose = await finishReleasedAvatar(release, async evidence => {
+          const attachReadiness = async (evidence: typeof release.evidence) => {
             const path = testInfo.outputPath("room-release-readiness.json");
             await writeFile(path, JSON.stringify(evidence), { mode: 0o600, flag: "wx" });
             await testInfo.attach("room-release-readiness", { path, contentType: "application/json" });
-          });
-          expect(await readReviewView(observer)).toEqual(fixedReviewView);
-          await testInfo.attach("room-release-view", { body: JSON.stringify({ fixedReviewView, parkedRoot: initial.root, remotePose }), contentType: "application/json" });
-          expect(Date.now(), "Release capture readiness must fit the original 15s").toBeLessThan(releaseDeadline);
-          await capture(observer, testInfo, "room-released-same-view");
+          };
+          // Timeout evidence precedes the original readiness error. Success I/O
+          // must not consume the existing assertion/PNG acceptance sequence.
+          if (release.error) await finishReleasedAvatar(release, attachReadiness);
+          const remotePose = release.remotePose!;
+          let captured = false;
+          try {
+            expect(await readReviewView(observer)).toEqual(fixedReviewView);
+            await testInfo.attach("room-release-view", { body: JSON.stringify({ fixedReviewView, parkedRoot: initial.root, remotePose }), contentType: "application/json" });
+            expect(Date.now(), "Release capture readiness must fit the original 15s").toBeLessThan(releaseDeadline);
+            await capture(observer, testInfo, "room-released-same-view");
+            captured = true;
+          } finally {
+            // Keep the evidence even on assertion/PNG failure, without replacing
+            // that original error if diagnostic persistence also fails.
+            if (captured) await attachReadiness(release.evidence);
+            else await attachReadiness(release.evidence).catch(() => {});
+          }
         }
         await testInfo.attach("room-review-settings", { body: JSON.stringify({ staging, templateId, seat, reviewPose, initial, fixture: fixture!.fixtureFingerprint, errors }, null, 2), contentType: "application/json" });
         expect(errors).toEqual([]);

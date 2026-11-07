@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { runInNewContext } from "node:vm";
+import { readFileSync } from "node:fs";
+import ts from "typescript";
 import { finishReleasedAvatar, observeReleasedAvatar, type ReleaseEvidence } from "./seat-release-observation.ts";
 
 // Execute the actual page.evaluate function with a finite manual RAF/timer clock.
@@ -139,3 +141,99 @@ test("release function survives page.evaluate-style serialization without module
   assert.equal(result.evidence.last!.rafCount, 1);
   assert.equal(result.error, "released_avatar_pose_not_settled_within_release_budget");
 });
+
+// Execute the real spec block, not a duplicate orchestration implementation.
+// Browser-only collaborators are replaced with finite assertions/event records;
+// readiness itself still runs the actual helper and its existing RAF clock.
+function releaseOrchestration(options: { failAt?: "view" | "deadline" | "png"; attachmentFails?: boolean } = {}) {
+  const source = readFileSync(new URL("./seat-marker-visual.spec.ts", import.meta.url), "utf8");
+  const start = source.indexOf("          const remainingMs = releaseDeadline - Date.now();");
+  const end = source.indexOf('\n        }\n        await testInfo.attach("room-review-settings"', start);
+  assert.ok(start >= 0 && end > start, "the actual visual release block must be selected");
+  const code = ts.transpileModule(`(async () => {${source.slice(start, end)}\n})()`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext }
+  }).outputText;
+  let wallMs = 0;
+  const events: string[] = [];
+  const primaryError = new Error(`original_${options.failAt}_failure`);
+  const attachmentError = new Error("attachment_failed");
+  const fixedReviewView = { root: args.parkedRoot, pitch: 0.2, devicePixelRatio: 1, canvas: { width: 640, height: 480 } };
+  let saved: ReleaseEvidence | undefined;
+  const pending: Promise<void> = runInNewContext(code, {
+    Date: { now: () => wallMs }, Math, JSON, releaseDeadline: 15000,
+    observer: { evaluate: (fn: typeof observeReleasedAvatar, input: typeof args) => fn(input) },
+    initial: { participantId: args.participantId, root: args.parkedRoot }, previousPoseSeq: args.previousPoseSeq,
+    observeReleasedAvatar, finishReleasedAvatar, fixedReviewView,
+    readReviewView: async () => { events.push("view"); return fixedReviewView; },
+    expect: (actual: unknown) => ({
+      toBeGreaterThan: (expected: number) => { assert.ok(Number(actual) > expected); },
+      toEqual: (expected: unknown) => {
+        events.push("view-assertion");
+        if (options.failAt === "view") throw primaryError;
+        assert.deepEqual(actual, expected);
+      },
+      toBeLessThan: (expected: number) => {
+        events.push("deadline-assertion");
+        if (options.failAt === "deadline") throw primaryError;
+        assert.ok(Number(actual) < expected, `original deadline: ${actual} < ${expected}`);
+      }
+    }),
+    capture: async (_observer: unknown, _info: unknown, name: string) => {
+      assert.equal(name, "room-released-same-view"); events.push("png");
+      if (options.failAt === "png") throw primaryError;
+    },
+    writeFile: async (path: string, body: string, mode: { mode: number; flag: string }) => {
+      assert.equal(path, "room-release-readiness.json");
+      assert.equal(mode.mode, 0o600); assert.equal(mode.flag, "wx");
+      assert.doesNotMatch(body, /private|token|url|secret|raw-scene|participantId/);
+      saved = JSON.parse(body); assert.ok(saved!.trail.length <= 32); events.push("write-readiness");
+    },
+    testInfo: { outputPath: (name: string) => name, attach: async (name: string) => {
+      events.push(name);
+      if (name === "room-release-readiness") {
+        wallMs += 30;
+        if (options.attachmentFails) throw attachmentError;
+      }
+    } }
+  });
+  return { pending, events, primaryError, attachmentError,
+    setWall: (now: number) => { wallMs = now; }, wall: () => wallMs, saved: () => saved };
+}
+
+function settleAtOriginalBoundary(c: ReturnType<typeof makeClock>) {
+  c.tick(14940);
+  for (let i = 0; i < 16; i++) c.tick(14960 + i);
+}
+
+test("release spec delayed success attachment runs after the original deadline verdict and PNG", async () => clock(async c => {
+  const run = releaseOrchestration();
+  run.setWall(14975); settleAtOriginalBoundary(c);
+  await run.pending;
+  assert.equal(run.saved()!.finishedAt, 14975);
+  assert.equal(run.saved()!.timeoutMs, 15000);
+  assert.equal(run.wall(), 15005, "new I/O crosses the deadline only after the original verdict and PNG");
+  assert.deepEqual(run.events, ["view", "view-assertion", "room-release-view", "deadline-assertion", "png",
+    "write-readiness", "room-release-readiness"]);
+}));
+
+for (const failAt of ["view", "deadline", "png"] as const) {
+  test(`release spec preserves original ${failAt} error and still saves evidence if attachment fails`, async () => clock(async c => {
+    const run = releaseOrchestration({ failAt, attachmentFails: true });
+    run.setWall(14975); settleAtOriginalBoundary(c);
+    await assert.rejects(run.pending, error => error === run.primaryError);
+    assert.equal(run.saved()!.last!.settlingFrames, 16);
+    assert.ok(run.events.indexOf(failAt === "png" ? "png" : `${failAt}-assertion`) < run.events.indexOf("write-readiness"));
+    assert.deepEqual(run.events.slice(-2), ["write-readiness", "room-release-readiness"]);
+    if (failAt !== "png") assert.ok(!run.events.includes("png"), "original short-circuit order is preserved");
+  }));
+}
+
+test("release spec timeout persists evidence before the exact readiness error despite attachment failure", async () => clock(async c => {
+  const run = releaseOrchestration({ attachmentFails: true });
+  c.transport.lastPoseSeq = 7; c.tick(100); c.expire();
+  await assert.rejects(run.pending, error => error instanceof Error
+    && error !== run.attachmentError && error.message === "released_avatar_pose_not_settled_within_release_budget");
+  assert.equal(run.saved()!.last!.lastPoseSeq, 7);
+  assert.equal(run.saved()!.last!.settlingFrames, 0);
+  assert.deepEqual(run.events, ["write-readiness", "room-release-readiness"]);
+}));
