@@ -152,9 +152,9 @@ async function roomFixture(request: any) {
         timer = setTimeout(() => reject(new Error("fixture_surface_audio_timeout")), 10_000);
         client = connectRoomState(fixture.stateOrigin.replace("http:", "ws:"), roomId, participantId, {
           onOpen: () => sendSurfaceMediaAudioCommand(client!, { commandId: randomUUID(), surfaceId: "debug-main", enabled: true }),
-          onRoomState: snapshot => { if (snapshot.mediaObjects.surfaces["debug-main"]?.mediaAudioEnabled) done(); },
+          onRoomState: (snapshot: { mediaObjects: { surfaces: Record<string, { mediaAudioEnabled?: boolean }> } }) => { if (snapshot.mediaObjects.surfaces["debug-main"]?.mediaAudioEnabled) done(); },
           onError: () => reject(new Error("fixture_surface_audio_socket_failed")),
-          onSurfaceCommandResult: result => { if (!result.accepted) reject(new Error("fixture_surface_audio_denied")); }
+          onSurfaceCommandResult: (result: { accepted: boolean }) => { if (!result.accepted) reject(new Error("fixture_surface_audio_denied")); }
         }, token);
       });
     } finally { clearTimeout(timer!); client?.close(); }
@@ -373,7 +373,21 @@ test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone
         }
         console.info("presenter_screen_ready", JSON.stringify({ presenter: index + 1, elapsedMs: Date.now() - screenStartedAt }));
         await expect.poll(() => receiver.evaluate(() => (window as any).__sourceObserver.frames), { timeout: 20_000 }).toBeGreaterThan(framesBefore + 2);
-        await expect.poll(() => guest.page.evaluate(() => (window as any).__VRATA_DEBUG__?.screenShare?.remoteSubscribedTrackCount), { timeout: 20_000 }).toBe(1);
+        const guestPoll = diagnostics.get(guest.page)!.observeGuestSubscription(index + 1);
+        try {
+          await expect.poll(() => guestPoll.sample(() => guest.page.evaluate(() => {
+            const debug = (window as any).__VRATA_DEBUG__;
+            const surface = debug?.mediaObjects?.surfaces?.find((item: any) => item.surfaceId === "debug-main");
+            const active = debug?.mediaObjects?.objects?.find((item: any) => item.objectId === surface?.activeObjectId);
+            return { subscribed: debug?.screenShare?.remoteSubscribedTrackCount,
+              browserNowMs: performance.now(), browserWallTimeMs: Date.now(),
+              passiveStartupCompleted: debug?.audioState === "connected-passive",
+              passiveStartupFailed: debug?.lastRecoveryAction === "media_passive_connect_failed",
+              shareErrorPresent: !!debug?.screenShare?.errorCode, activeScreenPresent: active?.type === "screen-share",
+              surfaceHasTexture: typeof surface?.textureId === "number", videoElements: document.querySelectorAll("video").length };
+          })).then(value => value.subscribed), { timeout: 20_000 }).toBe(1);
+          guestPoll.finish(true);
+        } catch (error) { guestPoll.finish(false); throw error; }
         await expect.poll(async () => (await h.service.listParticipants(mediaRoom)).flatMap((person: any) => person.tracks.filter((track: any) => track.source === 2)).length, { timeout: 20_000 }).toBe(index + 1);
         const participants = await h.service.listParticipants(mediaRoom);
         const microphoneTracks = participants.flatMap((person: any) => person.tracks.filter((track: any) => track.source === 2));

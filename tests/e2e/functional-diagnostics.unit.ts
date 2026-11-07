@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, readdir, stat, rm } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
-import { mediaFacts, mediaParticipantFacts, observeFunctionalClient, observeMeetingPanelPoll, installFunctionalBrowserObservation } from "./functional-diagnostics.ts";
+import { collectedTransportFacts, finalizeFunctionalDiagnostics, guestSubscriptionFacts, mediaFacts, mediaParticipantFacts, observeFunctionalClient,
+  observeGuestSubscriptionPoll, observeMeetingPanelPoll, installFunctionalBrowserObservation, writeFunctionalDiagnostics } from "./functional-diagnostics.ts";
 
 test("media diagnostics correlate object/track/revision without retaining content or owner IDs", () => {
   const media = { surfaces: { wall: { surfaceId: "whiteboard-wall", activeObjectId: "object-private", textureId: 3 } },
@@ -176,4 +177,178 @@ test("transport sample timeout/rejection never retries, and other scenarios do n
   const disabled = browserObservation(false), peer = disabled.peer();
   peer.iceConnectionState = "connected"; peer.emit("iceconnectionstatechange");
   assert.equal(peer.statsCalls, 0); assert.equal(disabled.timers.size, 0);
+});
+
+test("original Guest 20s predicate retains late true after failure independently, with private Node records", async () => {
+  const root = await mkdtemp("/tmp/opencode/guest-poll-unit-"), previous = process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
+  process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR = root;
+  try {
+    let time = 1000, calls = 0;
+    const observation = observeGuestSubscriptionPoll(1, undefined, () => time);
+    const evaluate = deferred<any>(), timeout = deferred<never>();
+    const original = observation.sample(() => { calls++; return evaluate.promise; });
+    assert.equal(original, evaluate.promise);
+    const predicate = Promise.race([original.then(value => value.subscribed), timeout.promise]);
+    time = 21000; timeout.reject(new Error("original predicate expired"));
+    await assert.rejects(predicate, /original predicate expired/); observation.finish(false);
+    const [file] = await readdir(root), attachment = await readFile(`${root}/${file}`, "utf8");
+    time = 21001;
+    evaluate.resolve({ subscribed: 1, passiveStartupCompleted: true, videoElements: 1,
+      url: "https://private/invite?session=secret", participantId: "private", sdp: "secret" });
+    await original;
+    observation.lifecycle("media_connected_passive", time); observation.finish(true);
+    await assert.rejects(predicate, /original predicate expired/);
+    const raw = await readFile(`${root}/${file}`, "utf8"), rows = raw.trim().split("\n").map(line => JSON.parse(line));
+    assert.deepEqual(rows.map(row => row.event), ["poll-start", "sample-start", "predicate-finished", "sample-resolve", "passive-startup-report-observed"]);
+    assert.equal(calls, 1); assert.equal(rows[0].startedAtMs, 1000); assert.equal(rows[0].deadlineAtMs, 21000);
+    assert.equal(rows[2].afterDeadline, false); assert.equal(rows[3].afterDeadline, true);
+    assert.equal(rows[3].outcome, "failed"); assert.equal(rows[3].facts.subscribed, 1);
+    assert.equal(rows[3].facts.passiveStartupCompleted, true); assert.equal(rows[4].outcome, "failed");
+    assert.doesNotMatch(attachment, /sample-resolve/); assert.doesNotMatch(raw, /private|secret|invite|session|sdp|participantId/);
+    assert.equal((await stat(`${root}/${file}`)).mode & 0o777, 0o600);
+  } finally {
+    if (previous === undefined) delete process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
+    else process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR = previous;
+    await rm(root, { recursive: true });
+  }
+});
+
+test("Guest samples preserve raw result/rejection, do not infer installation from negative/absent data, and bound records", async () => {
+  let time = 0;
+  const rows: any[] = [], observation = observeGuestSubscriptionPoll(999, row => rows.push(row), () => time);
+  const error = new Error("private native/session error"), rejected = Promise.reject(error);
+  assert.equal(observation.sample(() => rejected), rejected);
+  await assert.rejects(rejected, value => value === error);
+  assert.throws(() => observation.sample(() => { throw error; }), value => value === error);
+  for (let index = 0; index < 100; index++) await observation.sample(() => Promise.resolve({ subscribed: 0, passiveStartupCompleted: false }));
+  for (let index = 0; index < 100; index++) observation.lifecycle("media_connected_passive", time);
+  observation.lifecycle("private", time);
+  time = 20000; observation.finish(false);
+  assert.equal(rows.length, 146); // start + 64 starts/results + 16 lifecycle + terminal
+  assert.equal(rows.at(-1).omittedSamples, 38); assert.equal(rows.at(-1).afterDeadline, false);
+  assert.equal(rows[1].presenter, null); assert.equal(rows[2].event, "sample-reject");
+  assert.doesNotMatch(JSON.stringify(rows), /private|native\/session/);
+  assert.deepEqual(guestSubscriptionFacts(null), { subscribed: null, browserNowMs: null, browserWallTimeMs: null,
+    passiveStartupCompleted: null, passiveStartupFailed: null, shareErrorPresent: null, activeScreenPresent: null, surfaceHasTexture: null, videoElements: null });
+  const facts = guestSubscriptionFacts({ subscribed: -1, browserNowMs: Infinity, browserWallTimeMs: NaN,
+    passiveStartupCompleted: "private", passiveStartupFailed: false, videoElements: 999999, surfaceHasTexture: true, binding: "secret" });
+  assert.equal(facts.subscribed, null); assert.equal(facts.browserNowMs, null); assert.equal(facts.passiveStartupCompleted, null);
+  assert.equal(facts.passiveStartupFailed, false); assert.equal(facts.surfaceHasTexture, true); assert.equal(facts.videoElements, 1024);
+});
+
+test("Guest original success at the configured deadline remains success; diagnostic sink errors never replace result", async () => {
+  let time = 0;
+  const rows: any[] = [], observation = observeGuestSubscriptionPoll(2, row => rows.push(row), () => time);
+  time = 20000;
+  const value = { subscribed: 1 }, original = Promise.resolve(value);
+  assert.equal(observation.sample(() => original), original); assert.equal(await original, value); observation.finish(true);
+  assert.equal(rows.at(-1).outcome, "passed"); assert.equal(rows.at(-1).afterDeadline, false);
+  const broken = observeGuestSubscriptionPoll(1, () => { throw new Error("disk failure"); });
+  assert.equal(broken.sample(() => original), original); await original; broken.finish(true);
+});
+
+test("existing diagnostic request receipt is correlated with the Guest poll, not treated as an exact install timestamp", async () => {
+  const root = await mkdtemp("/tmp/opencode/guest-lifecycle-unit-"), previous = process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
+  process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR = root;
+  const cdp = Object.assign(new EventEmitter(), { send: async () => ({}), detach: async () => {} });
+  const page = Object.assign(new EventEmitter(), { context: () => ({ newCDPSession: async () => cdp }),
+    addInitScript: async () => {}, evaluate: async () => ({}), isClosed: () => false });
+  const observation = await observeFunctionalClient(page as any);
+  try {
+    const request = (note: string) => ({ method: () => "POST", url: () => "http://private/api/rooms/private/diagnostics",
+      postDataJSON: () => ({ note, participantId: "private", authorization: "secret" }) });
+    page.emit("request", request("media_connected_passive")); // before the original poll
+    const poll = observation.observeGuestSubscription(1);
+    poll.finish(false);
+    page.emit("request", request("media_connected_passive")); // after the predicate failed
+    page.emit("request", request("private"));
+    const [file] = await readdir(root), raw = await readFile(`${root}/${file}`, "utf8");
+    const rows = raw.trim().split("\n").map(line => JSON.parse(line));
+    assert.deepEqual(rows.map(row => row.event), ["poll-start", "passive-startup-report-observed", "predicate-finished", "passive-startup-report-observed"]);
+    assert.ok(rows[1].observedAtMs <= rows[1].atMs); assert.equal(rows[3].outcome, "failed");
+    assert.doesNotMatch(raw, /private|secret|authorization|participantId|http/);
+  } finally {
+    await observation.close(); assert.equal(page.listenerCount("request"), 0);
+    if (previous === undefined) delete process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
+    else process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR = previous;
+    await rm(root, { recursive: true });
+  }
+});
+
+test("F7 exports already collected one-shot transport outcomes, with bounds/redaction and no extra getStats", async () => {
+  const browser = browserObservation(), peer = browser.peer();
+  peer.iceConnectionState = "connected"; peer.emit("iceconnectionstatechange");
+  browser.pending.resolve(new Map([["transport", { type: "transport", dtlsState: "connected" }]])); await browser.pending.promise;
+  const cdp = Object.assign(new EventEmitter(), { send: async () => ({}), detach: async () => {} });
+  let evaluates = 0;
+  const page = Object.assign(new EventEmitter(), { context: () => ({ newCDPSession: async () => cdp }), addInitScript: async () => {},
+    evaluate: async () => { evaluates++; return { peerConnections: browser.facts().peers }; }, isClosed: () => false });
+  const observation = await observeFunctionalClient(page as any);
+  try {
+    const facts = await observation.collectedTransportSnapshot();
+    assert.equal(facts.peerConnections[0].transportSample.status, "resolved");
+    assert.equal(facts.peerConnections[0].transportSample.transports[0].dtlsState, "connected");
+    assert.equal(peer.statsCalls, 1); assert.equal(evaluates, 1);
+  } finally { await observation.close(); }
+  const privateTransport = { dtlsState: "private", selectedPair: { state: "succeeded", nominated: true, bytesReceived: 12,
+    localCandidateId: "private-ip", sdp: "secret", certificate: "secret" } };
+  const projected = collectedTransportFacts({ peerConnections: Array.from({ length: 20 }, () => ({ index: "private", transportSample: {
+    status: "resolved", transports: Array(8).fill(privateTransport), token: "secret" } })), events: ["secret"], url: "private" });
+  assert.equal(projected.peerConnections.length, 16); assert.equal(projected.peerConnections[0].transportSample.transports.length, 4);
+  assert.equal(projected.peerConnections[0].transportSample.transports[0].dtlsState, null);
+  assert.doesNotMatch(JSON.stringify(projected), /private|secret|Candidate|certificate|sdp|token|url/);
+  assert.deepEqual(collectedTransportFacts(null).peerConnections, []);
+});
+
+test("F7 success and primary-failure branches export once before cleanup; export/cleanup errors cannot hide primary failure", async () => {
+  for (const failed of [false, true]) {
+    const events: string[] = [];
+    await finalizeFunctionalDiagnostics(failed, async () => { events.push("export"); }, async () => { events.push("close"); });
+    assert.deepEqual(events, ["export", "close"]);
+  }
+  const primary = new Error("primary"), cleanup = new Error("cleanup");
+  let closes = 0;
+  async function scenario() {
+    try { throw primary; }
+    finally {
+      await finalizeFunctionalDiagnostics(true, async () => { throw new Error("export"); }, async () => { closes++; throw cleanup; });
+    }
+  }
+  await assert.rejects(scenario(), error => error === primary); assert.equal(closes, 1);
+  await assert.rejects(finalizeFunctionalDiagnostics(false, async () => {}, async () => { throw cleanup; }), error => error === cleanup);
+});
+
+test("F7 pending export has a finite bound and still cleans up once without retry", async context => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const pending = deferred<void>(); let writes = 0, closes = 0;
+  const done = finalizeFunctionalDiagnostics(false, () => { writes++; return pending.promise; }, async () => { closes++; });
+  await Promise.resolve(); context.mock.timers.tick(5000); await done;
+  assert.equal(writes, 1); assert.equal(closes, 1);
+  pending.resolve(); await pending.promise; assert.equal(writes, 1); assert.equal(closes, 1);
+});
+
+test("F7 success and failure collected DTO exports are private files written before cleanup", async () => {
+  const root = await mkdtemp("/tmp/opencode/native-export-unit-"), previous = process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
+  process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR = root;
+  try {
+    for (const failed of [false, true]) {
+      let closed = false;
+      await finalizeFunctionalDiagnostics(failed, async () => {
+        assert.equal(closed, false);
+        await writeFunctionalDiagnostics("F7-before-cleanup", { outcome: failed ? "failed" : "passed", clients: [collectedTransportFacts(null)] });
+      }, async () => { closed = true; });
+      assert.equal(closed, true);
+    }
+    const files = await readdir(root), outcomes: string[] = [];
+    assert.equal(files.length, 2);
+    for (const file of files) {
+      const value = JSON.parse(await readFile(`${root}/${file}`, "utf8")); outcomes.push(value.facts.outcome);
+      assert.equal((await stat(`${root}/${file}`)).mode & 0o777, 0o600);
+    }
+    assert.deepEqual(outcomes.sort(), ["failed", "passed"]);
+  } finally {
+    if (previous === undefined) delete process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
+    else process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR = previous;
+    await rm(root, { recursive: true });
+  }
 });

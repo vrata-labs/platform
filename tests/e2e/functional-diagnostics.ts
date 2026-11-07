@@ -82,6 +82,95 @@ export function observeMeetingPanelPoll(context: { actor?: string; section: stri
   };
 }
 
+/** Projection of the EXISTING Guest evaluate; no SDK/private room access.
+ * connected-passive records a past completed startup, not a connect/device phase
+ * or proof the same room is still installed (it may later disconnect).
+ * No negative field here proves that installation or binding failed. */
+export function guestSubscriptionFacts(value: any) {
+  const count = (v: unknown) => typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? Math.min(v, 1024) : null;
+  const boolean = (v: unknown) => typeof v === "boolean" ? v : null;
+  return { subscribed: count(value?.subscribed), browserNowMs: numeric(value?.browserNowMs), browserWallTimeMs: numeric(value?.browserWallTimeMs),
+    passiveStartupCompleted: boolean(value?.passiveStartupCompleted), passiveStartupFailed: boolean(value?.passiveStartupFailed),
+    shareErrorPresent: boolean(value?.shareErrorPresent), activeScreenPresent: boolean(value?.activeScreenPresent),
+    surfaceHasTexture: boolean(value?.surfaceHasTexture), videoElements: count(value?.videoElements) };
+}
+
+/** Observe only the original 20s Guest predicate. No timer, retry, extra evaluate
+ * or changed deadline. Late answers are independent records, never a PASS. */
+export function observeGuestSubscriptionPoll(presenter: number, sink?: (event: object) => void, now = Date.now) {
+  const startedAtMs = now(), deadlineAtMs = startedAtMs + 20_000;
+  const root = process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
+  const file = root && resolve(root, `guest-subscription-poll-${randomUUID()}.jsonl`);
+  let attempts = 0, outcome = "pending", lifecycleEvents = 0;
+  const record = (event: object) => {
+    try {
+      const atMs = now(), row = { actor: "guest", presenter: presenter === 1 || presenter === 2 ? presenter : null,
+        startedAtMs, deadlineAtMs, timeoutMs: 20_000, atMs, afterDeadline: atMs > deadlineAtMs, outcome, ...event };
+      if (sink) sink(row);
+      else if (file) {
+        mkdirSync(root!, { recursive: true, mode: 0o700 });
+        appendFileSync(file, JSON.stringify(row) + "\n", { mode: 0o600 });
+      }
+    } catch { console.warn("guest_subscription_diagnostic_write_failed"); }
+  };
+  record({ event: "poll-start" });
+  return {
+    sample<T>(action: () => Promise<T>): Promise<T> {
+      const attempt = ++attempts, sampleStartedAtMs = now(), retained = attempt <= 64;
+      if (retained) record({ event: "sample-start", attempt, sampleStartedAtMs });
+      let original: Promise<T>;
+      try { original = action(); }
+      catch (error) { if (retained) record({ event: "sample-reject", attempt, sampleStartedAtMs }); throw error; }
+      void original.then(value => {
+        if (retained) record({ event: "sample-resolve", attempt, sampleStartedAtMs, facts: guestSubscriptionFacts(value) });
+      }, () => { if (retained) record({ event: "sample-reject", attempt, sampleStartedAtMs }); });
+      return original;
+    },
+    // HTTP receipt is an upper bound on startup completion, not its timestamp:
+    // reportDiagnostics awaits stats/screenshot before sending the request.
+    lifecycle(note: unknown, observedAtMs: number) {
+      if (note !== "media_connected_passive" || lifecycleEvents++ >= 16) return;
+      record({ event: "passive-startup-report-observed", observedAtMs: numeric(observedAtMs) });
+    },
+    finish(passed: boolean) {
+      if (outcome !== "pending") return;
+      outcome = passed ? "passed" : "failed";
+      record({ event: "predicate-finished", attempts, omittedSamples: Math.max(0, attempts - 64) });
+    }
+  };
+}
+
+/** Export errors/timeouts cannot replace the assertion; always clean up once. */
+export async function finalizeFunctionalDiagnostics(failed: boolean, persist: () => Promise<void>, cleanup: () => Promise<void>) {
+  try {
+    const exported = await bounded(Promise.resolve().then(persist).then(() => true), false);
+    if (!exported) console.warn("functional_diagnostic_export_timed_out");
+  }
+  catch { console.warn("functional_diagnostic_export_failed"); }
+  try { await cleanup(); }
+  catch (error) { if (!failed) throw error; console.warn("functional_diagnostic_cleanup_failed"); }
+}
+
+/** Re-project browser memory in Node; never serialize arbitrary RTC fields. */
+export function collectedTransportFacts(value: any) {
+  const state = (v: unknown, allowed: string[]) => typeof v === "string" && allowed.includes(v) ? v : null;
+  const connection = (v: unknown) => state(v, ["new", "connecting", "connected", "disconnected", "failed", "closed"]);
+  const ice = (v: unknown) => state(v, ["new", "checking", "connected", "completed", "disconnected", "failed", "closed"]);
+  return { unavailable: value?.unavailable === true, sampleTimedOut: value?.sampleTimedOut === true,
+    browserNowMs: numeric(value?.browserNowMs), browserWallTimeMs: numeric(value?.browserWallTimeMs),
+    peerConnections: (Array.isArray(value?.peerConnections) ? value.peerConnections : []).slice(0, 16).map((peer: any, index: number) => ({
+      index, firstIceConnectedAtMs: numeric(peer?.firstIceConnectedAtMs), pcConnectedAtMs: numeric(peer?.pcConnectedAtMs),
+      transportSample: peer?.transportSample ? { startedAtMs: numeric(peer.transportSample.startedAtMs), resolvedAtMs: numeric(peer.transportSample.resolvedAtMs),
+        status: state(peer.transportSample.status, ["pending", "resolved", "rejected", "timed-out"]),
+        connectionAtStart: connection(peer.transportSample.connectionAtStart), connectionAtResolve: connection(peer.transportSample.connectionAtResolve),
+        iceAtStart: ice(peer.transportSample.iceAtStart), iceAtResolve: ice(peer.transportSample.iceAtResolve),
+        transports: (Array.isArray(peer.transportSample.transports) ? peer.transportSample.transports : []).slice(0, 4).map((transport: any) => ({
+          dtlsState: state(transport?.dtlsState, ["new", "connecting", "connected", "closed", "failed"]),
+          selectedPair: transport?.selectedPair ? { state: state(transport.selectedPair.state, ["frozen", "waiting", "in-progress", "failed", "succeeded"]),
+            nominated: typeof transport.selectedPair.nominated === "boolean" ? transport.selectedPair.nominated : null,
+            bytesSent: numeric(transport.selectedPair.bytesSent), bytesReceived: numeric(transport.selectedPair.bytesReceived) } : null })) } : null })) };
+}
+
 /** Standalone init function so the exact browser instrumentation has pure controls. */
 export function installFunctionalBrowserObservation(sampleFirstIceConnected = false) {
     const peers: RTCPeerConnection[] = [], events: any[] = [], peerConnections: any[] = [];
@@ -187,7 +276,18 @@ export async function observeFunctionalClient(page: Page, options: { transportAt
   cdp.on("Network.webSocketFrameSent", sent); cdp.on("Network.webSocketFrameReceived", received);
   await cdp.send("Network.enable");
   const requests = new WeakMap<object, number>();
-  const request = (request: any) => { requests.set(request, Date.now()); };
+  const guestPolls = new Set<ReturnType<typeof observeGuestSubscriptionPoll>>();
+  let passiveReportObservedAtMs: number | null = null;
+  const request = (request: any) => {
+    requests.set(request, Date.now());
+    try {
+      if (request.method() !== "POST" || !/^\/api\/rooms\/[^/]+\/diagnostics$/.test(new URL(request.url()).pathname)) return;
+      // Discard the rest of this existing request immediately; no headers/body retained.
+      if (request.postDataJSON()?.note !== "media_connected_passive") return;
+      passiveReportObservedAtMs = Date.now();
+      for (const poll of guestPolls) poll.lifecycle("media_connected_passive", passiveReportObservedAtMs);
+    } catch { /* Not a diagnostics JSON request. */ }
+  };
   const failedRequest = (request: any) => {
     const path = new URL(request.url()).pathname;
     if (path === "/api/tokens/media" || /\/plugins\/(?:runtime|bindings)/.test(path)) {
@@ -219,6 +319,21 @@ export async function observeFunctionalClient(page: Page, options: { transportAt
   await page.addInitScript(installFunctionalBrowserObservation, options.transportAtFirstIceConnected === true);
   return {
     mark(label: string) { add({ kind: "checkpoint", label }); },
+    observeGuestSubscription(presenter: number) {
+      const poll = observeGuestSubscriptionPoll(presenter);
+      guestPolls.add(poll);
+      if (passiveReportObservedAtMs !== null) poll.lifecycle("media_connected_passive", passiveReportObservedAtMs);
+      return poll;
+    },
+    /** Read only bounded one-shot facts already collected by the init script.
+     * Unlike snapshot(), this does NOT request fresh native getStats. */
+    async collectedTransportSnapshot() {
+      return collectedTransportFacts(await bounded(page.evaluate(() => {
+        const observation = (window as any).__functionalObservation;
+        return { browserNowMs: performance.now(), browserWallTimeMs: Date.now(),
+          peerConnections: (observation?.peerConnections ?? []).slice(0, 16) };
+      }).catch(() => ({ unavailable: true } as any)), { unavailable: true, sampleTimedOut: true } as any));
+    },
     async snapshot() {
       const begin = Date.now();
       const facts = await bounded(page.evaluate(async () => {
@@ -271,6 +386,7 @@ export async function observeFunctionalClient(page: Page, options: { transportAt
       return { ...facts, media, observationStartedAtMs: started, sampleMs: Date.now() - begin, events: [...events], browserEvents: facts.events };
     },
     async close() {
+      guestPolls.clear();
       page.off("request", request); page.off("response", response); page.off("requestfailed", failedRequest);
       cdp.off("Network.webSocketCreated", created); cdp.off("Network.webSocketClosed", closed);
       cdp.off("Network.webSocketFrameSent", sent); cdp.off("Network.webSocketFrameReceived", received);

@@ -3,7 +3,7 @@ import { PDFDocument, rgb } from "pdf-lib";
 import { installFunctionalFrameBudget } from "./functional-frame-budget";
 import { chooseMeetingPanel, meetingRequest } from "./meeting-tools-acceptance";
 import { createDocumentMeeting } from "./document-meeting-scenarios";
-import { observeFunctionalClient, writeFunctionalDiagnostics, type FunctionalObservation } from "./functional-diagnostics";
+import { finalizeFunctionalDiagnostics, observeFunctionalClient, writeFunctionalDiagnostics, type FunctionalObservation } from "./functional-diagnostics";
 
 type Input = { browser: Browser; request: APIRequestContext; origin: string; adminToken: string; expectedProtocol?: 1 | 2 };
 
@@ -202,6 +202,7 @@ export async function nativeToolCaptureScenario(input: Input) {
   const meeting = await createDocumentMeeting({ ...input, mobile: false,
     async preparePage(page) { diagnostics.push(await observeFunctionalClient(page, { transportAtFirstIceConnected: true })); } });
   const pages: Page[] = [];
+  let failed = false;
   try {
     const host = await meeting.enter("host"), guest = await meeting.enter("guest");
     pages.push(host.page, guest.page);
@@ -246,23 +247,24 @@ export async function nativeToolCaptureScenario(input: Input) {
     await expect.poll(() => host.page.evaluate(() => (window as any).__nativeToolCapture.stream.getTracks().every((track: MediaStreamTrack) => track.readyState === "ended")), { timeout: 20_000 }).toBe(true);
     await expect.poll(() => guest.page.evaluate(() => (window as any).__VRATA_DEBUG__?.screenShare?.remoteSubscribedTrackCount), { timeout: 20_000 }).toBe(0);
   } catch (error) {
-    await writeFunctionalDiagnostics("F7-before-cleanup", {
-      clients: await Promise.all(diagnostics.map(value => value.snapshot())),
-      capture: await Promise.all(pages.map(page => page.evaluate(() => {
-        const c = (window as any).__nativeToolCapture;
-        return c ? { calls: c.calls, active: c.active, requestedAt: c.requestedAt, resolvedAt: c.resolvedAt, failedAt: c.failedAt, error: c.error, originalErrors: c.originalErrors,
-          tracks: c.stream?.getTracks().map((track: MediaStreamTrack) => ({ kind: track.kind, ready: track.readyState })) } : null;
-      }).catch(() => ({ unavailable: true }))))
-    });
-    const facts = await Promise.all(pages.map(page => page.evaluate(() => {
-      const debug = (window as any).__VRATA_DEBUG__;
-      return { scene: debug?.sceneBundleState, connected: debug?.roomStateConnected, state: debug?.screenShareState,
-        share: debug?.screenShare, issue: debug?.issueCode,
-        videos: [...document.querySelectorAll("video")].map(video => ({ width: video.videoWidth, height: video.videoHeight, ready: video.readyState,
-          paused: video.paused, frames: video.getVideoPlaybackQuality().totalVideoFrames })) };
-    }).catch(() => ({ unavailable: true }))));
-    console.warn("native_tool_capture_failed", JSON.stringify(facts)); throw error;
-  } finally { await Promise.allSettled(diagnostics.map(value => value.close())); await meeting.close(); }
+    failed = true;
+    console.warn("native_tool_capture_failed"); throw error;
+  } finally {
+    await finalizeFunctionalDiagnostics(failed, async () => {
+      await writeFunctionalDiagnostics("F7-before-cleanup", {
+        outcome: failed ? "failed" : "passed",
+        clients: await Promise.all(diagnostics.map(value => failed ? value.snapshot() : value.collectedTransportSnapshot())),
+        // Success needs no extra capture/evaluate: its original assertions stand.
+        ...(failed ? { capture: await Promise.all(pages.map(page => page.evaluate(() => {
+          const c = (window as any).__nativeToolCapture;
+          const errorName = (value: any) => ["NotAllowedError", "NotFoundError", "NotReadableError", "AbortError", "NotSupportedError", "Error", "TypeError"].includes(value?.name) ? value.name : null;
+          return c ? { calls: c.calls, active: c.active, requestedAt: c.requestedAt, resolvedAt: c.resolvedAt, failedAt: c.failedAt,
+            errorName: errorName(c.error), originalErrors: c.originalErrors.slice(0, 16).map((value: any) => ({ atMs: value.atMs, name: errorName(value) })),
+            tracks: c.stream?.getTracks().slice(0, 4).map((track: MediaStreamTrack) => ({ kind: track.kind, ready: track.readyState })) } : null;
+        }).catch(() => ({ unavailable: true })))) } : {})
+      });
+    }, async () => { await Promise.allSettled(diagnostics.map(value => value.close())); await meeting.close(); });
+  }
 }
 
 export async function unsupportedCaptureAttemptScenario(input: Input) {
