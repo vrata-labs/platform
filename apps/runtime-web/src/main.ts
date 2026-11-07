@@ -5738,24 +5738,24 @@ const mediaRoomConnection = createCoalescedConnection<Room>({
     runtimeSessionGate.assertActive();
     setupAudio(room);
     setupMediaTransportDiagnostics(room);
-    mediaLifecycle.start(room, "connect");
+    const connectExecution = mediaLifecycle.start(room, "connect");
     try {
       await room.connect(voicePlan.livekitUrl, voicePlan.token);
-      mediaLifecycle.finish(room, "connect", "succeeded");
+      mediaLifecycle.finish(room, "connect", "succeeded", connectExecution);
     } catch (error) {
-      mediaLifecycle.finish(room, "connect", "failed");
+      mediaLifecycle.finish(room, "connect", "failed", connectExecution);
       mediaDiagnosticsTransports = [];
       debugState.media.webrtc = createUnavailableWebRtcDiagnostics("livekit_connect_failed");
       throw error;
     }
     runtimeSessionGate.assertActive();
     setupMediaTransportDiagnostics(room);
-    mediaLifecycle.start(room, "devices");
+    const devicesExecution = mediaLifecycle.start(room, "devices");
     try {
       await applyPreferredAudioDevices(room);
-      mediaLifecycle.finish(room, "devices", "succeeded");
+      mediaLifecycle.finish(room, "devices", "succeeded", devicesExecution);
     } catch (error) {
-      mediaLifecycle.finish(room, "devices", "failed");
+      mediaLifecycle.finish(room, "devices", "failed", devicesExecution);
       throw error;
     }
   },
@@ -5794,21 +5794,21 @@ async function ensureBaseMediaRoom(): Promise<Room> {
 }
 
 function installMediaRoom(room: Room): void {
-  mediaLifecycle.start(room, "install");
+  const installExecution = mediaLifecycle.start(room, "install");
   livekitRoom = room;
   mediaRoomReady = true;
   mediaLifecycle.installed(room);
-  mediaLifecycle.finish(room, "install", "succeeded");
+  mediaLifecycle.finish(room, "install", "succeeded", installExecution);
   setupMediaTransportDiagnostics(room);
   void refreshWebRtcDiagnostics().catch(() => undefined);
-  mediaLifecycle.start(room, "reconcile");
+  const reconcileExecution = mediaLifecycle.start(room, "reconcile");
   try {
     syncRemoteBrowserLiveKitTracks();
     syncScreenShareLiveKitTracks();
     reconcileRemoteAudioTracksWithPresence();
-    mediaLifecycle.finish(room, "reconcile", "succeeded");
+    mediaLifecycle.finish(room, "reconcile", "succeeded", reconcileExecution);
   } catch (error) {
-    mediaLifecycle.finish(room, "reconcile", "failed");
+    mediaLifecycle.finish(room, "reconcile", "failed", reconcileExecution);
     throw error;
   }
   startShareButton.disabled = !canUseScreenShareControl();
@@ -5845,20 +5845,20 @@ const mediaSourceUpgrade = createMediaSourceUpgrade<Room, Awaited<ReturnType<typ
   connect: async (room, plan) => {
     setupAudio(room);
     setupMediaTransportDiagnostics(room);
-    mediaLifecycle.start(room, "connect");
+    const connectExecution = mediaLifecycle.start(room, "connect");
     try {
       await room.connect(plan.livekitUrl, plan.token);
-      mediaLifecycle.finish(room, "connect", "succeeded");
+      mediaLifecycle.finish(room, "connect", "succeeded", connectExecution);
     } catch (error) {
-      mediaLifecycle.finish(room, "connect", "failed");
+      mediaLifecycle.finish(room, "connect", "failed", connectExecution);
       throw error;
     }
-    mediaLifecycle.start(room, "devices");
+    const devicesExecution = mediaLifecycle.start(room, "devices");
     try {
       await applyPreferredAudioDevices(room);
-      mediaLifecycle.finish(room, "devices", "succeeded");
+      mediaLifecycle.finish(room, "devices", "succeeded", devicesExecution);
     } catch (error) {
-      mediaLifecycle.finish(room, "devices", "failed");
+      mediaLifecycle.finish(room, "devices", "failed", devicesExecution);
       throw error;
     }
   },

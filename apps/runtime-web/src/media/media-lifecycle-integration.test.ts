@@ -102,6 +102,67 @@ test("actual install observes current reference and exactly one ordered reconcil
   assert.deepEqual(failed.calls, ["browser-reconcile"]);
 });
 
+for (const failOn of [1, 2]) test(`actual concurrent ensure callers retain both installs and latest reconciliation (failure on execution ${failOn})`, async () => {
+  const f = fixture(), room = f.options.create(), error = new Error("original reconciliation failure");
+  let release!: (room: Room) => void, executions = 0;
+  const pendingRoom = new Promise<Room>(resolve => { release = resolve; });
+  Object.assign(f.options, { ensure() { f.calls.push("ensure"); return pendingRoom; } });
+  f.context.syncRemoteBrowserLiveKitTracks = () => { executions++; f.time(executions * 10 + 1); f.calls.push("browser-reconcile"); };
+  f.context.syncScreenShareLiveKitTracks = () => {
+    f.time(executions * 10 + 2); f.calls.push("screen-reconcile");
+    if (executions === failOn) throw error;
+  };
+  f.context.reconcileRemoteAudioTracksWithPresence = () => { f.time(executions * 10 + 3); f.calls.push("audio-reconcile"); };
+  const ensure = load<() => Promise<Room>>("ensureBaseMediaRoom", f.context, ["installMediaRoom"]);
+  const first = ensure(), second = ensure();
+  assert.deepEqual(f.calls, ["ensure", "ensure"]);
+  release(room);
+  const results = await Promise.allSettled([first, second]);
+  assert.equal(executions, 2);
+  for (const [index, result] of results.entries()) {
+    assert.equal(result.status, index + 1 === failOn ? "rejected" : "fulfilled");
+    if (result.status === "rejected") assert.equal(result.reason, error);
+    else assert.equal(result.value, room);
+  }
+  const firstCompleted = failOn === 1 ? 12 : 13, latestCompleted = failOn === 2 ? 22 : 23;
+  const snapshot = f.mediaLifecycle.snapshot()!;
+  assert.equal(f.context.livekitRoom, room);
+  assert.equal(f.context.mediaRoomReady, true);
+  assert.equal(snapshot.currentGeneration, 1);
+  assert.equal(snapshot.generations[0]!.stages.reconcile.status, failOn === 2 ? "failed" : "succeeded");
+  assert.equal(snapshot.generations[0]!.stages.reconcile.completedAtMs, latestCompleted);
+  assert.deepEqual(snapshot.generations[0]!.stages.install,
+    { execution: 2, status: "succeeded", startedAtMs: firstCompleted, completedAtMs: firstCompleted });
+  assert.deepEqual(snapshot.generations[0]!.stages.reconcile,
+    { execution: 2, status: failOn === 2 ? "failed" : "succeeded", startedAtMs: firstCompleted, completedAtMs: latestCompleted });
+  assert.deepEqual(snapshot.events.filter(event => event.stage === "reconcile").map(event => [event.execution, event.outcome, event.atMs]),
+    [[1, "pending", 10], [1, failOn === 1 ? "failed" : "succeeded", firstCompleted],
+      [2, "pending", firstCompleted], [2, failOn === 2 ? "failed" : "succeeded", latestCompleted]]);
+  assert.deepEqual(f.calls, ["ensure", "ensure", "browser-reconcile", "screen-reconcile", ...(failOn === 1 ? [] : ["audio-reconcile"]),
+    "browser-reconcile", "screen-reconcile", ...(failOn === 2 ? [] : ["audio-reconcile"])]);
+});
+
+test("actual reentrant install keeps the newest execution summary when the older reconciliation finishes late", () => {
+  const f = fixture(), room = f.options.create();
+  const install = load<(room: Room) => void>("installMediaRoom", f.context);
+  const error = new Error("nested original error");
+  let nested = false, insideNested = false;
+  f.context.syncRemoteBrowserLiveKitTracks = () => {
+    if (!nested) {
+      nested = true; insideNested = true; f.time(20);
+      assert.throws(() => install(room), actual => actual === error);
+      insideNested = false; f.time(30);
+    }
+  };
+  f.context.syncScreenShareLiveKitTracks = () => { if (insideNested) throw error; };
+  install(room);
+  const snapshot = f.mediaLifecycle.snapshot()!;
+  assert.deepEqual(snapshot.generations[0]!.stages.reconcile,
+    { execution: 2, status: "failed", startedAtMs: 20, completedAtMs: 20 });
+  assert.deepEqual(snapshot.events.filter(event => event.stage === "reconcile").map(event => [event.execution, event.outcome, event.atMs]),
+    [[1, "pending", 10], [2, "pending", 20], [2, "failed", 20], [1, "succeeded", 30]]);
+});
+
 test("actual subscription ignores preinstall/stale callbacks and logs the unchanged binding verdict exactly once", () => {
   const f = fixture(), room = f.options.create();
   const handlers = new Map<string, (...args: any[]) => void>();
@@ -124,6 +185,30 @@ test("actual subscription ignores preinstall/stale callbacks and logs the unchan
   handlers.get("disconnect")!();
   assert.equal(f.mediaLifecycle.snapshot()!.currentGeneration, null);
   assert.equal(f.mediaLifecycle.snapshot()!.generations[0]!.invalidationReason, "disconnected");
+});
+
+test("actual identical noncurrent subscription before install and after invalidation retains both callback times", () => {
+  const f = fixture(), room = f.options.create();
+  const handlers = new Map<string, (...args: any[]) => void>();
+  Object.assign(room, { on(name: string, callback: (...args: any[]) => void) { handlers.set(name, callback); return room; } });
+  Object.assign(f.context, {
+    RoomEvent: { Disconnected: "disconnect", TrackSubscribed: "subscribe" }, Track: { Kind: { Video: "video", Audio: "audio" } },
+    shouldHandleMediaRoomEvent: (current: Room | null, observed: Room) => current === observed,
+    resolveRemoteBrowserObjectForTrack() { throw new Error("guard must still skip resolver"); },
+    resolveScreenShareObjectForTrack() { throw new Error("guard must still skip resolver"); }
+  });
+  load<(room: Room) => void>("setupAudio", f.context)(room);
+  f.time(11); handlers.get("subscribe")!({ kind: "video" }, {}, {});
+  f.time(12); handlers.get("subscribe")!({ kind: "video" }, {}, {});
+  f.time(13); handlers.get("disconnect")!();
+  f.time(14); handlers.get("subscribe")!({ kind: "video" }, {}, {});
+  f.time(15); handlers.get("subscribe")!({ kind: "video" }, {}, {});
+  const snapshot = f.mediaLifecycle.snapshot()!;
+  assert.equal(snapshot.currentGeneration, null);
+  assert.equal(snapshot.generations[0]!.invalidatedAtMs, 13);
+  assert.deepEqual(snapshot.events.filter(event => event.stage === "subscription").map(event => [event.relation, event.reason, event.atMs]),
+    [["attempt", "room-not-current", 11], ["invalidated", "room-not-current", 14]]);
+  assert.deepEqual(f.calls, []);
 });
 
 test("actual private screen binding resolves once and exposes only the observed safe reason", () => {

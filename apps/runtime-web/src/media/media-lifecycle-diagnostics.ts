@@ -16,7 +16,7 @@ const reasons = {
 type VerdictStage = keyof typeof reasons;
 const invalidations = ["cleared", "disconnected", "replaced", "failed", "session-blocked", "discarded"] as const;
 type Invalidation = typeof invalidations[number];
-interface Phase { status: Status; startedAtMs: number | null; completedAtMs: number | null }
+interface Phase { execution: number | null; status: Status; startedAtMs: number | null; completedAtMs: number | null }
 interface Generation {
   generation: number;
   relation: Relation;
@@ -27,6 +27,7 @@ interface Generation {
 }
 interface Event {
   generation: number;
+  execution: number | null;
   relation: Relation;
   atMs: number | null;
   stage: MediaLifecycleStage | VerdictStage | "generation";
@@ -51,6 +52,9 @@ export function createMediaLifecycleDiagnostics(enabled: boolean, now: () => num
   const history: Generation[] = [];
   const events: Event[] = [];
   const verdicts = new Map<number, Partial<Record<VerdictStage, string>>>();
+  // Handles live only as long as their actual callers; no retained per-execution history.
+  const executions = new WeakMap<object, { item: Generation; stage: MediaLifecycleStage; execution: number | null; completed: boolean }>();
+  const latestExecutions = new WeakMap<Phase, object>();
   let latestGeneration: number | null = null, currentGeneration: number | null = null;
   let droppedGenerations = 0, droppedEvents = 0, lastTime = 0, clockValid = true;
   const increment = (value: number) => Math.min(Number.MAX_SAFE_INTEGER, value + 1);
@@ -66,9 +70,9 @@ export function createMediaLifecycleDiagnostics(enabled: boolean, now: () => num
     return null;
   };
   const find = (room: object | null) => enabled && room ? history.find(item => item.generation === keys.get(room)) : undefined;
-  const emit = (item: Generation, stage: Event["stage"], outcome: Event["outcome"], reason: string | null = null, atMs = time()) => {
+  const emit = (item: Generation, stage: Event["stage"], outcome: Event["outcome"], reason: string | null = null, atMs = time(), execution: number | null = null) => {
     if (events.length === MEDIA_LIFECYCLE_LIMITS.events) { events.shift(); droppedEvents = increment(droppedEvents); }
-    events.push({ generation: item.generation, relation: item.relation, atMs, stage, outcome, reason });
+    events.push({ generation: item.generation, execution, relation: item.relation, atMs, stage, outcome, reason });
   };
   const invalidateItem = (item: Generation, reason: Invalidation) => {
     if (item.relation === "invalidated") return;
@@ -85,7 +89,7 @@ export function createMediaLifecycleDiagnostics(enabled: boolean, now: () => num
       keys.set(room, latestGeneration);
       const item: Generation = { generation: latestGeneration, relation: "attempt", createdAtMs: time(),
         invalidatedAtMs: null, invalidationReason: null,
-        stages: Object.fromEntries(stages.map(stage => [stage, { status: "not-started", startedAtMs: null, completedAtMs: null }])) as Generation["stages"] };
+        stages: Object.fromEntries(stages.map(stage => [stage, { execution: null, status: "not-started", startedAtMs: null, completedAtMs: null }])) as Generation["stages"] };
       if (history.length === MEDIA_LIFECYCLE_LIMITS.generations) {
         const index = history.findIndex(previous => previous.generation !== currentGeneration);
         const [removed] = history.splice(index, 1);
@@ -95,20 +99,32 @@ export function createMediaLifecycleDiagnostics(enabled: boolean, now: () => num
       history.push(item);
       emit(item, "generation", "created", null, item.createdAtMs);
     },
-    start(room: object, stage: MediaLifecycleStage): void {
+    start(room: object, stage: MediaLifecycleStage): object | null {
       const item = find(room);
-      if (!item || !stages.includes(stage) || item.stages[stage].status !== "not-started") return;
+      if (!item || !stages.includes(stage)) return null;
       const phase = item.stages[stage];
-      phase.status = "pending"; phase.startedAtMs = time();
-      emit(item, stage, "pending", null, phase.startedAtMs);
+      // Null after ordinal exhaustion is explicit; handle identity still correlates completions.
+      const execution = phase.status === "not-started" ? 1
+        : phase.execution === null || phase.execution === Number.MAX_SAFE_INTEGER ? null : phase.execution + 1;
+      const handle = {};
+      executions.set(handle, { item, stage, execution, completed: false });
+      latestExecutions.set(phase, handle);
+      phase.execution = execution; phase.status = "pending"; phase.startedAtMs = time(); phase.completedAtMs = null;
+      emit(item, stage, "pending", null, phase.startedAtMs, execution);
+      return handle;
     },
-    finish(room: object, stage: MediaLifecycleStage, outcome: "succeeded" | "failed"): void {
+    finish(room: object, stage: MediaLifecycleStage, outcome: "succeeded" | "failed", handle: object | null): void {
       const item = find(room);
-      if (!item || !stages.includes(stage) || item.stages[stage].status !== "pending"
+      const run = handle && executions.get(handle);
+      if (!item || !run || run.item !== item || run.stage !== stage || run.completed
         || outcome !== "succeeded" && outcome !== "failed") return;
+      run.completed = true;
       const phase = item.stages[stage];
-      phase.status = outcome; phase.completedAtMs = time();
-      emit(item, stage, outcome, null, phase.completedAtMs);
+      const completedAtMs = time();
+      if (latestExecutions.get(phase) === handle) {
+        phase.status = outcome; phase.completedAtMs = completedAtMs;
+      }
+      emit(item, stage, outcome, null, completedAtMs, run.execution);
     },
     installed(room: object): void {
       const item = find(room);
@@ -127,7 +143,7 @@ export function createMediaLifecycleDiagnostics(enabled: boolean, now: () => num
     verdict<S extends VerdictStage>(room: object | null, stage: S, accepted: boolean, reason: typeof reasons[S][number]): void {
       const item = find(room);
       if (!item || !Object.hasOwn(reasons, stage) || !(reasons[stage] as readonly string[]).includes(reason)) return;
-      const value = `${accepted}:${reason}`;
+      const value = `${item.relation}:${accepted}:${reason}`;
       const previous = verdicts.get(item.generation) ?? {};
       if (previous[stage] === value) return;
       previous[stage] = value;
