@@ -2,11 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
+import { resolve } from "node:path";
 import { syncBuiltinESMExports } from "node:module";
 import { mkdtemp, readFile, readdir, stat, rm } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
+import ts from "typescript";
 import { collectedTransportFacts, finalizeFunctionalDiagnostics, guestSubscriptionFacts, mediaFacts, mediaParticipantFacts, observeFunctionalClient,
-  observeGuestSubscriptionPoll, observeMeetingPanelPoll, installFunctionalBrowserObservation, writeFunctionalDiagnostics } from "./functional-diagnostics.ts";
+  observeGuestSubscriptionPoll, observeMeetingPanelPoll, installFunctionalBrowserObservation, readGuestSubscriptionSample, writeFunctionalDiagnostics } from "./functional-diagnostics.ts";
 
 test("media diagnostics correlate object/track/revision without retaining content or owner IDs", () => {
   const media = { surfaces: { wall: { surfaceId: "whiteboard-wall", activeObjectId: "object-private", textureId: 3 } },
@@ -238,6 +240,7 @@ test("Guest samples preserve raw result/rejection, do not infer installation fro
   assert.equal(rows[1].presenter, null); assert.equal(rows[2].event, "sample-reject");
   assert.doesNotMatch(JSON.stringify(rows), /private|native\/session/);
   assert.deepEqual(guestSubscriptionFacts(null), { subscribed: null, browserNowMs: null, browserWallTimeMs: null,
+    browserTimeOriginMs: null, browserClockDomain: "browser:performance.now", mediaLifecycle: readGuestSubscriptionSample({ project: null }).mediaLifecycle,
     passiveStartupCompleted: null, passiveStartupFailed: null, shareErrorPresent: null, activeScreenPresent: null, surfaceHasTexture: null, videoElements: null });
   const facts = guestSubscriptionFacts({ subscribed: -1, browserNowMs: Infinity, browserWallTimeMs: NaN,
     passiveStartupCompleted: "private", passiveStartupFailed: false, videoElements: 999999, surfaceHasTexture: true, binding: "secret" });
@@ -526,5 +529,187 @@ test("F7 success and failure collected DTO exports are private files written bef
     if (previous === undefined) delete process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
     else process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR = previous;
     await rm(root, { recursive: true });
+  }
+});
+
+function lifecycleFixture() {
+  const generation = (id: number, relation = "attempt") => ({ generation: id, relation, createdAtMs: 1,
+    invalidatedAtMs: null as number | null, invalidationReason: null as string | null,
+    stages: Object.fromEntries(["connect", "devices", "install", "reconcile"].map(stage => [stage,
+      { execution: null as number | null, status: "not-started", startedAtMs: null as number | null, completedAtMs: null as number | null }])) });
+  return { schema: 1, clock: "performance.now", clockValid: true, observedAtMs: 100 as number | null,
+    currentGeneration: 1 as number | null, latestGeneration: 2 as number | null, droppedGenerations: 0, droppedEvents: 0,
+    generations: [generation(1, "current"), generation(2)], events: [] as any[] };
+}
+
+function compiledGuestEvaluator() {
+  const source = fs.readFileSync(resolve("tests/e2e/functional-diagnostics.ts"), "utf8");
+  const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
+  const ast = ts.createSourceFile("compiled.js", compiled, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS);
+  const declaration = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "readGuestSubscriptionSample");
+  assert.ok(declaration);
+  return declaration.getText(ast).replace(/^export /, "");
+}
+
+function evaluateGuest(debug: any, now = 100, evaluator = compiledGuestEvaluator()) {
+  // Deliberately no imports, Node helpers, SDK, RTC, timers or network globals.
+  return JSON.parse(JSON.stringify(runInNewContext(`(${evaluator})(undefined)`, {
+    window: { __VRATA_DEBUG__: debug }, performance: { now: () => now, timeOrigin: 1_000_000 },
+    Date: { now: () => 1_000_100 }, document: { querySelectorAll: () => [] }
+  })));
+}
+
+test("compiled original Guest evaluator reads lifecycle getter once, preserves app count, and contains no imported closure", () => {
+  let reads = 0;
+  const lifecycle = lifecycleFixture(), debug = { screenShare: { remoteSubscribedTrackCount: 0 }, audioState: "connected-passive",
+    get mediaLifecycle() { reads++; return lifecycle; },
+    get nativePC() { throw new Error("must not inspect RTC or SDK"); } };
+  const evaluator = compiledGuestEvaluator(), result = evaluateGuest(debug, 100, evaluator);
+  assert.equal(reads, 1); assert.equal(result.subscribed, 0);
+  assert.equal(result.browserNowMs, 100); assert.equal(result.browserTimeOriginMs, 1_000_000);
+  assert.equal(result.mediaLifecycle.availability, "present");
+  assert.equal(result.mediaLifecycle.selection, "current"); assert.equal(result.mediaLifecycle.summaryGeneration, 1);
+  assert.equal(result.mediaLifecycle.latestGeneration, 2); // newer attempt is not installed
+  debug.screenShare.remoteSubscribedTrackCount = 1;
+  assert.equal(evaluateGuest(debug, 100, evaluator).subscribed, 1); assert.equal(reads, 2);
+  assert.equal(evaluateGuest({}, 100, evaluator).mediaLifecycle.availability, "missing");
+  const throwing = { screenShare: { remoteSubscribedTrackCount: 1 }, get mediaLifecycle() { throw new Error("private-token"); } };
+  const bad = evaluateGuest(throwing, 100, evaluator);
+  assert.equal(bad.subscribed, 1); assert.equal(bad.mediaLifecycle.availability, "invalid");
+  assert.doesNotMatch(JSON.stringify(bad), /private-token/);
+  assert.equal(evaluateGuest({ mediaLifecycle: { schema: 999 } }, 100, evaluator).mediaLifecycle.availability, "invalid");
+});
+
+test("Guest chooses current relation, retains invalidated history without claiming current or readiness", () => {
+  const lifecycle = lifecycleFixture();
+  lifecycle.currentGeneration = null;
+  lifecycle.generations[0].relation = "invalidated"; lifecycle.generations[0].invalidatedAtMs = 80;
+  lifecycle.generations[0].invalidationReason = "disconnected";
+  let facts = guestSubscriptionFacts({ subscribed: 0, browserNowMs: 100, passiveStartupCompleted: true, mediaLifecycle: lifecycle });
+  assert.equal(facts.mediaLifecycle.selection, "latest-history-no-current"); assert.equal(facts.mediaLifecycle.currentGeneration, null);
+  assert.equal(facts.mediaLifecycle.generations[0].invalidationReason, "disconnected");
+  lifecycle.generations[1].relation = "invalidated"; lifecycle.generations[1].invalidationReason = "failed";
+  facts = guestSubscriptionFacts({ browserNowMs: 100, mediaLifecycle: lifecycle });
+  assert.equal(facts.mediaLifecycle.selection, "latest-history-no-current");
+  lifecycle.currentGeneration = 2; // corrupt/stale pointer cannot restore an invalidated generation
+  facts = guestSubscriptionFacts({ browserNowMs: 100, mediaLifecycle: lifecycle });
+  assert.equal(facts.mediaLifecycle.selection, "unknown");
+  assert.doesNotMatch(JSON.stringify(facts), /"ready"|"passed"/);
+});
+
+test("Guest phase summary uses latest STARTED execution, never a stale completion from another execution/generation/stage", () => {
+  const lifecycle = lifecycleFixture(), phase = lifecycle.generations[0].stages.install;
+  Object.assign(phase, { execution: 2, status: "pending", startedAtMs: 80 });
+  lifecycle.events.push({ generation: 1, execution: 1, relation: "current", atMs: 90, stage: "install", outcome: "succeeded", reason: null });
+  const facts = () => guestSubscriptionFacts({ browserNowMs: 100, mediaLifecycle: lifecycle }).mediaLifecycle.generations[0].stages.install;
+  assert.equal(facts().atSample, "pending-at-sample"); assert.equal(facts().matchingCompletionEventAtMs, null);
+  Object.assign(phase, { status: "failed", completedAtMs: 95 });
+  assert.equal(facts().atSample, "unknown");
+  const completion = { generation: 1, execution: 2, relation: "current", atMs: 95, stage: "install", outcome: "failed", reason: null };
+  lifecycle.events.push({ ...completion, generation: 2 }, { ...completion, stage: "connect" });
+  assert.equal(facts().atSample, "unknown");
+  lifecycle.events.push(completion);
+  assert.equal(facts().atSample, "completed-before-or-at-sample"); assert.equal(facts().status, "failed");
+  assert.equal(facts().execution, 2); assert.equal(facts().matchingCompletionEventAtMs, 95);
+  lifecycle.events.push({ ...completion, execution: 1, outcome: "succeeded", atMs: 99 });
+  assert.equal(facts().status, "failed"); assert.equal(facts().matchingCompletionEventAtMs, 95);
+});
+
+test("Guest browser-clock boundaries, null/exhausted ordinals and lost history stay explicit uncertainty", () => {
+  const cases = [
+    { time: 99, expected: "completed-before-or-at-sample" }, { time: 100, expected: "completed-before-or-at-sample" },
+    { time: 101, expected: "unknown" }, { time: null, expected: "unknown" }, { time: Infinity, expected: "unknown" },
+    { time: 99, clockValid: false, expected: "unknown" }, { time: 99, observed: null, expected: "unknown" },
+    { time: 99, observed: 101, expected: "unknown" }, { time: 99, browser: null, expected: "unknown" },
+    { time: 99, execution: null, expected: "unknown" }, { time: 99, execution: Number.MAX_SAFE_INTEGER + 1, expected: "unknown" },
+    { time: 99, execution: Number.MAX_SAFE_INTEGER, expected: "completed-before-or-at-sample" },
+    { time: 99, droppedEvents: 1, expected: "unknown" }, { time: 99, droppedGenerations: 1, expected: "unknown" }
+  ];
+  for (const c of cases) {
+    const lifecycle = lifecycleFixture(), execution = "execution" in c ? c.execution : 1;
+    Object.assign(lifecycle.generations[0].stages.connect, { execution, status: "succeeded", startedAtMs: 10, completedAtMs: c.time });
+    Object.assign(lifecycle, { clockValid: c.clockValid ?? true, observedAtMs: "observed" in c ? c.observed : 100,
+      droppedEvents: c.droppedEvents ?? 0, droppedGenerations: c.droppedGenerations ?? 0 });
+    lifecycle.events.push({ generation: 1, execution, relation: "attempt", atMs: c.time, stage: "connect", outcome: "succeeded", reason: null });
+    const result = guestSubscriptionFacts({ browserNowMs: "browser" in c ? c.browser : 100, mediaLifecycle: lifecycle }).mediaLifecycle;
+    assert.equal(result.generations[0].stages.connect.atSample, c.expected, JSON.stringify(c));
+    assert.equal(result.historyComplete, !c.droppedEvents && !c.droppedGenerations);
+  }
+});
+
+test("Guest lifecycle projection deep-copies strict allowlists with finite bounds and safe verdict reasons", () => {
+  const lifecycle: any = lifecycleFixture();
+  lifecycle.events.push({ generation: 1, execution: null, relation: "current", atMs: 90, stage: "screen-share-sdk-attach", outcome: "accepted", reason: "returned",
+    participantId: "private-person", url: "https://private", token: "secret" });
+  lifecycle.events.push({ generation: 1, execution: null, relation: "current", atMs: 91, stage: "screen-share-attach", outcome: "accepted", reason: "registered" });
+  const value = { browserNowMs: 100, mediaLifecycle: lifecycle };
+  const original = guestSubscriptionFacts(value);
+  lifecycle.events[0].reason = "threw"; lifecycle.generations[0].stages.connect.status = "failed";
+  assert.equal(original.mediaLifecycle.events[0].reason, "returned");
+  assert.equal(original.mediaLifecycle.generations[0].stages.connect.status, "not-started");
+  assert.doesNotMatch(JSON.stringify(original), /private|secret|participantId|token|https|"ready"/);
+  lifecycle.events[0].reason = "private-error-token";
+  let projected = guestSubscriptionFacts(value).mediaLifecycle;
+  assert.equal(projected.availability, "invalid"); assert.equal(projected.events[0].reason, null);
+  assert.equal(projected.generations[0].stages.install.atSample, "unknown");
+  lifecycle.generations = Array(20).fill(lifecycle.generations[0]); lifecycle.events = Array(100).fill(lifecycle.events[0]);
+  projected = guestSubscriptionFacts(value).mediaLifecycle;
+  assert.equal(projected.generations.length, 8); assert.equal(projected.events.length, 64);
+  assert.equal(projected.projectionDroppedGenerations, 12); assert.equal(projected.projectionDroppedEvents, 36);
+  assert.equal(projected.availability, "invalid"); assert.equal(projected.historyComplete, false);
+  for (const broken of [false, "private", { schema: 1, clock: "performance.now" }, { get schema() { throw new Error("secret"); } }]) {
+    const facts = guestSubscriptionFacts({ subscribed: 1, mediaLifecycle: broken });
+    assert.equal(facts.subscribed, 1); assert.equal(facts.mediaLifecycle.availability, "invalid");
+    assert.doesNotMatch(JSON.stringify(facts), /private|secret/);
+  }
+});
+
+test("actual F1 callsite serializes the standalone evaluator in its SAME original count1/20s poll promise", async () => {
+  const spec = fs.readFileSync(resolve("tests/e2e/media-source-grants.spec.ts"), "utf8");
+  const ast = ts.createSourceFile("spec.ts", spec, ts.ScriptTarget.ES2022, true);
+  const calls: ts.CallExpression[] = [];
+  const visit = (node: ts.Node) => { if (ts.isCallExpression(node) && node.expression.getText(ast) === "guestPoll.start") calls.push(node); ts.forEachChild(node, visit); };
+  visit(ast); assert.equal(calls.length, 1);
+  const source = calls[0].getText(ast);
+  assert.equal((source.match(/\.evaluate\(/g) ?? []).length, 1); assert.doesNotMatch(source, /intervals|flush|mediaLifecycle|await/);
+  const evaluator = compiledGuestEvaluator(), lifecycle = lifecycleFixture();
+  let reads = 0, evaluations = 0, sinkCalls = 0, protectedDone = false, original: Promise<any> | null = null;
+  const rows: any[] = [], gate = deferred<void>();
+  const guestPoll = observeGuestSubscriptionPoll(1, async row => { sinkCalls++; assert.equal(protectedDone, true); await gate.promise; rows.push(row); });
+  const debug = { screenShare: { remoteSubscribedTrackCount: 1 }, get mediaLifecycle() { reads++; return lifecycle; } };
+  const invocation = runInNewContext(source, { guestPoll, readGuestSubscriptionSample,
+    guest: { page: { evaluate: (fn: unknown) => { assert.equal(fn, readGuestSubscriptionSample); evaluations++; original = Promise.resolve(evaluateGuest(debug, 100, evaluator)); return original; } } },
+    expect: { poll: (predicate: () => Promise<number>, options: any) => {
+      assert.deepEqual(JSON.parse(JSON.stringify(options)), { timeout: 20_000 });
+      return { toBe: async (expected: number) => { assert.equal(expected, 1); assert.equal(await predicate(), 1); assert.equal(sinkCalls, 0); } };
+    } } });
+  await invocation; guestPoll.finish(true);
+  await Promise.resolve(); // following protected assertion, not an earlier diagnostic flush
+  assert.equal(sinkCalls, 0); assert.equal(evaluations, 1); assert.equal(reads, 1); assert.ok(original);
+  protectedDone = true;
+  const flushed = guestPoll.flush(); await Promise.resolve(); assert.equal(sinkCalls, 1); gate.resolve(); await flushed;
+  assert.equal(rows.find(row => row.event === "sample-resolve").facts.mediaLifecycle.summaryGeneration, 1);
+  assert.equal(rows.at(-1).outcome, "passed");
+});
+
+test("Guest Node sample interval only brackets configured boundary; browser-clock lifecycle cannot turn late failure into PASS", async () => {
+  for (const [start, end, expected] of [[1000, 20999, "before-or-at-configured-deadline"], [21000, 21000, "before-or-at-configured-deadline"],
+    [20999, 21001, "unknown"], [21001, 21002, "after-configured-deadline"], [1000, 999, "unknown"]] as const) {
+    let time = 1000;
+    const rows: any[] = [], pending = deferred<any>(), deadline = deferred<never>();
+    const observer = observeGuestSubscriptionPoll(1, row => rows.push(row), () => time);
+    observer.start(() => {}); time = start;
+    const original = observer.sample(() => pending.promise); assert.equal(original, pending.promise);
+    const predicate = Promise.race([original.then(value => value.subscribed), deadline.promise]);
+    deadline.reject(new Error("primary configured predicate failure")); await assert.rejects(predicate, /primary/);
+    observer.finish(false); time = end;
+    pending.resolve(evaluateGuest({ screenShare: { remoteSubscribedTrackCount: 1 }, mediaLifecycle: lifecycleFixture() }, 100)); await original;
+    assert.equal(rows.length, 0); await observer.flush();
+    const resolved = rows.find(row => row.event === "sample-resolve");
+    assert.equal(resolved.sampleWindowVsConfiguredDeadline, expected); assert.equal(resolved.sampleStartedAtMs, start); assert.equal(resolved.sampleResolvedAtMs, end);
+    assert.equal(resolved.clockDomain, "node:Date.now"); assert.equal(resolved.facts.browserClockDomain, "browser:performance.now");
+    assert.equal(resolved.outcome, "failed"); assert.equal(resolved.afterPredicateFinished, true);
+    assert.equal(resolved.facts.browserNowMs, 100); assert.equal(resolved.facts.mediaLifecycle.availability, "present");
+    assert.equal(resolved.deadlineAtMs, undefined); await assert.rejects(predicate, /primary/);
   }
 });

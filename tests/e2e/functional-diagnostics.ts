@@ -82,14 +82,129 @@ export function observeMeetingPanelPoll(context: { actor?: string; section: stri
   };
 }
 
+/** Standalone Playwright evaluator: no module closures survive serialization.
+ * The explicit projection branch also rechecks the browser DTO in Node. Never
+ * return the debug snapshot itself, SDK objects, identifiers or arbitrary props. */
+export function readGuestSubscriptionSample(input?: { project: any } | void) {
+  const number = (v: unknown) => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= Number.MAX_SAFE_INTEGER ? v : null;
+  let sample: any;
+  if (input) sample = input.project;
+  else {
+    const debug = (window as any).__VRATA_DEBUG__;
+    const surface = debug?.mediaObjects?.surfaces?.find((item: any) => item.surfaceId === "debug-main");
+    const active = debug?.mediaObjects?.objects?.find((item: any) => item.objectId === surface?.activeObjectId);
+    const subscribed = debug?.screenShare?.remoteSubscribedTrackCount; // ORIGINAL predicate value, not a diagnostic verdict.
+    let lifecycle: unknown, lifecycleReadFailed = false;
+    try { lifecycle = debug?.mediaLifecycle; } catch { lifecycleReadFailed = true; }
+    sample = { subscribed, mediaLifecycle: lifecycle, lifecycleReadFailed,
+      browserNowMs: performance.now(), browserWallTimeMs: Date.now(), browserTimeOriginMs: performance.timeOrigin,
+      passiveStartupCompleted: debug?.audioState === "connected-passive",
+      passiveStartupFailed: debug?.lastRecoveryAction === "media_passive_connect_failed",
+      shareErrorPresent: !!debug?.screenShare?.errorCode, activeScreenPresent: active?.type === "screen-share",
+      surfaceHasTexture: typeof surface?.textureId === "number", videoElements: document.querySelectorAll("video").length };
+  }
+  const browserNowMs = number(sample?.browserNowMs);
+  const empty = (availability: "missing" | "invalid") => ({ availability, schema: null, clock: null, clockValid: false,
+    observedAtMs: null, latestGeneration: null, currentGeneration: null, droppedGenerations: null, droppedEvents: null,
+    projectionDroppedGenerations: 0, projectionDroppedEvents: 0, historyComplete: null,
+    selection: "unknown", summaryGeneration: null, generations: [] as any[], events: [] as any[] });
+  const project = () => {
+    const raw = sample?.mediaLifecycle;
+    if (sample?.lifecycleReadFailed || raw?.availability === "invalid") return empty("invalid");
+    if (raw == null || raw?.availability === "missing") return empty("missing");
+    if (typeof raw !== "object") return empty("invalid");
+    let valid = raw.schema === 1 && raw.clock === "performance.now" && typeof raw.clockValid === "boolean";
+    const finite = (v: unknown) => { const n = number(v); if (v !== null && n === null) valid = false; return n; };
+    const ordinal = (v: unknown, nullable = true): number | null => {
+      if (nullable && v === null) return null;
+      if (typeof v === "number" && Number.isSafeInteger(v) && v > 0) return v;
+      valid = false; return null;
+    };
+    const count = (v: unknown): number | null => {
+      if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0) return v;
+      valid = false; return null;
+    };
+    const choice = (v: unknown, allowed: readonly string[]): string | null => {
+      if (typeof v === "string" && allowed.includes(v)) return v;
+      valid = false; return null;
+    };
+    const phases = ["connect", "devices", "install", "reconcile"];
+    const relations = ["attempt", "current", "invalidated"];
+    const statuses = ["not-started", "pending", "succeeded", "failed"];
+    const invalidations = ["cleared", "disconnected", "replaced", "failed", "session-blocked", "discarded"];
+    const reasons: Record<string, string[]> = { subscription: ["room-not-current", "current-room"],
+      "remote-browser-binding": ["identity-kind", "no-physical-object", "matched"],
+      "screen-share-binding": ["binding-not-user", "binding-media-only", "no-physical-object", "matched"],
+      "screen-share-attach": ["missing-surface", "reused", "registered"], "remote-browser-attach": ["missing-surface", "reused", "registered"],
+      "screen-share-sdk-attach": ["returned", "threw"], "remote-browser-sdk-attach": ["returned", "threw"] };
+    const observedAtMs = finite(raw.observedAtMs), latestGeneration = ordinal(raw.latestGeneration), currentGeneration = ordinal(raw.currentGeneration);
+    const droppedGenerations = count(raw.droppedGenerations), droppedEvents = count(raw.droppedEvents);
+    if (!Array.isArray(raw.generations) || !Array.isArray(raw.events)) return empty("invalid");
+    const projectionDroppedGenerations = Math.max(0, raw.generations.length - 8), projectionDroppedEvents = Math.max(0, raw.events.length - 64);
+    if (projectionDroppedGenerations || projectionDroppedEvents) valid = false;
+    const generations = raw.generations.slice(0, 8).map((g: any) => ({ generation: ordinal(g?.generation, false),
+      relation: choice(g?.relation, relations), createdAtMs: finite(g?.createdAtMs), invalidatedAtMs: finite(g?.invalidatedAtMs),
+      invalidationReason: g?.invalidationReason === null ? null : choice(g?.invalidationReason, invalidations),
+      stages: Object.fromEntries(phases.map(stage => {
+        const p = g?.stages?.[stage];
+        return [stage, { execution: ordinal(p?.execution), status: choice(p?.status, statuses),
+          startedAtMs: finite(p?.startedAtMs), completedAtMs: finite(p?.completedAtMs), atSample: "unknown",
+          matchingCompletionEventAtMs: null as number | null }];
+      })) }));
+    const events = raw.events.slice(0, 64).map((e: any) => {
+      const stage = choice(e?.stage, [...phases, "generation", ...Object.keys(reasons)]);
+      const outcome = choice(e?.outcome, stage === "generation" ? ["created", "invalidated"] : stage && phases.includes(stage) ? statuses : ["accepted", "rejected"]);
+      const allowedReasons = stage === "generation" && outcome === "invalidated" ? invalidations : stage && Object.hasOwn(reasons, stage) ? reasons[stage] : [];
+      return { generation: ordinal(e?.generation, false), execution: ordinal(e?.execution), relation: choice(e?.relation, relations),
+        atMs: finite(e?.atMs), stage, outcome, reason: e?.reason === null ? null : choice(e?.reason, allowedReasons) };
+    });
+    if (new Set(generations.map((g: any) => g.generation)).size !== generations.length) valid = false;
+    const current = generations.find((g: any) => g.generation === currentGeneration && g.relation === "current");
+    if (generations.some((g: any) => g.relation === "current" && g !== current)) valid = false;
+    const latest = generations.find((g: any) => g.generation === latestGeneration);
+    const historyComplete = droppedGenerations === 0 && droppedEvents === 0 && !projectionDroppedGenerations && !projectionDroppedEvents;
+    const clockValid = raw.clockValid === true;
+    const comparable = clockValid && observedAtMs !== null && browserNowMs !== null && observedAtMs <= browserNowMs;
+    // A phase summary is the latest STARTED execution, not the last completion
+    // event (which can belong to an older concurrent execution).
+    for (const g of generations) for (const stage of phases) {
+      const p = g.stages[stage];
+      const matching = p.execution === null ? [] : events.filter((e: any) => e.generation === g.generation && e.stage === stage
+        && e.execution === p.execution && (e.outcome === "succeeded" || e.outcome === "failed") && e.atMs === p.completedAtMs && e.outcome === p.status);
+      p.matchingCompletionEventAtMs = matching.length ? matching[matching.length - 1].atMs : null;
+      if (!valid || !historyComplete || !comparable || g.createdAtMs === null || g.createdAtMs > observedAtMs!) continue;
+      if (p.status === "not-started" && p.execution === null && p.startedAtMs === null && p.completedAtMs === null) p.atSample = "not-started-at-sample";
+      else if (p.execution !== null && p.startedAtMs !== null && p.startedAtMs <= observedAtMs!) {
+        if (p.status === "pending" && p.completedAtMs === null) p.atSample = "pending-at-sample";
+        else if ((p.status === "succeeded" || p.status === "failed") && p.completedAtMs !== null && p.completedAtMs >= p.startedAtMs
+          && p.completedAtMs <= observedAtMs! && matching.length) p.atSample = "completed-before-or-at-sample";
+      }
+    }
+    return { availability: valid ? "present" : "invalid", schema: raw.schema === 1 ? 1 : null,
+      clock: raw.clock === "performance.now" ? "performance.now" : null, clockValid, observedAtMs, latestGeneration, currentGeneration,
+      droppedGenerations, droppedEvents, projectionDroppedGenerations, projectionDroppedEvents, historyComplete,
+      selection: !valid || currentGeneration !== null && !current ? "unknown" : current ? "current" : latest ? "latest-history-no-current" : "no-current",
+      summaryGeneration: valid && (currentGeneration === null || current) ? (current ?? latest)?.generation ?? null : null, generations, events };
+  };
+  let mediaLifecycle;
+  try { mediaLifecycle = project(); } catch { mediaLifecycle = empty("invalid"); }
+  return { subscribed: sample?.subscribed, browserNowMs, browserWallTimeMs: number(sample?.browserWallTimeMs),
+    browserTimeOriginMs: number(sample?.browserTimeOriginMs), browserClockDomain: "browser:performance.now", mediaLifecycle,
+    passiveStartupCompleted: sample?.passiveStartupCompleted, passiveStartupFailed: sample?.passiveStartupFailed,
+    shareErrorPresent: sample?.shareErrorPresent, activeScreenPresent: sample?.activeScreenPresent,
+    surfaceHasTexture: sample?.surfaceHasTexture, videoElements: sample?.videoElements };
+}
+
 /** Projection of the EXISTING Guest evaluate; no SDK/private room access.
  * connected-passive records a past completed startup, not a connect/device phase
  * or proof the same room is still installed (it may later disconnect).
  * No negative field here proves that installation or binding failed. */
 export function guestSubscriptionFacts(value: any) {
+  const projected = readGuestSubscriptionSample({ project: value });
   const count = (v: unknown) => typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? Math.min(v, 1024) : null;
   const boolean = (v: unknown) => typeof v === "boolean" ? v : null;
-  return { subscribed: count(value?.subscribed), browserNowMs: numeric(value?.browserNowMs), browserWallTimeMs: numeric(value?.browserWallTimeMs),
+  return { subscribed: count(value?.subscribed), browserNowMs: projected.browserNowMs, browserWallTimeMs: projected.browserWallTimeMs,
+    browserTimeOriginMs: projected.browserTimeOriginMs, browserClockDomain: projected.browserClockDomain, mediaLifecycle: projected.mediaLifecycle,
     passiveStartupCompleted: boolean(value?.passiveStartupCompleted), passiveStartupFailed: boolean(value?.passiveStartupFailed),
     shareErrorPresent: boolean(value?.shareErrorPresent), activeScreenPresent: boolean(value?.activeScreenPresent),
     surfaceHasTexture: boolean(value?.surfaceHasTexture), videoElements: count(value?.videoElements) };
@@ -133,7 +248,7 @@ export function observeGuestSubscriptionPoll(presenter: number, sink?: (event: o
     if (diagnosticFailure) return;
     if (queue.length >= maxPending) { fail(); return; }
     const atMs = now(), configuredDeadlineAtMs = configuredStartAtMs === null ? null : configuredStartAtMs + 20_000;
-    queue.push({ actor: "guest", presenter: presenter === 1 || presenter === 2 ? presenter : null,
+    queue.push({ actor: "guest", presenter: presenter === 1 || presenter === 2 ? presenter : null, clockDomain: "node:Date.now",
       configuredStartAtMs, configuredDeadlineAtMs, timeoutMs: 20_000, clockBasis: "node-before-expect-poll-call",
       atMs, afterConfiguredDeadline: configuredDeadlineAtMs === null ? null : atMs > configuredDeadlineAtMs,
       predicateFinishedAtMs, afterPredicateFinished: predicateFinishedAtMs !== null, outcome, ...event });
@@ -155,7 +270,13 @@ export function observeGuestSubscriptionPoll(presenter: number, sink?: (event: o
       }
       if (retained) {
         record({ event: "sample-start", attempt, sampleStartedAtMs });
-        void original.then(value => record({ event: "sample-resolve", attempt, sampleStartedAtMs, facts: guestSubscriptionFacts(value) }),
+        void original.then(value => {
+          const sampleResolvedAtMs = now(), deadline = configuredStartAtMs === null ? null : configuredStartAtMs + 20_000;
+          record({ event: "sample-resolve", attempt, sampleStartedAtMs, sampleResolvedAtMs,
+            sampleWindowVsConfiguredDeadline: deadline === null || sampleStartedAtMs < configuredStartAtMs! || sampleResolvedAtMs < sampleStartedAtMs ? "unknown"
+              : sampleResolvedAtMs <= deadline ? "before-or-at-configured-deadline" : sampleStartedAtMs > deadline ? "after-configured-deadline" : "unknown",
+            facts: guestSubscriptionFacts(value) });
+        },
           () => record({ event: "sample-reject", attempt, sampleStartedAtMs }));
       }
       return original;

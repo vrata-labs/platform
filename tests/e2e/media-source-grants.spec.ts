@@ -8,7 +8,7 @@ import { startLocalLiveKitFixture } from "./local-livekit-fixture.js";
 import { startReferenceTemplateFixture } from "./reference-template-fixture.js";
 import { presenterMeetingScenario } from "./presenter-meeting-scenarios.js";
 import { chooseMeetingPanel } from "./meeting-tools-acceptance.js";
-import { observeFunctionalClient, writeFunctionalDiagnostics, mediaParticipantFacts, type FunctionalObservation } from "./functional-diagnostics.js";
+import { observeFunctionalClient, writeFunctionalDiagnostics, mediaParticipantFacts, readGuestSubscriptionSample, type FunctionalObservation } from "./functional-diagnostics.js";
 
 // Genuine self-hosted RTC and the built main runtime. Credentials/SDP/candidates remain in memory, never in artifacts.
 test.use({ trace: "off", screenshot: "off", video: "off", launchOptions: { args: ["--autoplay-policy=no-user-gesture-required", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] } });
@@ -376,17 +376,8 @@ test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone
         await expect.poll(() => receiver.evaluate(() => (window as any).__sourceObserver.frames), { timeout: 20_000 }).toBeGreaterThan(framesBefore + 2);
         const guestPoll = diagnostics.get(guest.page)!.observeGuestSubscription(index + 1);
         try {
-          await guestPoll.start(() => expect.poll(() => guestPoll.sample(() => guest.page.evaluate(() => {
-            const debug = (window as any).__VRATA_DEBUG__;
-            const surface = debug?.mediaObjects?.surfaces?.find((item: any) => item.surfaceId === "debug-main");
-            const active = debug?.mediaObjects?.objects?.find((item: any) => item.objectId === surface?.activeObjectId);
-            return { subscribed: debug?.screenShare?.remoteSubscribedTrackCount,
-              browserNowMs: performance.now(), browserWallTimeMs: Date.now(),
-              passiveStartupCompleted: debug?.audioState === "connected-passive",
-              passiveStartupFailed: debug?.lastRecoveryAction === "media_passive_connect_failed",
-              shareErrorPresent: !!debug?.screenShare?.errorCode, activeScreenPresent: active?.type === "screen-share",
-              surfaceHasTexture: typeof surface?.textureId === "number", videoElements: document.querySelectorAll("video").length };
-          })).then(value => value.subscribed), { timeout: 20_000 }).toBe(1));
+          await guestPoll.start(() => expect.poll(() => guestPoll.sample(() => guest.page.evaluate(readGuestSubscriptionSample))
+            .then(value => value.subscribed), { timeout: 20_000 }).toBe(1));
           guestPoll.finish(true);
         } catch (error) { guestPoll.finish(false); throw error; }
         await expect.poll(async () => (await h.service.listParticipants(mediaRoom)).flatMap((person: any) => person.tracks.filter((track: any) => track.source === 2)).length, { timeout: 20_000 }).toBe(index + 1);
