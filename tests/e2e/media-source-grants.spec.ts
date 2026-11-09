@@ -311,6 +311,10 @@ test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone
         // Capture uses Chromium's fake device through the original native API,
         // not the application audiomock path or a getUserMedia replacement.
         await page.context().grantPermissions(["microphone"], { origin });
+        // Verify the browser fixture's origin-scoped permission before loading
+        // four scenes; this is a prerequisite, not a renderer-latency assertion.
+        await page.goto(`${origin}/health`);
+        await expect.poll(() => page.evaluate(async () => (await navigator.permissions.query({ name: "microphone" as PermissionName })).state)).toBe("granted");
         await captureSetup(page);
         await page.addInitScript(() => {
           const calls: string[] = []; (window as any).__handoffMicrophoneCalls = calls;
@@ -340,7 +344,6 @@ test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone
         await actor.page.bringToFront();
         await expect.poll(() => actor.page.evaluate(() => document.visibilityState)).toBe("visible");
         await chooseMeetingPanel(actor.page, "audio", false);
-        await expect.poll(() => actor.page.evaluate(async () => (await navigator.permissions.query({ name: "microphone" as PermissionName })).state)).toBe("granted");
         expect(await actor.page.evaluate(() => (window as any).__handoffMicrophoneCalls.length)).toBe(0);
         const joinStartedAt = Date.now();
         await actor.page.locator("#join-muted").uncheck(); await actor.page.locator("#join-audio").click();
