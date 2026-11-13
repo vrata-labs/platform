@@ -8,6 +8,7 @@ import { observeReferenceTest } from "./reference-test-observation";
 import { captureRoomAuthority, type RoomAuthorityCapture } from "./room-state-observation";
 import { isOwnSeatProof, ownSeatProof, type OwnSeatClient } from "./seat-marker-proof";
 import { finishReleasedAvatar, observeReleasedAvatar } from "./seat-release-observation";
+import { observeSeatedAvatar } from "./seat-occupied-observation";
 import { cleanupAll } from "./test-cleanup";
 
 const observations = new Map<Page, ReturnType<typeof observeReferenceTest>>();
@@ -193,8 +194,20 @@ for (const staging of [false]) test.describe(`${staging ? "@staging " : ""}seat 
           expect(isOwnSeatProof(proof)).toBe(true);
           expect(proof.client.participantId).toBe(initial.participantId);
           await testInfo.attach("room-own-seat-authority-proof", { body: JSON.stringify(proof), contentType: "application/json" });
+          // An occupied chair needs the seated participant DRAWN there for the observer, not
+          // only a received pose and a hidden marker. Normal playback delay is allowed; a
+          // stale playback timeline (seconds behind received poses) fails here.
+          const occupied = await observer.evaluate(observeSeatedAvatar, { participantId: initial.participantId,
+            seatedRoot: proof.client.root, timeoutMs: 15000, maxLagFrames: 30, maxLagMs: 1000 });
+          await testInfo.attach("room-occupied-readiness", { body: JSON.stringify(occupied.evidence), contentType: "application/json" });
+          expect(occupied.error).toBeNull();
           expect(await readReviewView(observer)).toEqual(fixedReviewView);
           await capture(observer, testInfo, "room-occupied-same-view");
+          const drawn = await observer.evaluate(id => (window as any).__VRATA_DEBUG__.remoteParticipants
+            .find((value: any) => value.participantId === id), initial.participantId);
+          expect(drawn?.renderedBody?.visible, "seated avatar is drawn for the observer").toBe(true);
+          expect(Math.hypot(drawn.renderedBody.x - drawn.body.x, drawn.renderedBody.y - drawn.body.y,
+            drawn.renderedBody.z - drawn.body.z), "seated avatar stays drawn at the seat in the PNG").toBeLessThan(0.05);
           // Own hiding is proved independently by component-current-hidden plus the
           // real current-seat/authority DTO above. A floor-only seated PNG proves neither.
         } else {

@@ -27,6 +27,7 @@ function createDebugState() {
       hasAudioNode: boolean;
       appliedRootYaw: number;
       appliedHeadYaw: number;
+      renderedBody: { x: number; y: number; z: number; visible: boolean } | null;
     }>,
     remoteAvatarReliableCount: 0,
     remoteAvatarPoseCount: 0,
@@ -535,4 +536,79 @@ test("remote avatar pose smoothing is normalized by frame delta", () => {
   assert.ok(Math.abs(lowFps.bodyX - highFps.bodyX) < 0.001);
   assert.ok(Math.abs(lowFps.headX - highFps.headX) < 0.001);
   assert.ok(lowFps.bodyX > 9.9);
+});
+
+test("remote seated avatar is drawn at the seat within playback delay after a receiver stall", () => {
+  const scene = new THREE.Scene();
+  const runtime = createRemoteAvatarRuntime({
+    scene,
+    bodyGeometry: new THREE.CapsuleGeometry(0.24, 0.8, 6, 12),
+    headGeometry: new THREE.SphereGeometry(0.18, 20, 20),
+    localParticipantId: "local"
+  });
+  const debugState = createDebugState();
+  const realNow = Date.now;
+  let now = 1_000_000;
+  Date.now = () => now;
+  const standing = { x: -3.6, y: 0.38, z: 0 };
+  const seatRoot = { x: -1.95, y: -0.41, z: -1.15 };
+  const frame = (seq: number, sentAtMs: number, root: { x: number; y: number; z: number }) => ({
+    seq,
+    sentAtMs,
+    flags: 0,
+    root: { ...root, yaw: Math.PI, vx: 0, vz: 0 },
+    head: { x: root.x, y: root.y + 1.6, z: root.z, qx: 0, qy: 0, qz: 0, qw: 1 },
+    leftHand: { x: root.x, y: root.y + 1.2, z: root.z, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+    rightHand: { x: root.x, y: root.y + 1.2, z: root.z, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+    locomotion: { mode: 0, speed: 0, angularVelocity: 0 }
+  });
+  try {
+    runtime.ingestReliableState({
+      participantId: "remote-seated",
+      avatarId: "preset-01",
+      inputMode: "desktop",
+      updatedAt: new Date(now).toISOString(),
+      audioActive: false,
+      seated: false
+    }, debugState);
+    runtime.applySnapshotParticipants([{
+      participantId: "remote-seated",
+      displayName: "Remote seated",
+      mode: "desktop",
+      muted: true,
+      activeMedia: { audio: false, screenShare: false },
+      rootTransform: standing,
+      bodyTransform: standing,
+      headTransform: { ...standing, y: standing.y + 1.6 },
+      updatedAt: new Date(now).toISOString()
+    }] as never, debugState);
+    let seq = 1;
+    let sentAtMs = now;
+    runtime.ingestPoseFrame("remote-seated", frame(seq, sentAtMs, standing), debugState);
+    // The receiver main thread stalls for 2.1 s; the next standing frame is handled late.
+    now += 2_100;
+    sentAtMs += 100;
+    runtime.ingestPoseFrame("remote-seated", frame(++seq, sentAtMs, standing), debugState);
+    sentAtMs = now - 5;
+    // The participant sits down; seated frames now arrive on time at 10 Hz.
+    for (let index = 0; index < 6; index += 1) {
+      now += 100;
+      sentAtMs += 100;
+      runtime.ingestPoseFrame("remote-seated", frame(++seq, sentAtMs, seatRoot), debugState);
+      for (let tick = 0; tick < 6; tick += 1) {
+        now += 16;
+        runtime.update(1 / 60, debugState);
+      }
+      now -= 96;
+    }
+    now += 96;
+    runtime.update(1 / 60, debugState);
+    const participant = debugState.remoteParticipants[0]!;
+    assert.deepEqual(participant.body, { x: -1.95, y: 0.51, z: -1.15, yaw: 3.142 });
+    assert.ok(participant.renderedBody?.visible);
+    assert.ok(Math.hypot(participant.renderedBody!.x - -1.95, participant.renderedBody!.y - 0.51, participant.renderedBody!.z - -1.15) < 0.05,
+      `drawn body ${JSON.stringify(participant.renderedBody)} must reach the seat within 600 ms of seated frames`);
+  } finally {
+    Date.now = realNow;
+  }
 });

@@ -48,6 +48,8 @@ export interface RemoteAvatarDebugState {
     hasAudioNode: boolean;
     appliedRootYaw: number;
     appliedHeadYaw: number;
+    /** Position and visibility of the drawn body mesh, unlike the received root/body above. */
+    renderedBody: { x: number; y: number; z: number; visible: boolean } | null;
   }>;
   remoteAvatarReliableCount: number;
   remoteAvatarPoseCount: number;
@@ -460,7 +462,15 @@ export function createRemoteAvatarRuntime(input: {
           hasVisualEntity: Boolean(entity),
           hasAudioNode: false,
           appliedRootYaw: roundNumber(entity?.body.rotation.y ?? root.yaw),
-          appliedHeadYaw: roundNumber(entity?.head.rotation.y ?? head.yaw)
+          appliedHeadYaw: roundNumber(entity?.head.rotation.y ?? head.yaw),
+          renderedBody: entity
+            ? {
+              x: roundNumber(entity.body.position.x),
+              y: roundNumber(entity.body.position.y),
+              z: roundNumber(entity.body.position.z),
+              visible: entity.body.visible && entity.body.parent === input.scene
+            }
+            : null
         };
       });
     debugState.remoteAvatarParticipants = Array.from(remoteAvatarParticipants.values())
