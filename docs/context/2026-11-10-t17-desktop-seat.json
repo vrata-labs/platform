@@ -1,0 +1,238 @@
+{
+  "schema": 1,
+  "goal": "Локализовать отказ desktop-посадки, отдельный отказ входа и результат штатного повторного входа в локальной ручной пробе T17 без изменения пользовательской сессии",
+  "scope": "Desktop click, interaction target, seating availability, room-state и admission по пользовательскому HAR; не производительность и не полная приёмка T17",
+  "sources": [
+    {
+      "id": "S1",
+      "system": "git",
+      "locator": "apps/runtime-web/src/main.ts:2403-2412,7492-7578; apps/runtime-web/src/locomotion/runtime-commands.ts:118-136",
+      "version": "cdad7ff8d03553cc973d88b098273025832c141c; runtime без изменений",
+      "checked_at": "2026-11-10T08:47:38Z",
+      "status": "available",
+      "summary": "Короткий click выполняет настоящий ray target. Для target=seat и seatingAvailable=false планируется только статус Seating unavailable, без seat_claim. Доступность требует включённой посадки и подключённого room-state. Длинное удержание свыше 250 мс и движение при нажатой кнопке подавляют click."
+    },
+    {
+      "id": "S2",
+      "system": "local-runtime-diagnostics",
+      "locator": "GET /api/rooms/{meetingRoomId}/diagnostics; локальная ручная проба T17, исходная переговорная",
+      "version": "срез 2026-11-10T08:47:38.043Z; 200 сохранённых записей",
+      "checked_at": "2026-11-10T08:47:38Z",
+      "status": "available",
+      "summary": "Все 200 записей: room_state_failed и roomStateConnected=false; 50 содержат Seating unavailable, 150 — Realtime sync unavailable; using API fallback. Роль host, сцена loaded, avatarSeatingEnabled и roomStateRealtime включены, faultInjection.roomState=false, WebSocket URL ws://127.0.0.1:41157. В презентационной комнате пользовательских диагностик пока нет. Имена, идентификаторы участников, приглашения и credentials не сохранены."
+    },
+    {
+      "id": "S3",
+      "system": "local-browser-reproduction",
+      "locator": "Две изолированные копии reference-комнат: normal invite/onboarding, обычный desktop mouse click, пассивный CDP existing socket",
+      "version": "cdad7ff8d03553cc973d88b098273025832c141c; meeting 0.3.4, presentation 0.4.2; 2026-11-10",
+      "checked_at": "2026-11-10T08:47:38Z",
+      "status": "available",
+      "summary": "В обеих исходных Linux-пробах trusted click выбрал seat, отправил seat_claim, сервер подтвердил accepted=true и собственную occupancy, клиент применил currentSeatId и seated pose. Обе проверки трёхсекундного бюджета истекли: поздние факты не являются PASS времени. Дополнительные normal localhost-пробы установили WS без origin-отказа; в meeting за бюджет не получен ответ на claim, в presentation он пришёл позднее. Четыре собственные комнаты удалены, изолированные браузеры закрыты; активные комнаты и процессы пользователя сохранены."
+    },
+    {
+      "id": "S4",
+      "system": "user-browser-har",
+      "locator": "localhost.har; только структурная очищенная сводка 11 запросов к локальному API",
+      "version": "SHA-256 0d341d37f871468bb0fa79a446460fee3267264f752d6e8af89d9afd05712ba9; запись 2026-11-10T09:44:42.943Z–09:44:45.209Z",
+      "checked_at": "2026-11-10T09:55:09Z",
+      "status": "available",
+      "summary": "HTML комнаты, четыре JS, CSS и два health получили 200. Итоговый POST /api/tokens/state получил 403 с error=identity_required, reason=invite_required. Запрос v2 содержит inviteToken, но не identityCredential, waitingCredential или recoveryCredential. Неавторизованный prejoin-settings получил 409 и net::ERR_ABORTED; его тело не сохранено, причина по телу не устанавливается. Запросов manifest, сцены и WebSocket в HAR нет; он не доказывает причину прежнего room-state отказа. Query, credentials, заголовки, тела запросов и персональные данные в пакет не перенесены."
+    },
+    {
+      "id": "S5",
+      "system": "local-api-readonly",
+      "locator": "GET /api/rooms/{meetingRoomId}/invites и manifest; GET API/room-state/LiveKit health; сверка личности пяти собственных процессов",
+      "version": "срез 2026-11-10T09:55:09.737758Z; активная локальная среда cdad7ff8d03553cc973d88b098273025832c141c",
+      "checked_at": "2026-11-10T09:55:09Z",
+      "status": "available",
+      "summary": "Приглашение из HAR точно совпало с исходным Host-приглашением переговорной; запись protocolVersion=2, revoked=false, expiresAt=2026-11-10T08:57:51.686Z. К POST из HAR оно просрочено на 2813.523 секунды. Host manifest доступен администратору; room-state остаётся ws://127.0.0.1:41157. Три health из Linux получили 200; у всех пяти собственных процессов совпали boot ID, PID, startTicks и cwd. Это не проверка пути Windows. Приглашения и пользовательские сессии не принимались и не изменялись."
+    },
+    {
+      "id": "S6",
+      "system": "git",
+      "locator": "apps/api/src/identity/store.ts:89-126; apps/api/src/identity/http-admission.ts:54-99; apps/runtime-web/src/identity-session-tab.ts:7-30; apps/runtime-web/src/index.ts:281-310,532-544; apps/runtime-web/src/template-preferences.ts:46-60; apps/api/src/room-prejoin-settings.ts:34-41",
+      "version": "cdad7ff8d03553cc973d88b098273025832c141c; runtime без изменений",
+      "checked_at": "2026-11-10T09:55:09Z",
+      "status": "available",
+      "summary": "Без identityCredential admission проверяет invite: expiresAt <= now вызывает identity_forbidden, отображаемый HTTP-слоем в 403 identity_required/invite_required. bootRuntime получает state token до manifest и прекращается на этом отказе. Identity хранится по комнате в sessionStorage текущей вкладки с памятью как fallback; один профиль сам по себе её непрерывность не доказывает. Prejoin читает только публичные настройки и допускает unavailable при 409/таймауте. Новый Host invite в уже занятой комнате не переносит существующую роль Host. Код не устанавливает одноразовость обычного invite."
+    },
+    {
+      "id": "S7",
+      "system": "user-browser-har",
+      "locator": "Перезаписанный localhost.har после штатного входа в новую независимую private переговорную; только очищенные счётчики и пути без query",
+      "version": "SHA-256 422485432b42c1f4173c5e73e4dc1c7e26435b35aa6e157c2ecd68e959be758b; 17757800 байт; mtime 2026-11-10T10:13:34.939451Z; 98 записей",
+      "checked_at": "2026-11-13T14:17:12Z",
+      "status": "available",
+      "summary": "Приватная корреляция подтверждает новую комнату, участника и соответствие state token всем трём WS-попыткам без сохранения их значений. Admission=200 вернул identity v2 и host; manifest, scene.json и GLB=200. Среди 20 отправленных диагностик 17 имеют scene loaded, все connected=false и outgoing reliable seated=false; 8 содержат Seating unavailable начиная с 10:13:18.597Z. Посадка и realtime включены, fault injection выключен. Три WS-записи к 127.0.0.1:41157 содержат status=0 и error opcode=-1 с пустым data; response._error=null, заголовки пусты, прикладных сообщений нет. Сетевой код, результат HTTP handshake и close code экспорт не сохранил. WS epoch 1969 и длительности не используются как измерение. Base64 не декодировался; прежний одноимённый HAR не считался доступным по этому пути."
+    },
+    {
+      "id": "S8",
+      "system": "local-api-readonly-historical",
+      "locator": "Исторический GET /api/rooms/{newMeetingRoomId}/diagnostics и GET room-state /metrics, выполненные 10 ноября до прерывания; повторная сверка сохранённого результата",
+      "version": "diagnostics HTTP 200, 270986 байт, 21 запись 2026-11-10T10:13:06.636Z–10:13:34.655Z; metrics HTTP 200",
+      "checked_at": "2026-11-13T14:17:12Z",
+      "status": "available",
+      "summary": "Read-only результат до прерывания: все 21 диагностика connected=false, 20 room_state_failed, 9 снимков Seating unavailable. Глобальные metrics: activeParticipants=0, activeRooms=4, requestFailuresTotal=0, disconnectsTotal=4; они включают исторические Linux-пробы и не устанавливают причину отказа пользователя. Сырые ответы не сохранены. После возобновления 13 ноября ни один из пяти прежних корневых процессов не совпал с сохранёнными PID/startTicks/cwd; этот исторический срез нельзя выдавать за текущее состояние. Процессы, комнаты, identity и приглашения в этой работе не изменялись."
+    },
+    {
+      "id": "S9",
+      "system": "windows-curl-experiment",
+      "locator": "Штатный Windows curl.exe к временным HTTP-слушателям в WSL на трёх адресах привязки: IPv6 wildcard (dual-stack), 0.0.0.0, 127.0.0.1; пользовательский .wslconfig",
+      "version": "наблюдение 2026-11-13; временные слушатели остановлены",
+      "checked_at": "2026-11-13T14:19:06Z",
+      "status": "available",
+      "summary": "В .wslconfig включены networkingMode=mirrored и localhostForwarding. Dual-stack слушатель: по 127.0.0.1 connection refused (curl rc=7), по localhost и [::1] HTTP 200 через ::1. Слушатели на 0.0.0.0 и 127.0.0.1: HTTP 200 и по 127.0.0.1, и по localhost. Это отдельный сетевой эксперимент, не вывод из HAR."
+    },
+    {
+      "id": "S10",
+      "system": "git",
+      "locator": "apps/room-state/src/index.ts:1347; apps/api/src/public-endpoints.ts:23-31; tests/e2e/reference-template-fixture.ts:76",
+      "version": "cdad7ff8d03553cc973d88b098273025832c141c; runtime и fixture без изменений",
+      "checked_at": "2026-11-13T14:28:00Z",
+      "status": "available",
+      "summary": "room-state вызывает listen(port) без адреса, то есть Node открывает IPv6 wildcard (dual-stack). При http API возвращает настроенный ROOM_STATE_PUBLIC_URL без изменений. Reference fixture, на котором была собрана ручная среда, задаёт ROOM_STATE_PUBLIC_URL=ws://127.0.0.1:<порт>; прежняя среда поэтому выдавала в manifest IPv4-литерал при dual-stack слушателе."
+    },
+    {
+      "id": "S11",
+      "system": "windows-curl-new-manual-environment",
+      "locator": "Новая ручная локальная среда T17 от 2026-11-13: manifest с room-state по localhost; штатный Windows curl.exe",
+      "version": "наблюдение 2026-11-13T14:28Z; тот же exact source и собранные dist",
+      "checked_at": "2026-11-13T14:28:00Z",
+      "status": "available",
+      "summary": "Авторизованный manifest обеих комнат выдаёт room-state по ws://localhost. Из Windows: health API и room-state 200 через ::1, WebSocket Upgrade к room-state по тому же host:port, что в manifest, получил 101 Switching Protocols; LiveKit signal и scene.json по 127.0.0.1 отвечают 200. Контрольный запрос к тому же room-state по 127.0.0.1 даёт connection refused (rc=7). Посадка пользователем в этой среде ещё не проверялась."
+    },
+    {
+      "id": "S12",
+      "system": "manual-user-check",
+      "locator": "Ручная проба пользователя в локальной среде с room-state по localhost, Windows-браузер",
+      "version": "cdad7ff8d03553cc973d88b098273025832c141c; 2026-11-13",
+      "checked_at": "2026-11-13T14:50:00Z",
+      "status": "available",
+      "summary": "Пользователь сообщил: «все работает». Посадка коротким click и вставание выполнены. Комнату, в которой выполнены действия, пользователь не уточнил. Замечание по интерфейсу: непонятно, почему кнопка Stand up находится в панели Audio."
+    },
+    {
+      "id": "S13",
+      "system": "git",
+      "locator": "apps/runtime-web/index.html:204-211; apps/runtime-web/src/main.ts:1649,2324-2325",
+      "version": "cdad7ff8d03553cc973d88b098273025832c141c",
+      "checked_at": "2026-11-13T14:50:00Z",
+      "status": "available",
+      "summary": "Кнопка stand-up находится в строке primary-controls внутри панели meeting-audio рядом с Join Audio и Mute; показывается только при currentSeatId. Другого desktop-способа встать в коде нет: planStandUp вызывается только из обработчика этой кнопки."
+    }
+  ],
+  "claims": [
+    {
+      "id": "F1",
+      "status": "confirmed",
+      "text": "Инструкция о коротком клике по свободному маркеру соответствует desktop-пути; отдельное подтверждение и Join Audio для посадки не требуются.",
+      "sources": [
+        "S1",
+        "S3"
+      ]
+    },
+    {
+      "id": "F2",
+      "status": "confirmed",
+      "text": "В пользовательской переговорной target уже распознан как seat, но seat_claim блокируется до отправки из-за отсутствия room-state. Это не отказ выбора кресла и не доказательство ошибки применения сидячей позы.",
+      "sources": [
+        "S1",
+        "S2"
+      ]
+    },
+    {
+      "id": "F3",
+      "status": "confirmed",
+      "text": "Linux-функциональность и поздняя авторитетная посадка не подтверждают исправление пользовательского отказа, временные бюджеты или общий T17; REWORK_REQUIRED сохраняется.",
+      "sources": [
+        "S2",
+        "S3"
+      ]
+    },
+    {
+      "id": "F4",
+      "status": "confirmed",
+      "text": "В HAR 09:44 UTC отказ загрузки происходит до manifest/сцены/WS: API отклоняет admission без сохранённой identity по уже просроченному исходному приглашению. Это отдельный отказ от прежнего room-state offline, не падение HTTP-сервера и не доказательство ошибки scene loader.",
+      "sources": [
+        "S4",
+        "S5",
+        "S6"
+      ]
+    },
+    {
+      "id": "F5",
+      "status": "confirmed",
+      "text": "HAR не показывает, почему клиент не отправил identityCredential. Возобновление требует possession proof из исходной вкладки на том же origin; при его отсутствии новую ручную пробу следует оформлять отдельно штатным входом, без продления старого invite, восстановления роли по публичному ID или сброса исходной сессии.",
+      "sources": [
+        "S4",
+        "S6"
+      ]
+    },
+    {
+      "id": "F6",
+      "status": "confirmed",
+      "text": "В новой независимой комнате штатный admission и загрузка сцены успешны, но три пользовательские WS-попытки завершились ошибкой. Их наличие подтверждено; отсутствие сетевого кода в HAR не означает отсутствия попыток и не устанавливает причину отказа.",
+      "sources": [
+        "S7"
+      ]
+    },
+    {
+      "id": "F7",
+      "status": "confirmed",
+      "text": "После повторного входа пользователь подтвердил как минимум один target=seat, но посадка вновь заблокирована до seat_claim из-за offline room-state. Снимки Seating unavailable не равны числу кликов; вход и слова о кликах не являются PASS посадки.",
+      "sources": [
+        "S1",
+        "S7",
+        "S8"
+      ]
+    },
+    {
+      "id": "F8",
+      "status": "confirmed",
+      "text": "Причина отказа room-state WebSocket у Windows-клиента установлена отдельным сетевым экспериментом: в mirrored-режиме WSL Windows не достигает dual-stack слушателя room-state по IPv4-литералу 127.0.0.1, а ручная среда выдавала в manifest именно ws://127.0.0.1. Это объясняет WS error без сетевого кода и connected=false в HAR. Это дефект адресации локальной тестовой среды, а не доказанный дефект runtime или посадки.",
+      "sources": [
+        "S9",
+        "S10",
+        "S11"
+      ]
+    },
+    {
+      "id": "F9",
+      "status": "confirmed",
+      "text": "В новой ручной среде адрес room-state из manifest достижим из Windows (WebSocket Upgrade получает 101). Это готовность транспорта для повторной пробы, а не PASS посадки, временного бюджета или T17.",
+      "sources": [
+        "S11"
+      ]
+    },
+    {
+      "id": "F10",
+      "status": "confirmed",
+      "text": "При достижимом из Windows room-state desktop-посадка и вставание у пользователя работают; прежний отказ вызван адресацией локальной тестовой среды. Это ручное наблюдение, а не PASS бюджетов claim 3000 мс или 16 RAF.",
+      "sources": [
+        "S12",
+        "S11"
+      ]
+    },
+    {
+      "id": "F11",
+      "status": "confirmed",
+      "text": "Размещение Stand up в панели Audio не связано с аудио по смыслу и вызывает вопрос у пользователя; это отдельное замечание по интерфейсу, а не дефект посадки.",
+      "sources": [
+        "S12",
+        "S13"
+      ]
+    }
+  ],
+  "gaps": [
+    {
+      "question": "Проходит ли desktop-посадка у пользователя, когда room-state достижим из Windows?",
+      "blocking": false,
+      "next_step": "Закрыто F10: пользователь подтвердил посадку и вставание 13 ноября. Временные бюджеты, 16 RAF и визуальная приёмка остаются отдельными критериями T17."
+    },
+    {
+      "question": "Почему во входе из HAR отсутствует сохранённая identityCredential?",
+      "blocking": false,
+      "next_step": "Не выводить из HAR смену вкладки, origin, профиля или отказ хранилища как установленную причину. Использовать исходную авторизованную вкладку, если proof в ней сохранился; иначе создать отдельную штатную ручную пробу с новым приглашением, сохранив историю исходного отказа."
+    }
+  ]
+}
