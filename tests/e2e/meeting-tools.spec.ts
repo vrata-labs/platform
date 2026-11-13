@@ -151,6 +151,42 @@ for (const mobile of [false, true]) {
   });
 }
 
+for (const mobile of [false, true]) test(`meeting room ${mobile ? "Android viewport" : "desktop"}: a seated participant stands up from the room status without opening Audio`, async ({ browser, request }) => {
+  test.setTimeout(180_000);
+  let context: BrowserContext | undefined;
+  try {
+    context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1280, height: 720 },
+      hasTouch: mobile, isMobile: mobile, deviceScaleFactor: 0.5 });
+    const page = await context.newPage(), headers = { "x-vrata-admin-token": fixture.adminToken };
+    const created = await request.post(`${fixture.origin}/api/rooms`, { headers, data: { tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Owned stand up placement" } });
+    expect(created.status()).toBe(201); const room = await created.json();
+    const invitation = await request.post(`${fixture.origin}/api/rooms/${room.roomId}/invites`, { headers, data: { role: "member", expiresInSeconds: 600 } });
+    expect(invitation.status()).toBe(201);
+    await enter(page, (await invitation.json()).inviteLink, "Seated member");
+    const standUp = page.locator("#stand-up");
+    await expect(standUp).toBeHidden();
+    // Standing is a seat action: it must not depend on the Audio tool being open.
+    await page.locator("#meeting-audio").evaluate(panel => { (panel as HTMLDetailsElement).open = false; });
+    expect(await page.evaluate(id => (window as any).__VRATA_TEST__.requestSeatClaimById(id), "seat-01")).toBe(true);
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.currentSeatId), { timeout: 15_000 }).toBe("seat-01");
+    await expect(page.locator("#status-line")).toContainText("Seated at");
+    await expect(standUp).toBeVisible();
+    expect(await standUp.evaluate(button => {
+      const rect = button.getBoundingClientRect(), content = button.closest(".hud-content")!.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      return { inAudio: !!button.closest("#meeting-audio"), inToolPanel: !!button.closest(".meeting-panel"),
+        afterStatus: button.previousElementSibling?.id ?? null, audioOpen: (document.getElementById("meeting-audio") as HTMLDetailsElement).open,
+        inViewport: rect.top >= 0 && rect.left >= 0 && rect.bottom <= innerHeight && rect.right <= innerWidth,
+        inHudView: rect.top >= content.top && rect.bottom <= content.bottom, uncovered: hit === button, tallEnough: rect.height >= 48 };
+    })).toEqual({ inAudio: false, inToolPanel: false, afterStatus: "status-line", audioOpen: false,
+      inViewport: true, inHudView: true, uncovered: true, tallEnough: true });
+    if (mobile) await standUp.tap(); else await standUp.click();
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.currentSeatId ?? null), { timeout: 15_000 }).toBeNull();
+    await expect(standUp).toBeHidden();
+    await expect(page.locator("#status-line")).toContainText("You are standing");
+  } finally { await context?.close(); }
+});
+
 test("meeting tools explain unsupported capture without changing the producer or starting capture", async ({ browser, request }) => {
   test.setTimeout(180_000);
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 0.5 });
