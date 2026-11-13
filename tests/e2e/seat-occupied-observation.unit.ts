@@ -102,3 +102,31 @@ test("losing the seated pose resets the lag clock", () => run(async (c, observe)
   assert.equal(evidence.last!.receivedSince, 500);
   assert.equal(evidence.last!.lagFrames, 0);
 }));
+
+test("with a cushion, a body sunk through the seat is not accepted until its bottom rests on the cushion", () => run(async (c, observe) => {
+  const pending = observe({ ...args, cushionY: 0.46 });
+  // Standing-height capsule lowered with the rig: centre at the target, bottom near the floor.
+  c.remote.renderedBody = { x: 1, y: 0.52, z: 2, bottomY: -0.12, visible: true } as never;
+  c.tick(100); c.tick(110);
+  c.remote.renderedBody = { x: 1, y: 0.52, z: 2, visible: true } as never;
+  c.tick(115);
+  assert.equal(c.active().raf, true, "a missing bottom must not pass the cushion check");
+  c.remote.renderedBody = { x: 1, y: 0.52, z: 2, bottomY: 0.455, visible: true } as never;
+  c.tick(120);
+  const { error, evidence } = await pending;
+  assert.equal(error, null);
+  assert.equal(evidence.cushionY, 0.46);
+  assert.equal(evidence.drawnAt, 120);
+  assert.equal(evidence.trail.find(sample => sample.now === 100)!.renderedBody!.bottomY, -0.12);
+}));
+
+test("a sunk body that never reaches the cushion fails on the lag bound", () => run(async (c, observe) => {
+  const pending = observe({ ...args, cushionY: 0.46 });
+  c.remote.renderedBody = { x: 1, y: 0.52, z: 2, bottomY: 0.3, visible: true } as never;
+  c.tick(100);
+  for (let i = 0; i < 10; i++) c.tick(120 + i * 5);
+  c.tick(171);
+  const { error, evidence } = await pending;
+  assert.equal(error, "seated_avatar_drawn_late_after_received_pose");
+  assert.equal(evidence.drawnAt, null);
+}));

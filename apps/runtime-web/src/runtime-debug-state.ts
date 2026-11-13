@@ -342,7 +342,8 @@ export function createRuntimeDebugState<FeatureFlags extends Record<string, bool
       hasAudioNode: boolean;
       appliedRootYaw: number;
       appliedHeadYaw: number;
-      renderedBody: { x: number; y: number; z: number; visible: boolean } | null;
+      seatCushionY: number | null;
+      renderedBody: { x: number; y: number; z: number; bottomY: number; topY: number; visible: boolean } | null;
     }>,
     sceneBundleUrl: null as string | null,
     sceneBundleState: "fallback" as "fallback" | "loaded" | "failed",

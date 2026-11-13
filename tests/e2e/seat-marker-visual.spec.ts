@@ -196,9 +196,11 @@ for (const staging of [false]) test.describe(`${staging ? "@staging " : ""}seat 
           await testInfo.attach("room-own-seat-authority-proof", { body: JSON.stringify(proof), contentType: "application/json" });
           // An occupied chair needs the seated participant DRAWN there for the observer, not
           // only a received pose and a hidden marker. Normal playback delay is allowed; a
-          // stale playback timeline (seconds behind received poses) fails here.
+          // stale playback timeline (seconds behind received poses) fails here. The drawn body must
+          // rest on the manifest cushion, not sink a standing-height capsule through the seat.
+          const cushionY = seat.position.y + seat.seatHeight;
           const occupied = await observer.evaluate(observeSeatedAvatar, { participantId: initial.participantId,
-            seatedRoot: proof.client.root, timeoutMs: 15000, maxLagFrames: 30, maxLagMs: 1000 });
+            seatedRoot: proof.client.root, cushionY, timeoutMs: 15000, maxLagFrames: 30, maxLagMs: 1000 });
           await testInfo.attach("room-occupied-readiness", { body: JSON.stringify(occupied.evidence), contentType: "application/json" });
           expect(occupied.error).toBeNull();
           expect(await readReviewView(observer)).toEqual(fixedReviewView);
@@ -208,6 +210,11 @@ for (const staging of [false]) test.describe(`${staging ? "@staging " : ""}seat 
           expect(drawn?.renderedBody?.visible, "seated avatar is drawn for the observer").toBe(true);
           expect(Math.hypot(drawn.renderedBody.x - drawn.body.x, drawn.renderedBody.y - drawn.body.y,
             drawn.renderedBody.z - drawn.body.z), "seated avatar stays drawn at the seat in the PNG").toBeLessThan(0.05);
+          // Debug coordinates are rounded to millimetres.
+          expect(Math.abs(drawn.seatCushionY - cushionY), "observer resolves the seated participant's cushion from the scene").toBeLessThanOrEqual(0.0006);
+          expect(drawn.renderedBody.bottomY, "seated body bottom is not below the cushion").toBeGreaterThanOrEqual(cushionY - 0.01);
+          expect(drawn.renderedBody.bottomY, "seated body rests on the cushion").toBeLessThanOrEqual(cushionY + 0.03);
+          expect(drawn.renderedBody.topY, "seated body stays under the drawn head").toBeLessThan(drawn.head.y);
           // Own hiding is proved independently by component-current-hidden plus the
           // real current-seat/authority DTO above. A floor-only seated PNG proves neither.
         } else {

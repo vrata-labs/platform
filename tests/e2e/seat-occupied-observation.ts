@@ -1,11 +1,11 @@
 type Point = { x: number; y: number; z: number };
 export interface OccupiedSample {
   now: number; rafCount: number; receivedRoot: Point | null; targetBody: Point | null;
-  renderedBody: (Point & { visible: boolean }) | null; playbackDelayMs: number | null;
+  renderedBody: (Point & { visible: boolean; bottomY: number | null }) | null; playbackDelayMs: number | null;
   receivedSince: number | null; lagFrames: number;
 }
 export interface OccupiedEvidence {
-  seatedRoot: Point; timeoutMs: number; maxLagFrames: number; maxLagMs: number;
+  seatedRoot: Point; cushionY: number | null; timeoutMs: number; maxLagFrames: number; maxLagMs: number;
   startedAt: number; finishedAt: number; drawnAt: number | null; last: OccupiedSample | null; trail: OccupiedSample[];
 }
 export type OccupiedResult = { error: string | null; evidence: OccupiedEvidence };
@@ -13,17 +13,19 @@ export type OccupiedResult = { error: string | null; evidence: OccupiedEvidence 
 /**
  * Self-contained for page.evaluate. The observer must DRAW the seated participant at the
  * seat: the received seated root alone does not prove an occupied chair in the PNG.
+ * With cushionY, the drawn body must also sit on the cushion: its bottom may not be below it
+ * (1 cm for rounding), so a standing-height body sunk through the seat is not an occupied chair.
  * Normal playback (2x delay) is allowed; a lag beyond both maxLagFrames and maxLagMs after
  * that fails, independently of the overall timeout.
  */
-export function observeSeatedAvatar({ participantId, seatedRoot, timeoutMs, maxLagFrames, maxLagMs }: {
-  participantId: string; seatedRoot: Point; timeoutMs: number; maxLagFrames: number; maxLagMs: number;
+export function observeSeatedAvatar({ participantId, seatedRoot, cushionY = null, timeoutMs, maxLagFrames, maxLagMs }: {
+  participantId: string; seatedRoot: Point; cushionY?: number | null; timeoutMs: number; maxLagFrames: number; maxLagMs: number;
 }): Promise<OccupiedResult> {
   const number = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : null;
   const point = (value: any): Point | null => value && [value.x, value.y, value.z].every(v => number(v) !== null)
     ? { x: value.x, y: value.y, z: value.z } : null;
   const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
-  const evidence: OccupiedEvidence = { seatedRoot: { x: seatedRoot.x, y: seatedRoot.y, z: seatedRoot.z }, timeoutMs,
+  const evidence: OccupiedEvidence = { seatedRoot: { x: seatedRoot.x, y: seatedRoot.y, z: seatedRoot.z }, cushionY, timeoutMs,
     maxLagFrames, maxLagMs, startedAt: performance.now(), finishedAt: 0, drawnAt: null, last: null, trail: [] };
   return new Promise(resolve => {
     let receivedSince: number | null = null, lagFrames = 0, frame = 0, rafCount = 0;
@@ -43,10 +45,13 @@ export function observeSeatedAvatar({ participantId, seatedRoot, timeoutMs, maxL
       const received = Boolean(remote?.hasVisualEntity && transport?.hasPoseFrame && delay !== null
         && receivedRoot && targetBody && distance(receivedRoot, seatedRoot) < 0.02);
       if (!received) { receivedSince = null; lagFrames = 0; } else receivedSince ??= now;
-      const atSeat = received && drawn !== null && remote.renderedBody.visible === true && distance(drawn, targetBody!) < 0.05;
+      const bottomY = drawn ? number(remote.renderedBody.bottomY) : null;
+      const onCushion = cushionY === null || (bottomY !== null && bottomY >= cushionY - 0.01);
+      const atSeat = received && drawn !== null && remote.renderedBody.visible === true && distance(drawn, targetBody!) < 0.05
+        && onCushion;
       if (received && !atSeat && now - receivedSince! >= 2 * delay!) lagFrames++;
       const current: OccupiedSample = { now, rafCount: ++rafCount, receivedRoot, targetBody,
-        renderedBody: drawn ? { ...drawn, visible: remote.renderedBody.visible === true } : null,
+        renderedBody: drawn ? { ...drawn, visible: remote.renderedBody.visible === true, bottomY } : null,
         playbackDelayMs: delay, receivedSince, lagFrames };
       evidence.last = current;
       evidence.trail.push(current);

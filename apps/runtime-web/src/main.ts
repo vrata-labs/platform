@@ -1463,7 +1463,8 @@ const remoteAvatarRuntime = createRemoteAvatarRuntime({
   scene,
   bodyGeometry,
   headGeometry,
-  get localParticipantId() { return participantId; }
+  get localParticipantId() { return participantId; },
+  getSeatAnchor: (seatId) => sceneSeatAnchorMap.get(seatId)
 });
 
 function setFallbackEnvironmentVisible(visible: boolean): void {
