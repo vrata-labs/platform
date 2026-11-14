@@ -18,7 +18,7 @@ on:
 
 jobs:
   smoke:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       BASE_URL: ${{ inputs.base_url }}
       PLAYWRIGHT_NO_WEB_SERVER: "1"
