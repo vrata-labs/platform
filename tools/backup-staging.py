@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,8 @@ def load_module(name, filename):
 
 accepted = load_module("backup_accepted", "staging-accepted-release.py")
 minio = load_module("backup_minio", "staging-minio-rollout.py")
+remote = load_module("backup_remote", "staging-remote-release.py")
+recovery = load_module("backup_recovery", "private-scene-recovery.py")
 
 
 def capture(args, root):
@@ -35,6 +38,14 @@ def capture(args, root):
 def backup(root, output_dir):
     root = Path(root).resolve()
     state = accepted.AcceptedState(root)
+    # Same order as rollout: operation lock, then state lock. A shared state lock
+    # also excludes standalone bind/publish calls throughout the database export.
+    with remote.ReleaseHost(root).operation_lock(), state.locked(create=False, shared=True):
+        return backup_locked(state, output_dir)
+
+
+def backup_locked(state, output_dir):
+    root = state.root
     release = state.preflight()["release"]
     env = root / "infra/docker/.env.staging"
     values = dict(line.split("=", 1) for line in env.read_text().splitlines()
@@ -66,35 +77,52 @@ def backup(root, output_dir):
     output_dir = Path(output_dir).resolve()
     output_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%fZ")
-    destination = output_dir / f'vrata-{timestamp}-{release["imageSha"]}'
-    with tempfile.TemporaryDirectory(prefix=".backup-compose-", dir=state.directory) as directory:
-        compose_files = ["--compose-file", str(compose_file)]
-        if legacy:
-            override = Path(directory) / "minio.override.json"
-            override.write_text(json.dumps({"services": {
-                "minio": {"image": minio.PINNED_MINIO},
-                "minio-bootstrap": {"image": minio.PINNED_MC}}}))
-            override.chmod(0o600)
-            compose_files += ["--compose-file", str(override)]
-        command = ["node", str(root / "tools/backup-restore.mjs"), "backup",
-                   "--env-file", str(env), *compose_files, "--image-tag", release["imageSha"],
-                   "--accepted-release-file", str(state.manifest_path), "--backup-dir", str(destination)]
-        if subprocess.run(command, cwd=root, check=False).returncode:
-            raise RuntimeError("staging_backup_failed")
-    if state.preflight()["release"] != release or capture(
-            ["docker", "inspect", "--format", "{{.Config.Image}}", container], root) != image:
-        # A checksum-valid export taken across a release change is not a verified
-        # recovery point and must not count toward retention's two newer copies.
-        (destination / "manifest.json").rename(destination / "manifest.incomplete.json")
-        raise ValueError("staging_backup_release_changed")
-    for directory, _, files in os.walk(destination):
-        Path(directory).chmod(0o700)
-        for filename in files:
-            (Path(directory) / filename).chmod(0o600)
-    if subprocess.run(["node", str(root / "tools/backup-restore.mjs"), "validate",
-                       "--backup-dir", str(destination)], cwd=root, check=False).returncode:
-        raise RuntimeError("staging_backup_invalid")
-    return {"backupDir": str(destination), "imageSha": release["imageSha"], "validated": True}
+    name = f'vrata-{timestamp}-{release["imageSha"]}'
+    destination = output_dir / (".incomplete-" + name)
+    published = output_dir / name
+    if os.path.lexists(destination) or os.path.lexists(published):
+        raise ValueError("staging_backup_destination_exists")
+    before = recovery.metadata(state)
+    try:
+        with tempfile.TemporaryDirectory(prefix=".backup-compose-", dir=state.directory) as directory:
+            compose_files = ["--compose-file", str(compose_file)]
+            if legacy:
+                override = Path(directory) / "minio.override.json"
+                override.write_text(json.dumps({"services": {
+                    "minio": {"image": minio.PINNED_MINIO},
+                    "minio-bootstrap": {"image": minio.PINNED_MC}}}))
+                override.chmod(0o600)
+                compose_files += ["--compose-file", str(override)]
+            command = ["node", str(root / "tools/backup-restore.mjs"), "backup",
+                       "--env-file", str(env), *compose_files, "--image-tag", release["imageSha"],
+                       "--accepted-release-file", str(state.manifest_path), "--backup-dir", str(destination)]
+            if subprocess.run(command, cwd=root, check=False).returncode:
+                raise RuntimeError("staging_backup_failed")
+        if state.preflight()["release"] != release:
+            raise ValueError("staging_backup_release_changed")
+        recovery.attach(state, destination, before)
+        for directory, _, files in os.walk(destination):
+            Path(directory).chmod(0o700)
+            for filename in files:
+                (Path(directory) / filename).chmod(0o600)
+        recovery.validate(destination)
+        if state.preflight()["release"] != release or recovery.metadata(state) != before or capture(
+                ["docker", "inspect", "--format", "{{.Config.Image}}", container], root) != image:
+            raise ValueError("staging_backup_release_changed")
+        # The generic retention scanner sees only vrata-* directories. An export
+        # cannot count as one of its verified copies before scenes are complete.
+        if os.path.lexists(published):
+            raise ValueError("staging_backup_destination_exists")
+        os.rename(destination, published)
+    except BaseException:
+        # Never let a partial export count as a verified recovery/retention point.
+        manifest = destination / "manifest.json"
+        if manifest.exists():
+            manifest.rename(destination / "manifest.incomplete.json")
+        if (destination / recovery.NAMESPACE).is_dir():
+            shutil.rmtree(destination / recovery.NAMESPACE)
+        raise
+    return {"backupDir": str(published), "imageSha": release["imageSha"], "validated": True}
 
 
 if __name__ == "__main__":
@@ -106,6 +134,6 @@ if __name__ == "__main__":
         print(json.dumps(backup(args.root, args.output_dir), sort_keys=True))
     except (ValueError, RuntimeError, OSError) as error:
         message = str(error)
-        if not message.startswith(("staging_backup_", "accepted_release_", "staging_json_")):
+        if not message.startswith(("staging_backup_", "private_scene_recovery_", "accepted_release_", "staging_json_")):
             message = "staging_backup_failed"
         raise SystemExit(message) from None
