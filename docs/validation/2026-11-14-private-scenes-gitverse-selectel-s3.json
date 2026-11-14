@@ -27,7 +27,7 @@
       "description": "Release helper и staging integration проходят негативные/граничные тесты загрузки, immutable binding, snapshot и A-B-failed gate-A без Git-сцен.",
       "required": true,
       "kind": "command",
-      "argv": ["bash", "-o", "pipefail", "-lc", "python3 tools/private-scene-release.test.py && node --test tools/staging-scene-files.test.mjs tools/staging-scene-snapshot.test.mjs tools/staging-accepted-release.test.mjs tools/staging-remote-release.test.mjs tools/private-scene-recovery.test.mjs"],
+      "argv": ["bash", "-o", "pipefail", "-lc", "python3 tools/private-scene-release.test.py && node --test tools/private-scene-workflow.test.mjs tools/staging-scene-files.test.mjs tools/staging-scene-snapshot.test.mjs tools/staging-accepted-release.test.mjs tools/staging-remote-release.test.mjs tools/private-scene-recovery.test.mjs"],
       "timeout_seconds": 900
     },
     {
