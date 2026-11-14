@@ -184,12 +184,19 @@ Reader secrets `PRIVATE_SCENES_S3_READER_ACCESS_KEY_ID` и `PRIVATE_SCENES_S3_RE
 Это **локальная проверка архивных bytes, не скачивание из Selectel S3**. Внешняя положительная проверка S3, полный исторический инвентарь удалённого хоста и обновление current/previous/Wave 2/room URLs после bootstrap остаются открыты; **k03/k06 не закрыты, общий READY не заявлен**. Push/PR, stage, runtime, модели и plugin storage в Task 6 не затрагивались; общая эксплуатационная документация остаётся Task 7.
 
 ### Task 7. Поставить узкий S3 infra PR в main
-- [ ] Обновить `docs/scene-assets-repository.md`, `docs/ci-cd.md`, `docs/deployment-staging.md`, реестр backup/restore и релизные инструкции: GitVerse recovery/source отдельно, S3 release отдельно, scopes credentials, bootstrap и откат.
-- [ ] Убедиться, что отдельная infra-ветка от актуального `origin/main` содержит только S3 delivery/recovery и относящиеся тесты/документацию, без остальных изменений T17 из PR #157.
+- [x] Обновить `docs/scene-assets-repository.md`, `docs/ci-cd.md`, `docs/deployment-staging.md`, реестр backup/restore и релизные инструкции: GitVerse recovery/source отдельно, S3 release отдельно, scopes credentials, bootstrap и откат.
+- [x] Убедиться, что отдельная infra-ветка от актуального `origin/main` содержит только S3 delivery/recovery и относящиеся тесты/документацию, без остальных изменений T17 из PR #157.
 - [ ] На infra-ветке выполнить новые release/recovery/rollout тесты, `pnpm lint`, `pnpm typecheck`, `pnpm build`, `pnpm test` и полный штатный `pnpm test:e2e --workers=1 --retries=0` с собственными fixtures. Если ветка уже содержит GPU-конфиг — использовать его для обязательных visual-сценариев.
 - [ ] Проверить итоговый diff, исключить credentials, scene binaries и временную обвязку. Commit/push и отдельный узкий PR без назначения reviewers; дождаться зелёного CI.
 - [ ] Обычным согласованным путём слить именно этот infra PR в `main`. При необходимости admin bypass отдельно спросить пользователя. Не сливать PR #157 ради инфраструктуры.
 - Готово: **k10**; публичный CI не получает приватные scene bytes, образы платформы не содержат их. Оценка: до 1 ч работы плюс полные прогоны/CI/одобрение.
+
+Документация разделяет восстановленный GitVerse source, pinned S3 release и
+byte-only recovery без принятия хоста. Узкая ветка основана на
+`origin/main` `e0ea693e0fa5f35d2a47e9837a681657462d8d77` (remote main сверен);
+runtime-изменений и GPU-конфига T17 в её diff нет. Проверки Markdown/JSON и
+чистоты diff относятся только к подготовительной части. Полные локальные тесты,
+push, PR, CI и слияние в main остаются открыты; **k07–k10 этим не закрыты**.
 
 ### Task 8. Получить окончательного кандидата T17
 - [ ] Влить актуальный `origin/main` с S3 workflow/helper в `feat/t17-product-acceptance`; сохранить изменения T17 и устранить только реальные конфликты.

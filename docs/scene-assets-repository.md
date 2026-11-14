@@ -1,103 +1,175 @@
-# Scene Assets Repository Boundary
+# Приватные сцены: исходники и готовые релизы
 
-Vrata platform development and proprietary scene development must be separated.
+Публичный репозиторий платформы содержит runtime, API, инфраструктуру, контракты,
+валидаторы и разрешённые к распространению примеры. Приватные и клиентские сцены
+хранятся отдельно: права на код платформы не дают прав на модели SenseTower.
 
-## Decision
+## Исходный снимок в GitVerse
 
-- The public platform repository owns runtime code, APIs, self-host infrastructure, scene bundle contracts, validators, and cleared sample assets.
-- Private or customer-specific scene bundles live outside the public platform repository.
-- Current `sense-*` scene bundles are not cleared for public redistribution and live in the private `psilon2000/noah-scene-assets-private` repository after migration snapshot `ea04324`.
-
-## Why
-
-- Scene rights are separate from platform source code rights.
-- Platform users should be able to bring their own spaces without inheriting proprietary SenseTower assets.
-- Scene iteration has different release cadence, validation needs, and access controls than platform runtime development.
-- Public Docker images and source archives must not accidentally include non-redistributable assets.
-
-## Target Repository
-
-Private repository:
+Приватный репозиторий: `https://gitverse.ru/vrata-labs/vrata-scene-assets-private`.
+Это восстановленный снимок прежнего `psilon2000/noah-scene-assets-private`, а не
+полная восстановленная история. Новый root-коммит
+`ed0c972cf05f512c35861ef76cff8f87080f3133` сохраняет файлы снимка
+`0a3b492e788bad82bf20a92476a628bf30c6dfbe`; происхождение и shallow-граница
+описаны в `RECOVERY.md`. Исходная копия и её защищённый архив сохраняются отдельно.
 
 ```text
-psilon2000/noah-scene-assets-private
-```
-
-Recommended layout:
-
-```text
-assets/scenes/
-  sense-hall2-v1/
-    scene.json
-    scene.glb
-  sense-blueoffice-glb-v4/
-    scene.json
-    scene.glb
-manifest.json
+assets/
+  manifest.json
+  scenes/
+    sense-hall2-v1/scene.json
+    sense-hall2-v1/scene.glb
+    ...
 README.md
 LICENSES.md
+RECOVERY.md
 ```
 
-The private repository should document:
+В репозитории сцен сохраняются происхождение, ограничения распространения,
+исходные проекты/команды экспорта, состояние проверки и предполагаемые привязки
+комнат. Сохранение legacy-файлов не означает исправления их материалов или текстур.
+Перенос готовых релизов не переэкспортирует модели и не создаёт новую визуальную приёмку.
 
-- source/provenance per scene;
-- redistribution restrictions;
-- export command or source project;
-- validation status;
-- intended staging room bindings;
-- owner/contact for each scene family.
+## Закреплённый релиз в S3
 
-## Migration Tool
+GitVerse нужен для хранения и развития исходников. Staging Deploy не клонирует
+репозиторий сцен: он получает готовый приватный пакет через стандартный S3 API
+и AWS CLI. GitVerse token и прежний `PRIVATE_SCENE_ASSETS_DEPLOY_KEY` этому пути не нужны.
 
-Use the non-destructive export tool from the platform repo:
+`tools/private-scene-release.py` предоставляет `pack`, `publish`, `fetch`.
+Упаковка включает всё существующее `assets/`, без `.git`, credentials и посторонних
+каталогов; исходные GLB/GLTF/FBX и `scene.json` не переписываются.
+
+- `assetSha` — полный 40-символьный Git SHA исходников сцен, не SHA платформы.
+- `inventory.json` фиксирует относительный путь, размер и SHA-256 каждого файла.
+- Детерминированный `bundle.tar.gz` содержит `assets/` и inventory.
+- Descriptor: `private-scenes/releases/<assetSha>/release.json`.
+- Архив: `private-scenes/releases/<assetSha>/<archiveSha256>/bundle.tar.gz`.
+- Descriptor format 1 закрепляет archive/inventory, размеры, SHA-256, список сцен
+  и provenance. SHA-256 имеет 64 hex-символа; S3 ETag его не заменяет.
+- `infra/docker/private-scene-release.lock.json` закрепляет также точные bytes/SHA-256
+  descriptor для нового кандидата. Endpoint, бакет и секреты в lock не входят.
+
+Архив публикуется первым, descriptor — последним. Запись использует
+`PutObject If-None-Match: *` и полное контрольное чтение: те же bytes допускают
+повтор, иное содержимое под тем же ID отклоняется. Если endpoint не поддерживает
+условную запись, публикация останавливается, а не переходит к перезаписи.
+Versioning не заменяет эту проверку; автоматическое удаление релизов не предусмотрено.
+
+## Настройки и права
+
+| Вход | Назначение / текущая настройка |
+| --- | --- |
+| `VRATA_SCENES_S3_ENDPOINT` | HTTPS endpoint: `https://s3.ru-3.storage.selcloud.ru` |
+| `VRATA_SCENES_S3_REGION` | S3-пул `ru-3`, не зона сервера `ru-2c` |
+| `VRATA_SCENES_S3_BUCKET` | Приватный `vrata-private-scene-releases` |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Только защищённое окружение команды publish/fetch |
+| `PRIVATE_SCENES_S3_READER_ACCESS_KEY_ID`, `PRIVATE_SCENES_S3_READER_SECRET_ACCESS_KEY` | CI secrets только fetch-шага Staging Deploy |
+
+Workflow читает `VRATA_SCENES_S3_*` из одноимённых repository variables с указанными
+значениями по умолчанию. CLI принимает их через env или `--endpoint/--region/--bucket`.
+Используется изолированный AWS CLI `1.46.0`; helper не использует AWS profiles,
+metadata credentials или Keystone-токен Selectel и не меняет политики бакета.
+Для текущего endpoint workflow задаёт `--addressing-style path`; CLI по умолчанию
+использует `virtual`. Для отдельного CLI его следует указывать явно.
+
+- Writer: только `s3:GetObject` и `s3:PutObject` в `private-scenes/releases/*`.
+- Reader: только `s3:GetObject` в том же префиксе.
+- Обычному деплою не нужны PUT, DELETE, ListBucket, права IAM или управления policy.
+- Анонимные GET/list и reader PUT/DELETE должны быть запрещены. При этом одни
+  отрицательные отказы не подтверждают готовность: нужны успешные writer PUT/read-back
+  и reader fetch с проверкой всех хешей.
+- Ключи не передаются staging-хосту, браузеру, образам или публичным артефактам CI.
+  В URL, descriptor и lock их быть не должно.
+
+## Выпуск и проверка пакета
+
+Команды выполняются из корня платформы. `PRIVATE_SOURCE` — отдельный Git checkout
+сцен на полном согласованном commit; `PRIVATE_PACKAGE` — новый каталог вне него,
+с защищённым родителем. Установить AWS CLI указанной версии перед S3-командами.
 
 ```bash
-node tools/export-private-scene-assets.mjs /path/to/noah-scene-assets-private/assets/scenes
+umask 077
+python3 -B tools/private-scene-release.py pack \
+  --source "$PRIVATE_SOURCE" --asset-sha "$ASSET_SHA" --output "$PRIVATE_PACKAGE"
 ```
 
-The tool copies current `apps/runtime-web/public/assets/scenes/sense-*` directories and writes `manifest.json` next to the target `scenes` directory.
-
-It does not delete anything from the platform repository. Deletion from the platform repository must be a separate commit after the private repository is created and staging has a working private asset fetch/publish path.
-
-## Sync Tool
-
-After the private scene-assets repository exists, a platform checkout can sync private scenes into the runtime public asset directory before internal staging build/deploy:
+После положительной проверки writer-доступа загрузить его ключи в защищённое
+окружение и опубликовать пакет:
 
 ```bash
-node tools/sync-private-scene-assets.mjs /path/to/noah-scene-assets-private/assets
+python3 -B tools/private-scene-release.py publish \
+  --package "$PRIVATE_PACKAGE" --addressing-style path --timeout 300
 ```
 
-The sync tool reads `/path/to/noah-scene-assets-private/assets/manifest.json` and copies listed `sense-*` scene bundles into `apps/runtime-web/public/assets/scenes`.
+Для нового кандидата сформировать lock по фактическим bytes `release.json`
+(key/bytes/SHA-256), его `assetSha`, `archive` и `inventory`. Проверить reader-ключом
+скачивание в свежий каталог с существующим защищённым родителем до поставки lock:
 
-It does not delete existing platform assets. Public release workflows must not run this sync step.
+```bash
+python3 -B tools/private-scene-release.py fetch \
+  --lock infra/docker/private-scene-release.lock.json \
+  --catalog infra/docker/staging-scene-catalog.json \
+  --output "$VERIFIED_SOURCE" --addressing-style path --timeout 300
+```
 
-Internal staging uses the GitHub Actions secret `PRIVATE_SCENE_ASSETS_DEPLOY_KEY` to checkout `psilon2000/noah-scene-assets-private`, uploads its `assets/` directory to `/opt/noah-private-scene-assets/assets` on the staging host, and runs the sync tool before staging scene snapshots are created.
+Готовый source появляется атомарно только после проверки descriptor, размера и
+SHA-256 архива, безопасной распаковки, полного inventory и 13 обязательных сцен
+staging-каталога. Проверяются также лимиты количества/размера файлов и свободное
+место. Links, специальные файлы, absolute/`..` paths и дубликаты запрещены.
+В результате есть `assets/`, `inventory.json`, `release.json`, но нет Git сцен.
+Наличие lock в Git само по себе не подтверждает публикацию пакета в S3.
 
-## Staging Flow After Migration
+## Identity при поставке и откате
 
-- Platform CI builds and tests against cleared fixtures and public sample scenes only.
-- Platform CI excludes Playwright tests tagged `@private-assets`.
-- Private scene asset validation can run `pnpm test:e2e:private-assets` after mounting or syncing private scene bundles into the runtime public assets directory.
-- Private scene-assets CI validates proprietary scene bundles separately.
-- Internal staging deploy fetches private scene assets through the read-only deploy key stored in `PRIVATE_SCENE_ASSETS_DEPLOY_KEY`.
-- Staging room manifests continue to bind through versioned `sceneBundleUrl` values.
-- Public release workflows must not fetch private scene assets.
+Сначала read-only preflight получает сохранённый binding `imageSha -> assetSha`.
+При его наличии fetch использует только `--asset-sha "$BOUND_ASSET_SHA"`.
+Для нового image без binding требуется lock именно целевого platform checkout.
+Эти варианты взаимоисключающие; новый lock никогда не заменяет старый binding.
 
-## Public Release Rules
+До checkout исторического deploy SHA workflow сохраняет fetch helper и
+`staging-scene-catalog.json` из версии workflow в `RUNNER_TEMP`. Каталог передаётся
+через `--catalog`; новый lock вместе с helper не копируется. Это позволяет
+поставлять старый target без helper/lock, если его binding и точный S3 release доступны.
+Исторический descriptor допустим только при доказанном происхождении его bytes;
+переименовывать новый пакет в неизвестную старую identity нельзя.
 
-- The public platform repo may include `livadia-nicholas-office-v1` and other cleared/generated sample scenes.
-- The public platform repo must not include `sense-*` scene bundles unless redistribution rights are explicitly confirmed.
-- The public platform repo must not include `research/exports*` Unity/SenseTower-derived export artifacts unless redistribution rights are explicitly confirmed.
-- `tools/check-public-assets.mjs` blocks public GHCR release images if non-cleared scene bundle directories are present in `apps/runtime-web/public/assets/scenes`.
-- Removing private assets from HEAD is not enough to make the current repository public if old git history still contains proprietary blobs.
+Проверенное `source/assets` передаётся по SSH в прежний
+`staging-remote-release.py --source`. Operation lock, immutable snapshots,
+atomic active, gate, acceptance, retention и rollback остаются обязательными.
+Браузер читает прежние versioned URL платформы, включая `state.<host>`, а не S3;
+presigned URLs и S3 CORS для этого не требуются.
+Bootstrap запускается только после поставки S3 workflow/helper в default `main`.
+Подробности: [staging](deployment-staging.md), [CI/CD](ci-cd.md),
+[backup/restore](backup-restore.md), [релизы](releases.md).
 
-## Migration Phases
+### Ошибки не переключают источник
 
-1. [x] Create private scene-assets repository.
-2. [x] Export `sense-*` bundles with `tools/export-private-scene-assets.mjs`.
-3. [x] Commit exported assets and provenance notes in the private repository.
-4. [ ] Add private asset validation/publish workflow.
-5. [x] Update internal staging deploy to fetch the private repository and run `tools/sync-private-scene-assets.mjs` before snapshot/build/publish.
-6. [x] Remove `sense-*` bundles from the public platform repository HEAD.
-7. [x] Resolve public repository git-history exposure with a clean public import.
-8. [x] Verify platform CI, self-host compose, public release guard, and internal staging gate.
+`private_scene_release: <code>` возвращает ненулевой статус без сырых ответов CLI
+и секретов. `s3_AccessDenied`/`s3_403`, `s3_NoSuchKey`/`s3_404`,
+`s3_timeout`, `s3_connection_failed`, `download_digest_mismatch`,
+`release_conflict` и ошибки inventory/архива блокируют новую поставку.
+403 без ListBucket не считается доказательством отсутствия объекта.
+Не использовать другой SHA, `latest`, новый private `main` или Git checkout как fallback.
+Ошибка fetch до rollout не меняет принятые контейнеры, active и room URLs.
+Откат после gate использует точную прежнюю связку и сохранённые snapshots;
+недоступная историческая версия блокируется явно.
+
+## Локальная проверка и публичная граница
+
+Для `@private-assets` допускается синхронизация проверенных bytes в отдельный
+внутренний checkout, не используемый для публичной сборки:
+
+```bash
+node tools/sync-private-scene-assets.mjs "$VERIFIED_SOURCE/assets"
+pnpm test:e2e:private-assets --workers=1 --retries=0
+```
+
+`tools/export-private-scene-assets.mjs` остаётся неразрушающим инструментом
+первичного экспорта, а не способом восстановить неизвестную историю.
+Обычный CI и публичные images используют только разрешённые примеры и fixtures;
+отдельный `scene-repositories.lock.json` публичных сцен не меняется.
+`sense-*`, Unity/SenseTower `research/exports*`, private bundles и recovery backups
+не добавляются в публичный Git, Docker layers или CI artifacts.
+`tools/check-public-assets.mjs` сохраняет роль публичного release guard.
+Удаление файлов из HEAD не очищает прежнюю Git-историю от proprietary blobs.
