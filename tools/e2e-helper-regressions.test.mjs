@@ -7,6 +7,7 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 // Keep the ordinary tools/*.test.mjs gate browser-free and explicitly scoped.
 const suites = [
   "tests/e2e/functional-diagnostics.unit.ts",
+  "tests/e2e/hardware-rendering.unit.ts",
   "tests/e2e/seat-marker-proof.unit.ts",
   "tests/e2e/seat-occupied-observation.unit.ts",
   "tests/e2e/seat-release-observation.unit.ts"

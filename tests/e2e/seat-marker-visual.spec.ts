@@ -3,6 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, resolve, sep } from "node:path";
 import { parseSceneBundleManifest } from "../../apps/runtime-web/src/scene-bundle.js";
+import { hardwareRenderingDecision, readWebglRenderer, requireHardwareRendering } from "./hardware-rendering";
 import { startReferenceTemplateFixture } from "./reference-template-fixture.js";
 import { observeReferenceTest } from "./reference-test-observation";
 import { captureRoomAuthority, type RoomAuthorityCapture } from "./room-state-observation";
@@ -133,6 +134,9 @@ for (const staging of [false]) test.describe(`${staging ? "@staging " : ""}seat 
     test(`${templateId}: ${visual ? "visual free, hovered, occupied, own and released views" : "centre ray, authoritative occupancy, blocked interaction and release"}`, async ({ page, request, browser, launchOptions, headless, channel }, testInfo) => {
       test.skip(!fixture, "Local reference checks require VRATA_TEST_POSTGRES_URL (provided by CI)");
       test.setTimeout(300000);
+      // The 16-RAF release readiness inside the 15s budget needs hardware WebGL; decided
+      // before the room exists, so nothing below changes with the renderer.
+      if (visual) await skipUnlessHardwareRendering(page, testInfo);
       const headers = { "x-vrata-admin-token": token! };
       const response = await request.post(`${fixture!.origin}/api/rooms`, {
         headers, data: { tenantId: "demo-tenant", templateId, name: "Volumetric marker review" }
@@ -300,6 +304,17 @@ for (const staging of [false]) test.describe(`${staging ? "@staging " : ""}seat 
     });
   }
 });
+
+// Probes the same browser as the room page; the observer browser uses the same launch options.
+// Software rendering skips, or fails with VRATA_E2E_REQUIRE_HARDWARE_RENDERING=1 (playwright.gpu.config.ts).
+async function skipUnlessHardwareRendering(page: Page, testInfo: TestInfo) {
+  const info = await page.evaluate(readWebglRenderer);
+  const required = requireHardwareRendering(process.env);
+  const decision = hardwareRenderingDecision(info, required);
+  await testInfo.attach("webgl-renderer", { body: JSON.stringify({ ...info, required, decision }), contentType: "application/json" });
+  if (decision.action === "fail") throw new Error(decision.reason!);
+  test.skip(decision.action === "skip", decision.reason ?? undefined);
+}
 
 interface Seat { id: string; yaw: number; seatHeight: number; radius: number; position: { x: number; y: number; z: number } }
 function seatReviewPose(seat: Seat) {
