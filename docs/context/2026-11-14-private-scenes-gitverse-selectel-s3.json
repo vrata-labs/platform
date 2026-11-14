@@ -155,6 +155,15 @@
       "checked_at": "2026-11-14T16:15:52Z",
       "status": "available",
       "summary": "В обоих прочитанных accepted-release.json assetSha равен 0a3b492e788bad82bf20a92476a628bf30c6dfbe. Других identities в этих проверенных backup не найдено. Это ограниченный инвентарь сохранённых оснований, а не доказательство полного состава current/previous/Wave 2/room URL версий удалённого хоста. Неизвестные версии нельзя подменять найденным снимком. Стенды отсутствуют по результату предыдущего vrata-stage status; новый стенд для поиска не создавался. Реальные descriptors/archive ещё предстоит проверить в Tasks 3/6 и обновить список после bootstrap в Task 9."
+    },
+    {
+      "id": "S18",
+      "system": "gitverse-control-clone",
+      "locator": "https://gitverse.ru/vrata-labs/vrata-scene-assets-private ; независимый clone ; protected-source-recovery S14",
+      "version": "root ed0c972cf05f512c35861ef76cff8f87080f3133; tree 31c28cc1971406d2f73d45b612004a3e95c757f7",
+      "checked_at": "2026-11-14T16:50:19Z",
+      "status": "available",
+      "summary": "k02: независимый контрольный clone не shallow, содержит ровно один root-коммит без родителей. Все 218 исходных tracked files совпали с защищённым инвентарём по режимам/размерам/SHA-256 и с исходным tree по Git blob IDs; единственный добавленный файл RECOVERY.md сохраняет SHA происхождения, shallow-ограничение и ссылки на исходные LICENSES без локальных путей. assets tree в обеих копиях 01c1df83a401389e644e79e09718c45bc481f663. Исходник и clone чистые; git fsck --full --strict успешен для обоих; исходник остаётся shallow на 0a3b492e788bad82bf20a92476a628bf30c6dfbe с отсутствующим прежним родителем. Инвентарь SHA-256 2c7ab5bc304256bbb7cf9e8b44702be656b6e8151d996c84d297ac0c4e1a1639 и архив SHA-256 cb6c6081d115f884116176b52a941806edf44e5b0c323521206c7dcec0253db0 повторно сверены, права backup 0700/0600. Авторизованный GET /repos/vrata-labs/vrata-scene-assets-private вернул 200, private=true, default_branch=main, pull/push/admin=true; анонимный GET — 401. Живой git ls-remote --symref вернул только HEAD -> main и refs/heads/main на ed0c972cf05f512c35861ef76cff8f87080f3133; других веток, тегов и временных refs нет."
     }
   ],
   "claims": [
@@ -172,7 +181,8 @@
     {"id": "F12", "status": "confirmed", "text": "Сохранение всех существующих bytes не исправляет legacy FBX с отсутствующими текстурами; его дефект вне каталога 13 сцен не следует выдавать за успешную загрузку.", "sources": ["S4"]},
     {"id": "F13", "status": "confirmed", "text": "Существующие платформенные URLs не все same-origin с приложением. S3 как deployment source не требует менять эти URLs или вводить browser S3/CORS.", "sources": ["S1", "S10"]},
     {"id": "F14", "status": "confirmed", "text": "k01 подтверждён: независимый защищённый архив и полный исходный инвентарь сохранены, 218 файлов совпали по режимам/размерам/SHA-256, все 13 обязательных сцен на месте.", "sources": ["S14"]},
-    {"id": "F15", "status": "confirmed", "text": "Два проверенных backup содержат один исторический assetSha 0a3b492e788bad82bf20a92476a628bf30c6dfbe. Полнота всех требуемых исторических версий этим не доказана; неизвестный rollback остаётся заблокирован.", "sources": ["S17"]}
+    {"id": "F15", "status": "confirmed", "text": "Два проверенных backup содержат один исторический assetSha 0a3b492e788bad82bf20a92476a628bf30c6dfbe. Полнота всех требуемых исторических версий этим не доказана; неизвестный rollback остаётся заблокирован.", "sources": ["S17"]},
+    {"id": "F16", "status": "confirmed", "text": "k02 подтверждён: приватный GitVerse содержит новый root ed0c972cf05f512c35861ef76cff8f87080f3133 с теми же 218 исходными файлами/режимами и только RECOVERY.md сверх них; контрольный clone, fsck, inventory и живые remote refs/private visibility проверены.", "sources": ["S18"]}
   ],
   "gaps": [
     {"question": "Как сохранить минимальную bucket policy через авторизованную панель при тайм-ауте PUT API управления S3?", "blocking": true, "next_step": "Task 1: после восстановления штатного API сохранить оставленный черновик двух правил в существующем бакете, затем проверить writer PUT/GET/HEAD, reader GET/HEAD и отказы reader PUT/DELETE, writer DELETE/out-of-prefix и anonymous GET/list. Прямой обход панели не согласован."},

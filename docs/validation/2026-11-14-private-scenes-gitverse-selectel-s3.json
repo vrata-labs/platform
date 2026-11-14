@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "task": "Приватные сцены: восстановленный снимок в GitVerse vrata-lab, immutable Selectel S3 release и проверенный staging без checkout репозитория сцен",
+  "task": "Приватные сцены: восстановленный снимок в GitVerse vrata-labs, immutable Selectel S3 release и проверенный staging без checkout репозитория сцен",
   "domain": "general",
   "scope": ["."],
   "criteria": [
@@ -12,7 +12,7 @@
     },
     {
       "id": "k02",
-      "description": "Приватный GitVerse vrata-lab/vrata-scene-assets-private содержит согласованный снимок с новой историей; независимый clone совпадает по исходным файлам/хешам, source SHA и видимость подтверждены.",
+      "description": "Приватный GitVerse vrata-labs/vrata-scene-assets-private содержит согласованный снимок с новой историей; независимый clone совпадает по исходным файлам/хешам, source SHA и видимость подтверждены.",
       "required": true,
       "kind": "evidence"
     },
