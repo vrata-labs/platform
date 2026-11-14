@@ -369,6 +369,12 @@ test("the real snapshot timeout ends a hung renewal: the kept preparation is can
   let now = 0, refreshes = 0, release!: (instance: Instance) => void, signal!: AbortSignal;
   const turn = async () => { for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve)); };
   const tick = async (to: number) => { const ms = to - now; now = to; t.mock.timers.tick(ms); await turn(); };
+  // Content verification hashes on the crypto thread pool, so no fixed number of turns bounds the VM start;
+  // mocked time moves only once it is pending. Later steps settle in microtasks. setTimeout is mocked: poll by turns.
+  const reached = async (check: () => boolean) => {
+    const deadline = Date.now() + 5000;
+    while (!check()) { if (Date.now() >= deadline) assert.fail("controller_condition_not_reached"); await new Promise(resolve => setImmediate(resolve)); }
+  };
   const runtime = JSON.stringify({ schemaVersion: 1, sdkApiVersion: 1, revision: 1, leaseExpiresAtMs: 1, bindings: [{
     bindingId, packageId, pluginId: artifact.artifact.manifest.id, version: "1.0.0", artifactSha256: artifact.artifactSha256, enabled: true,
     generation: 1, bindingRevision: 1, approvedCapabilities: ["status.set"], config: { greeting: "x" }, contentUrl: roomPluginContentPath("room", packageId) }] });
@@ -385,7 +391,7 @@ test("the real snapshot timeout ends a hung renewal: the kept preparation is can
     http: createRoomPluginHttp({ apiBaseUrl: "https://app.invalid", roomId: "room", fetch: fetcher }),
     start: (_source, _config, _approved, _dispatch, abort) => { signal = abort; return new Promise(resolve => { release = resolve; }); } });
   t.after(() => controller.stop());
-  controller.start(2); await turn();
+  controller.start(2); await reached(() => signal !== undefined);
   assert.ok(signal, "the VM start is pending"); assert.equal(controller.diagnostics().fetchPending, false);
   await tick(2000); assert.equal(refreshes, 2); assert.equal(controller.diagnostics().remainingLeaseMs, 3000);
   await tick(4000); assert.equal(refreshes, 3); assert.equal(controller.diagnostics().fetchPending, true);
