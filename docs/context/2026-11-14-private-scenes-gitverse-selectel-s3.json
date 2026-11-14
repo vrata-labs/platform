@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "goal": "Восстановить локальный снимок приватных сцен в GitVerse vrata-lab и поставлять закреплённые готовые пакеты из приватного Selectel S3 без checkout репозитория сцен в deploy.",
+  "goal": "Восстановить локальный снимок приватных сцен в согласованной GitVerse vrata-labs (D-003) и поставлять закреплённые готовые пакеты из приватного Selectel S3 без checkout репозитория сцен в deploy.",
   "scope": "Приватные SenseTower assets из найденного shallow-клона, staging fetch/accepted snapshots/recovery. Публичные репозитории сцен, runtime loader, plugin storage и production исключены.",
   "sources": [
     {
@@ -37,7 +37,7 @@
       "version": "HEAD 0a3b492e788bad82bf20a92476a628bf30c6dfbe; clean; shallow, 1 commit",
       "checked_at": "2026-11-14T12:21:00Z",
       "status": "available",
-      "summary": "Remote psilon2000/noah-scene-assets-private; main и origin/main совпадают, других веток/тегов нет. Родитель ea04324ec94d49aa1d813326165cf925f66fe3ce отсутствует. fsck connectivity-only успешен для доступной shallow-границы, alternates/promisor отсутствуют. 218 tracked files; assets содержит 216 файлов, 28 сцен, 409577033 байта. Нет LFS pointers; крупнейший файл 28248900 байт. Все 13 сцен staging на месте. Есть неподтверждённые права распространения и отсутствующие текстуры вне staging-каталога у legacy sense-office-v1 FBX. Полное SHA-256 сравнение файлов ещё не выполнено."
+      "summary": "Remote psilon2000/noah-scene-assets-private; main и origin/main совпадают, других веток/тегов нет. Родитель ea04324ec94d49aa1d813326165cf925f66fe3ce отсутствует. fsck connectivity-only успешен для доступной shallow-границы, alternates/promisor отсутствуют. 218 tracked files; assets содержит 216 файлов, 28 сцен, 409577033 байта. Нет LFS pointers; крупнейший файл 28248900 байт. Все 13 сцен staging на месте. Есть неподтверждённые права распространения и отсутствующие текстуры вне staging-каталога у legacy sense-office-v1 FBX. Первоначальное наблюдение дополнено независимым SHA-256 сравнением в S14."
     },
     {
       "id": "S5",
@@ -118,7 +118,43 @@
       "version": "read-only наблюдение 2026-11-14",
       "checked_at": "2026-11-14T12:23:00Z",
       "status": "available",
-      "summary": "Есть project-scoped Selectel member и Keystone helper; роль не только compute. AWS CLI 1.46.0 установлен, AWS config/credentials отсутствуют, S3-ключи в прочитанном реестре не описаны. Значения паролей/токенов не извлекались, auth/mutations не выполнялись. Это не доказательство отсутствия S3-ключей во всех возможных местах."
+      "summary": "Первоначально были project-scoped Selectel member и Keystone helper; роль не только compute. AWS CLI 1.46.0 установлен, AWS config/credentials отсутствовали, S3-ключи в исходном реестре не описаны. Это не доказательство отсутствия ключей во всех возможных местах. Созданные позднее отдельные credentials и результат проверки отражены в S16."
+    },
+    {
+      "id": "S14",
+      "system": "protected-source-recovery",
+      "locator": "private-scene-recovery/0a3b492e788bad82bf20a92476a628bf30c6dfbe: provenance.json, tracked-inventory.tsv, source-snapshot.tar.sha256",
+      "version": "commit 0a3b492e788bad82bf20a92476a628bf30c6dfbe; tree 8b09bb8cd401611e74416382b2f60e0af9b8de1c",
+      "checked_at": "2026-11-14T16:15:52Z",
+      "status": "available",
+      "summary": "Независимый защищённый архив 615413760 байт содержит .git и исходные файлы; SHA-256 cb6c6081d115f884116176b52a941806edf44e5b0c323521206c7dcec0253db0. Архив независимо распакован: все 218 tracked files совпали по режимам/размерам/SHA-256, fsck успешен; исходник не менялся. Инвентарь SHA-256 2c7ab5bc304256bbb7cf9e8b44702be656b6e8151d996c84d297ac0c4e1a1639. Прочитаны provenance и метаданные: каталог 0700, четыре файла 0600. Все 13 staging-сцен присутствуют (217868504 байта); GLB имеют glTF2 header и встроенные images/buffers без внешних URI."
+    },
+    {
+      "id": "S15",
+      "system": "gitverse-authorized",
+      "locator": "https://gitverse.ru/vrata-labs/vrata-scene-assets-private ; D-003",
+      "version": "наблюдение 2026-11-14; root ed0c972cf05f512c35861ef76cff8f87080f3133",
+      "checked_at": "2026-11-14T16:15:52Z",
+      "status": "available",
+      "summary": "Пользователь подтвердил vrata-labs вместо исходного vrata-lab. Авторизованное членство/admin и private create/push подтверждены; репозиторий создан без auto_init. Обычный полный HTTPS push вернул 413, загрузка небольшими временными refs завершилась успешно, временные remote refs удалены. Восстановленный root ed0c972cf05f512c35861ef76cff8f87080f3133. Task 1 подтверждает доступ; принятие контрольного clone и совпадения инвентаря остаётся отдельной Task 2/k02."
+    },
+    {
+      "id": "S16",
+      "system": "selectel-panel-and-s3",
+      "locator": "https://my.selectel.ru/storage/972b9babdd42440eae4bb2e2cceb701b/containers/ru-3/vrata-private-scene-releases/bucket-policy/edit ; https://s3.ru-3.storage.selcloud.ru",
+      "version": "наблюдение 2026-11-14; AWS CLI 1.46.0; virtual-hosted addressing",
+      "checked_at": "2026-11-14T16:15:52Z",
+      "status": "available",
+      "summary": "Существующий приватный бакет vrata-private-scene-releases, ru-3, versioning включён, Object Lock выключен. Writer d5dc1dff19d7478289b97fb017e50271 и reader a56dc968231347eebacd05653bc94f8b имеют только s3.user в проекте My First Project; роль vrata-automation не менялась. Ключи и пароли зарегистрированы вне Git, каталог 0700/файлы 0600. Панель сформировала два Allow: writer GetObject/PutObject, reader GetObject, Resource arn:aws:s3:::vrata-private-scene-releases/private-scenes/releases/*. Первые два PUT policy завершились net::ERR_CONNECTION_TIMED_OUT. Повторный вход через список бакетов дал GET policy 404 policy_not_found; третья попытка PUT также завершилась timeout. Оба ключа: HEAD 403, GET/PUT/DELETE AccessDenied; anonymous GET/list 403. Пробная запись не принята, положительный доступ не подтверждён, k03 открыт. Анонимный GET сначала завершился timeout, повтор дал 403."
+    },
+    {
+      "id": "S17",
+      "system": "protected-staging-backups",
+      "locator": "beget-stage backup accepted-release.json: 2026-10-13T20-56-10-768939Z и 2026-10-13T22-14-15-084252Z",
+      "version": "accepted images 3f4cda2688d757f23a3b302723df06118d2a4cae и 380b2e7ff1dd67f19821ca324c575c7b0935c451",
+      "checked_at": "2026-11-14T16:15:52Z",
+      "status": "available",
+      "summary": "В обоих прочитанных accepted-release.json assetSha равен 0a3b492e788bad82bf20a92476a628bf30c6dfbe. Других identities в этих проверенных backup не найдено. Это ограниченный инвентарь сохранённых оснований, а не доказательство полного состава current/previous/Wave 2/room URL версий удалённого хоста. Неизвестные версии нельзя подменять найденным снимком. Стенды отсутствуют по результату предыдущего vrata-stage status; новый стенд для поиска не создавался. Реальные descriptors/archive ещё предстоит проверить в Tasks 3/6 и обновить список после bootstrap в Task 9."
     }
   ],
   "claims": [
@@ -132,15 +168,15 @@
     {"id": "F8", "status": "confirmed", "text": "Workflow/helper необходимо поставить в main согласованным способом до bootstrap нового хоста; прежний admin merge не разрешает новый bypass.", "sources": ["S7"]},
     {"id": "F9", "status": "confirmed", "text": "Сцены должны остаться вне публичного репозитория/образов и приватного S3 без анонимного доступа; публичные scene repositories и plugin storage не входят в перенос.", "sources": ["S9"]},
     {"id": "F10", "status": "confirmed", "text": "Для текущего снимка нет файлов больше 100 МБ и LFS pointers; необходимость LFS или изменения бинарных файлов не установлена.", "sources": ["S4", "S11"]},
-    {"id": "F11", "status": "confirmed", "text": "Авторизованный доступ к GitVerse и выбранному S3 не доказан; установленные CLI и cloud role не заменяют проверку конкретных прав и S3-ключей.", "sources": ["S11", "S12", "S13"]},
+    {"id": "F11", "status": "confirmed", "text": "Авторизованные private create/push в согласованной GitVerse vrata-labs подтверждены. S3-проект/пул/бакет/ключи выбраны, но положительные GET/PUT заблокированы несохранённой bucket policy; наличие ключей и отрицательные отказы не означают готовности доступа.", "sources": ["S15", "S16"]},
     {"id": "F12", "status": "confirmed", "text": "Сохранение всех существующих bytes не исправляет legacy FBX с отсутствующими текстурами; его дефект вне каталога 13 сцен не следует выдавать за успешную загрузку.", "sources": ["S4"]},
-    {"id": "F13", "status": "confirmed", "text": "Существующие платформенные URLs не все same-origin с приложением. S3 как deployment source не требует менять эти URLs или вводить browser S3/CORS.", "sources": ["S1", "S10"]}
+    {"id": "F13", "status": "confirmed", "text": "Существующие платформенные URLs не все same-origin с приложением. S3 как deployment source не требует менять эти URLs или вводить browser S3/CORS.", "sources": ["S1", "S10"]},
+    {"id": "F14", "status": "confirmed", "text": "k01 подтверждён: независимый защищённый архив и полный исходный инвентарь сохранены, 218 файлов совпали по режимам/размерам/SHA-256, все 13 обязательных сцен на месте.", "sources": ["S14"]},
+    {"id": "F15", "status": "confirmed", "text": "Два проверенных backup содержат один исторический assetSha 0a3b492e788bad82bf20a92476a628bf30c6dfbe. Полнота всех требуемых исторических версий этим не доказана; неизвестный rollback остаётся заблокирован.", "sources": ["S17"]}
   ],
   "gaps": [
-    {"question": "Есть ли авторизованные create/push права именно в GitVerse vrata-lab и свободно ли выбранное private repo name?", "blocking": true, "next_step": "Task 1: проверить своим штатным токеном/SSH без запросов доступа людям. 401/404 не считать ответом о наличии org."},
-    {"question": "Каковы конкретные S3-проект, пул, бакет, endpoint и reader/writer credentials?", "blocking": true, "next_step": "Task 1: подтвердить разрешённый доступ и параметры; при нехватке прав остановиться. Не использовать Keystone токен как S3 Secret Key."},
-    {"question": "Достаточно ли места для долговечной защищённой копии исходного shallow-снимка?", "blocking": true, "next_step": "Task 1: проверить ~/.local/share/vrata/private-scene-recovery/0a3b492e788bad82bf20a92476a628bf30c6dfbe/, сохранить оригинал с правами 0700/0600 без перезаписи существующих материалов до Task 2; исходник в /tmp не удалять."},
-    {"question": "Какие исторические bindings/snapshots требуются для current, previous, Wave 2 и сохранённых room URLs и доступны ли точные bytes?", "blocking": true, "next_step": "Task 1 и Task 6: инвентаризировать сохранённые проверяемые backups; создавать legacy descriptor только после совпадения inventory. Недоступную версию не подменять новой."},
+    {"question": "Как сохранить минимальную bucket policy через авторизованную панель при тайм-ауте PUT API управления S3?", "blocking": true, "next_step": "Task 1: после восстановления штатного API сохранить оставленный черновик двух правил в существующем бакете, затем проверить writer PUT/GET/HEAD, reader GET/HEAD и отказы reader PUT/DELETE, writer DELETE/out-of-prefix и anonymous GET/list. Прямой обход панели не согласован."},
+    {"question": "Какие ещё исторические bindings/snapshots требуются для current, previous, Wave 2 и сохранённых room URLs и доступны ли точные bytes?", "blocking": true, "next_step": "Task 1 выявила только assetSha 0a3b492 в двух сохранённых backup. Tasks 3/6: проверить реальный пакет этого SHA; Task 9: обновить инвентарь после bootstrap. Остальные identities не установлены и не подменяются новой."},
     {"question": "Пользователь выберет обычное одобрение merge workflow в main или отдельно разрешит конкретное административное исключение?", "blocking": true, "next_step": "Task 7 после зелёного CI узкого infra PR: обычное согласование. Затем merge main в T17 и новые exact-SHA проверки в Tasks 8–9. Разрешение на PR #158 не переносится."}
   ]
 }
