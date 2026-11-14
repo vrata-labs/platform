@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import { resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { syncBuiltinESMExports } from "node:module";
 import { mkdtemp, readFile, readdir, stat, rm } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
@@ -62,7 +63,7 @@ function deferred<T>() {
 }
 
 test("original panel evaluate late answer is logged after failure snapshot, never makes the predicate pass", async () => {
-  const root = await mkdtemp("/tmp/opencode/panel-observation-unit-");
+  const root = await mkdtemp(resolve(tmpdir(), "panel-observation-unit-"));
   const previous = process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
   process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR = root;
   try {
@@ -185,7 +186,7 @@ test("transport sample timeout/rejection never retries, and other scenarios do n
 });
 
 test("original Guest 20s predicate retains late true after failure independently, with private Node records", async () => {
-  const root = await mkdtemp("/tmp/opencode/guest-poll-unit-"), previous = process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
+  const root = await mkdtemp(resolve(tmpdir(), "guest-poll-unit-")), previous = process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
   process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR = root;
   try {
     let time = 1000, calls = 0;
@@ -294,7 +295,7 @@ test("Guest slow sink cannot run before original evaluate, predicate consumer or
 
 test("Guest original evaluate runs without synchronous filesystem access, including the resolve reaction", async () => {
   const previous = process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
-  const root = await mkdtemp("/tmp/opencode/guest-no-sync-unit-");
+  const root = await mkdtemp(resolve(tmpdir(), "guest-no-sync-unit-"));
   process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR = root;
   const mkdirSync = fs.mkdirSync, appendFileSync = fs.appendFileSync;
   let syncCalls = 0, calls = 0;
@@ -405,7 +406,7 @@ test("Guest persistence errors surface only outside assertions; async failure/ti
   stalled.resolve(); await stalled.promise; await Promise.resolve(); assert.equal(writes, 1);
   context.mock.timers.reset();
 
-  const root = await mkdtemp("/tmp/opencode/guest-output-error-"), previous = process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
+  const root = await mkdtemp(resolve(tmpdir(), "guest-output-error-")), previous = process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
   await fs.promises.writeFile(`${root}/not-directory`, "occupied");
   process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR = `${root}/not-directory`;
   let detached = 0;
@@ -425,7 +426,7 @@ test("Guest persistence errors surface only outside assertions; async failure/ti
 });
 
 test("existing diagnostic request receipt is correlated with the Guest poll, not treated as an exact install timestamp", async () => {
-  const root = await mkdtemp("/tmp/opencode/guest-lifecycle-unit-"), previous = process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
+  const root = await mkdtemp(resolve(tmpdir(), "guest-lifecycle-unit-")), previous = process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
   process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR = root;
   const cdp = Object.assign(new EventEmitter(), { send: async () => ({}), detach: async () => {} });
   const page = Object.assign(new EventEmitter(), { context: () => ({ newCDPSession: async () => cdp }),
@@ -508,7 +509,7 @@ test("F7 pending export has a finite bound and still cleans up once without retr
 });
 
 test("F7 success and failure collected DTO exports are private files written before cleanup", async () => {
-  const root = await mkdtemp("/tmp/opencode/native-export-unit-"), previous = process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
+  const root = await mkdtemp(resolve(tmpdir(), "native-export-unit-")), previous = process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
   process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR = root;
   try {
     for (const failed of [false, true]) {
@@ -843,7 +844,7 @@ test("actual F1 mic failure before Guest projects once after original 60s assert
 });
 
 test("existing per-actor failure snapshot uses one serialized evaluate/getter, keeps 5s bound and does not add native stats", async context => {
-  const root = await mkdtemp("/tmp/opencode/presenter-failure-unit-"), previous = process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
+  const root = await mkdtemp(resolve(tmpdir(), "presenter-failure-unit-")), previous = process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR;
   process.env.VRATA_FUNCTIONAL_DIAGNOSTICS_DIR = root;
   const cdp = Object.assign(new EventEmitter(), { send: async () => ({}), detach: async () => {} });
   let reads = 0, evaluations = 0, stats = 0;
