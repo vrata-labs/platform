@@ -3,6 +3,7 @@
 
 import argparse
 import base64
+import fcntl
 import gzip
 import hashlib
 import io
@@ -24,6 +25,7 @@ CHUNK = 1024 * 1024
 MAX_JSON = 4 * CHUNK
 MAX_ARCHIVE = 4 * 1024 * CHUNK  # Single conditional PutObject, never multipart.
 MAX_FILES = 100000
+DEFAULT_CATALOG = Path(__file__).resolve().parent.parent / "infra/docker/staging-scene-catalog.json"
 
 
 def require(condition, code):
@@ -65,7 +67,10 @@ def unique_object(pairs):
 def read_json(path):
     require(Path(path).stat().st_size <= MAX_JSON, "json_too_large")
     with Path(path).open("rb") as stream:
-        return json.load(stream, object_pairs_hook=unique_object)
+        try:
+            return json.load(stream, object_pairs_hook=unique_object)
+        except RecursionError:
+            raise ValueError("invalid_json") from None
 
 
 def digest_file(path):
@@ -93,16 +98,8 @@ def validate_descriptor(record):
             "invalid_descriptor_version")
     asset_sha = checked_sha(record["assetSha"])
     archive, inventory, provenance = record["archive"], record["inventory"], record["provenance"]
-    require(isinstance(archive, dict) and set(archive) == {"key", "bytes", "sha256"},
-            "invalid_archive")
-    require(archive["key"] == archive_key(asset_sha, archive["sha256"]), "invalid_archive_key")
-    integer(archive["bytes"], 1)
-    require(isinstance(inventory, dict) and set(inventory) == {
-        "bytes", "sha256", "fileCount", "totalBytes"}, "invalid_inventory")
-    checked_sha(inventory["sha256"], 64)
-    integer(inventory["bytes"], 1, MAX_JSON)
-    integer(inventory["fileCount"], 1, MAX_FILES)
-    integer(inventory["totalBytes"], 1, 16 * MAX_ARCHIVE)
+    validate_archive(archive, asset_sha)
+    validate_inventory_summary(inventory)
     scenes = record["scenes"]
     require(isinstance(scenes, list) and 0 < len(scenes) <= MAX_FILES
             and all(isinstance(s, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]*", s) for s in scenes)
@@ -111,6 +108,37 @@ def validate_descriptor(record):
             "invalid_provenance")
     require(checked_sha(provenance["sourceCommit"]) == asset_sha, "source_identity_mismatch")
     checked_sha(provenance["assetsTree"])
+    return record
+
+
+def validate_archive(record, asset_sha):
+    require(isinstance(record, dict) and set(record) == {"key", "bytes", "sha256"},
+            "invalid_archive")
+    require(record["key"] == archive_key(asset_sha, record["sha256"]), "invalid_archive_key")
+    integer(record["bytes"], 1)
+
+
+def validate_inventory_summary(record):
+    require(isinstance(record, dict) and set(record) == {
+        "bytes", "sha256", "fileCount", "totalBytes"}, "invalid_inventory")
+    checked_sha(record["sha256"], 64)
+    integer(record["bytes"], 1, MAX_JSON)
+    integer(record["fileCount"], 1, MAX_FILES)
+    integer(record["totalBytes"], 1, 16 * MAX_ARCHIVE)
+
+
+def validate_lock(record):
+    require(isinstance(record, dict) and set(record) == {
+        "schemaVersion", "assetSha", "descriptor", "archive", "inventory"}
+        and type(record["schemaVersion"]) is int and record["schemaVersion"] == 1, "invalid_lock")
+    asset_sha = checked_sha(record["assetSha"])
+    descriptor = record["descriptor"]
+    require(isinstance(descriptor, dict) and set(descriptor) == {"key", "bytes", "sha256"}
+            and descriptor["key"] == descriptor_key(asset_sha), "invalid_descriptor_key")
+    integer(descriptor["bytes"], 1, MAX_JSON)
+    checked_sha(descriptor["sha256"], 64)
+    validate_archive(record["archive"], asset_sha)
+    validate_inventory_summary(record["inventory"])
     return record
 
 
@@ -124,7 +152,9 @@ def validate_inventory(record):
         require(isinstance(entry, dict) and set(entry) == {"path", "bytes", "sha256"},
                 "invalid_inventory_entry")
         path = relative_path(entry["path"])
-        require(path == "assets/manifest.json" or path.startswith("assets/scenes/"),
+        parts = path.split("/")
+        require(path == "assets/manifest.json" or (len(parts) >= 4 and parts[:2] == ["assets", "scenes"]
+                and re.fullmatch(r"[a-z0-9][a-z0-9-]*", parts[2])),
                 "invalid_inventory_path")
         integer(entry["bytes"])
         checked_sha(entry["sha256"], 64)
@@ -335,7 +365,7 @@ class S3:
             raise S3Error("s3_" + (code if code in allowed else "cli_failed"))
         try:
             return json.loads(result.stdout or b"{}", object_pairs_hook=unique_object)
-        except (ValueError, UnicodeError):
+        except (ValueError, UnicodeError, RecursionError):
             raise S3Error("s3_invalid_response") from None
 
     def existing(self, key, path):
@@ -384,6 +414,202 @@ class S3:
             if str(error) in ("s3_AccessDenied", "s3_403"):
                 return None
             raise
+
+    def download(self, key, path, limit, expected=None):
+        # HEAD bounds disk use before GET; a bounded Range also caps an oversized object.
+        # Neither 403 nor 404 selects another identity or an alternate source.
+        head = self.call("head-object", "--key", key)
+        require(isinstance(head, dict), "s3_invalid_response")
+        size = integer(head.get("ContentLength"), 1, limit)
+        require(expected is None or size == expected["bytes"], "download_size_mismatch")
+        response = self.call("get-object", "--key", key, "--range", f"bytes=0-{size}", path)
+        require(isinstance(response, dict) and type(response.get("ContentLength")) is int
+                and response["ContentLength"] == size, "download_size_mismatch")
+        require(Path(path).is_file() and Path(path).stat().st_size == size, "download_size_mismatch")
+        if expected is not None:
+            require(digest_file(path) == (size, expected["sha256"]), "download_digest_mismatch")
+
+
+def unpack_archive(path, destination, descriptor):
+    """Read USTAR blocks ourselves: tarfile's iterator silently accepts extension headers.
+
+    Only regular files from pack are supported. Reject directories too: parents are
+    created by us, so a directory header cannot smuggle modes, links or empty trees.
+    Never use extract/extractall or buffer the compressed/uncompressed archive.
+    """
+    expected = descriptor["inventory"]
+    seen, count, total, metadata_seen = set(), 0, 0, False
+    with gzip.open(path, "rb") as stream:
+        while True:
+            block = stream.read(tarfile.BLOCKSIZE)
+            require(len(block) == tarfile.BLOCKSIZE, "archive_truncated")
+            if block == b"\0" * tarfile.BLOCKSIZE:
+                require(stream.read(tarfile.BLOCKSIZE) == block, "invalid_tar_end")
+                # Validate gzip CRC/trailer and reject appended/concatenated payloads.
+                padding = stream.read(tarfile.RECORDSIZE + 1)
+                require(len(padding) <= tarfile.RECORDSIZE and not padding.strip(b"\0"),
+                        "invalid_tar_trailer")
+                break
+            member = tarfile.TarInfo.frombuf(block, "utf-8", "strict")
+            require(block[257:263] == b"ustar\0", "invalid_tar_format")
+            require(member.type in (tarfile.REGTYPE, tarfile.AREGTYPE)
+                    and member.linkname == "" and member.sparse is None, "archive_not_regular")
+            name = relative_path(member.name)
+            require(name not in seen, "archive_duplicate_path")
+            seen.add(name)
+            size = integer(member.size)
+            if name == "inventory.json":
+                require(size == expected["bytes"], "inventory_size_mismatch")
+                metadata_seen = True
+            else:
+                parts = name.split("/")
+                require(name == "assets/manifest.json" or (len(parts) >= 4
+                        and parts[:2] == ["assets", "scenes"]
+                        and parts[2] in descriptor["scenes"]), "archive_unexpected_path")
+                count += 1
+                total += size
+                require(count <= expected["fileCount"] and total <= expected["totalBytes"],
+                        "archive_limits_exceeded")
+            output = destination / name
+            require(output.resolve().is_relative_to(destination), "archive_path_escape")
+            output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            # No archive-controlled links exist, and the exclusively owned tree is private.
+            with output.open("xb") as target:
+                output.chmod(0o600)
+                remaining = size
+                while remaining:
+                    chunk = stream.read(min(CHUNK, remaining))
+                    require(chunk, "archive_truncated")
+                    target.write(chunk)
+                    remaining -= len(chunk)
+            padding_size = -size % tarfile.BLOCKSIZE
+            require(stream.read(padding_size) == b"\0" * padding_size, "invalid_tar_padding")
+    require(metadata_seen and count == expected["fileCount"] and total == expected["totalBytes"],
+            "archive_inventory_incomplete")
+
+
+def verify_source(source, descriptor, catalog):
+    """Full on-disk verification, also used for an already published destination."""
+    require(stat.S_ISDIR(source.lstat().st_mode), "destination_not_directory")
+    for name in ("inventory.json", "release.json"):
+        metadata = (source / name).lstat()
+        require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1, "source_not_regular")
+    require(digest_file(source / "inventory.json") == (
+        descriptor["inventory"]["bytes"], descriptor["inventory"]["sha256"]), "inventory_mismatch")
+    inventory = validate_inventory(read_json(source / "inventory.json"))
+    require((source / "inventory.json").read_bytes() == canonical(inventory), "noncanonical_inventory")
+    expected = descriptor["inventory"]
+    require(len(inventory["files"]) == expected["fileCount"]
+            and sum(e["bytes"] for e in inventory["files"]) == expected["totalBytes"],
+            "inventory_mismatch")
+    entries, directories = [], set()
+    allowed_directories = set()
+    for entry in inventory["files"]:
+        allowed_directories.update(p.as_posix() for p in Path(entry["path"]).parents if p != Path("."))
+
+    def fail(error):
+        raise error
+
+    for directory, dirs, files in os.walk(source, followlinks=False, onerror=fail):
+        for name in dirs:
+            path = Path(directory) / name
+            require(stat.S_ISDIR(path.lstat().st_mode), "source_not_regular")
+            directories.add(path.relative_to(source).as_posix())
+        for name in files:
+            path = Path(directory) / name
+            metadata = path.lstat()
+            require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1, "source_not_regular")
+            relative = path.relative_to(source).as_posix()
+            if relative in ("inventory.json", "release.json"):
+                continue
+            size, digest = digest_file(path)
+            entries.append({"path": relative, "bytes": size, "sha256": digest})
+    require(directories == allowed_directories
+            and sorted(entries, key=lambda e: e["path"]) == inventory["files"], "source_inventory_mismatch")
+    require((source / "release.json").read_bytes() == canonical(descriptor), "release_conflict")
+    manifest = read_json(source / "assets/manifest.json")
+    require(isinstance(manifest, dict) and type(manifest.get("schemaVersion")) is int
+            and manifest["schemaVersion"] == 1 and manifest.get("scenesRoot") == "scenes"
+            and isinstance(manifest.get("scenes"), list), "invalid_source_manifest")
+    scenes = []
+    for entry in manifest["scenes"]:
+        require(isinstance(entry, dict), "invalid_source_scene")
+        scene = entry.get("sceneDir")
+        require(isinstance(scene, str) and scene in descriptor["scenes"] and scene not in scenes,
+                "invalid_source_scene")
+        scenes.append(scene)
+    require(sorted(scenes) == descriptor["scenes"]
+            == sorted({e["path"].split("/")[2] for e in entries if e["path"].startswith("assets/scenes/")}),
+            "source_catalog_mismatch")
+    # Use the same rooms/sceneId contract as staging_scene_files.prepare_snapshot.
+    # Do not duplicate the thirteen IDs or reinterpret legacy (non-required) scenes.
+    require(isinstance(catalog, dict) and catalog.get("schemaVersion") == 1
+            and isinstance(catalog.get("rooms"), list) and catalog["rooms"], "invalid_catalog")
+    required = set()
+    for room in catalog["rooms"]:
+        require(isinstance(room, dict) and isinstance(room.get("sceneId"), str)
+                and re.fullmatch(r"[a-z0-9][a-z0-9-]*", room["sceneId"]), "invalid_catalog")
+        required.add(room["sceneId"])
+    require(required.issubset(scenes), "staging_scene_source_catalog_incomplete")
+    paths = {e["path"] for e in entries}
+    for scene in scenes:
+        require(f"assets/scenes/{scene}/scene.json" in paths, "source_scene_missing")
+    for scene in required:
+        record = read_json(source / "assets/scenes" / scene / "scene.json")
+        require(isinstance(record, dict) and record.get("sceneId") == scene
+                and isinstance(record.get("glbPath"), str), "invalid_required_scene")
+        glb = relative_path(record["glbPath"])
+        require(f"assets/scenes/{scene}/{glb}" in paths, "source_required_glb_missing")
+
+
+def fetch(output, storage, asset_sha=None, lock=None, catalog=DEFAULT_CATALOG):
+    require((asset_sha is None) != (lock is None), "exactly_one_release_identity_required")
+    if lock is not None:
+        lock = validate_lock(read_json(lock))
+        asset_sha = lock["assetSha"]
+    asset_sha = checked_sha(asset_sha)
+    catalog = read_json(catalog)
+    output = Path(output).absolute()
+    relative_path(output.name)
+    # Require a caller-owned existing parent; do not create a usable destination early.
+    parent = output.parent.resolve(strict=True)
+    output = parent / output.name
+    with tempfile.TemporaryDirectory(prefix=".private-scene-fetch-", dir=parent) as temporary:
+        temporary = Path(temporary)
+        descriptor_path = temporary / "release.json"
+        storage.download(descriptor_key(asset_sha), descriptor_path, MAX_JSON,
+                         lock["descriptor"] if lock else None)
+        descriptor = validate_descriptor(read_json(descriptor_path))
+        require(descriptor["assetSha"] == asset_sha, "release_identity_mismatch")
+        require(descriptor_path.read_bytes() == canonical(descriptor), "noncanonical_descriptor")
+        if lock:
+            require(all(descriptor[key] == lock[key] for key in ("archive", "inventory")), "lock_mismatch")
+        needed = descriptor["archive"]["bytes"] + descriptor["inventory"]["totalBytes"] + 2 * MAX_JSON
+        require(shutil.disk_usage(parent).free >= needed, "insufficient_disk_space")
+        archive = temporary / "bundle.tar.gz"
+        storage.download(descriptor["archive"]["key"], archive, MAX_ARCHIVE, descriptor["archive"])
+        candidate = temporary / "source"
+        candidate.mkdir(mode=0o700)
+        unpack_archive(archive, candidate, descriptor)
+        shutil.copyfile(descriptor_path, candidate / "release.json")
+        (candidate / "release.json").chmod(0o600)
+        verify_source(candidate, descriptor, catalog)
+        # Serialize cooperating fetches, without persistent lock files. Never replace
+        # an existing source, even when it is incomplete or its identity has changed.
+        directory_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            fcntl.flock(directory_fd, fcntl.LOCK_EX)
+            if os.path.lexists(output):
+                require(stat.S_ISDIR(output.lstat().st_mode), "destination_not_directory")
+                metadata = (output / "release.json").lstat()
+                require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1, "source_not_regular")
+                require(read_json(output / "release.json") == descriptor, "release_conflict")
+                verify_source(output, descriptor, catalog)
+            else:
+                os.rename(candidate, output)
+        finally:
+            os.close(directory_fd)
+    return descriptor
 
 
 def publish(package, storage):
@@ -443,23 +669,31 @@ def main():
     pack_args.add_argument("--output", required=True, help="New private package directory outside source")
     publish_args = sub.add_parser("publish")
     publish_args.add_argument("--package", required=True)
-    publish_args.add_argument("--endpoint", default=os.environ.get("VRATA_SCENES_S3_ENDPOINT"))
-    publish_args.add_argument("--region", default=os.environ.get("VRATA_SCENES_S3_REGION"))
-    publish_args.add_argument("--bucket", default=os.environ.get("VRATA_SCENES_S3_BUCKET"))
-    publish_args.add_argument("--timeout", type=int, default=300, help="AWS invocation deadline, 1..900 seconds")
-    publish_args.add_argument("--addressing-style", choices=("virtual", "path"), default="virtual")
+    fetch_args = sub.add_parser("fetch")
+    identity = fetch_args.add_mutually_exclusive_group(required=True)
+    identity.add_argument("--asset-sha", help="Exact saved binding; no lock or newer-release fallback")
+    identity.add_argument("--lock", help="Pinned release lock JSON for a new candidate")
+    fetch_args.add_argument("--output", required=True, help="Atomic source directory; pass output/assets to rollout")
+    fetch_args.add_argument("--catalog", default=str(DEFAULT_CATALOG), help="Pinned staging-scene-catalog.json")
+    for storage_args in (publish_args, fetch_args):
+        storage_args.add_argument("--endpoint", default=os.environ.get("VRATA_SCENES_S3_ENDPOINT"))
+        storage_args.add_argument("--region", default=os.environ.get("VRATA_SCENES_S3_REGION"))
+        storage_args.add_argument("--bucket", default=os.environ.get("VRATA_SCENES_S3_BUCKET"))
+        storage_args.add_argument("--timeout", type=int, default=300, help="AWS invocation deadline, 1..900 seconds")
+        storage_args.add_argument("--addressing-style", choices=("virtual", "path"), default="virtual")
     args = parser.parse_args()
     try:
         if args.command == "pack":
             result = pack(args.source, args.asset_sha, args.output)
         else:
-            result = publish(args.package, S3(args.endpoint, args.region, args.bucket,
-                                               args.timeout, args.addressing_style))
+            storage = S3(args.endpoint, args.region, args.bucket, args.timeout, args.addressing_style)
+            result = (publish(args.package, storage) if args.command == "publish" else
+                      fetch(args.output, storage, args.asset_sha, args.lock, args.catalog))
         print(json.dumps({"assetSha": result["assetSha"], "descriptorKey": descriptor_key(result["assetSha"]),
                           "archive": result["archive"], "inventory": result["inventory"],
                           "sceneCount": len(result["scenes"])}, sort_keys=True))
         return 0
-    except (ValueError, OSError, UnicodeError, tarfile.TarError) as error:
+    except (ValueError, OSError, UnicodeError, tarfile.TarError, EOFError) as error:
         # Paths, endpoints, raw CLI messages and environment contents never enter logs.
         code = str(error) if isinstance(error, ValueError) and re.fullmatch(r"[a-zA-Z0-9_]+", str(error)) else "release_io_error"
         print(f"private_scene_release: {code}", file=sys.stderr)

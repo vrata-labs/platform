@@ -173,6 +173,15 @@
       "checked_at": "2026-11-14T17:13:55Z",
       "status": "available",
       "summary": "Локальная Task 3: 26 focused tests, compile и diff check успешны. Два pack нового source идентичны; отдельный pack исторического commit дал тот же assets tree 01c1df83a401389e644e79e09718c45bc481f663, inventory и archive. 28 сцен, 216 файлов, 409577033 байта source; archive 331159099 байт SHA-256 bd24b8141d94720cd280b29a1f02b21fef5a3ecd4b8ca22768c244a57a674526; inventory 34101 байт SHA-256 db218b7554d31738e17033da8fd64e9672a6f53f6d0e1ea1b2ab3e17b31a3c57. Все члены архива сверены потоково, оба source чистые. Существующие env credentials через стандартный S3: reader GET descriptor и небольшая условная writer PUT возвращают AccessDenied, HEAD 403. Полноразмерная PUT не завершилась: virtual-hosted дал ошибку соединения, path addressing — s3_cli_failed. Оба descriptor только локальные, публикация и k03 открыты; политики/роли не менялись. Fetch/workflow/recovery не реализованы этим этапом."
+    },
+    {
+      "id": "S20",
+      "system": "local-private-scene-fetch",
+      "locator": "tools/private-scene-release.py; tools/private-scene-release.test.py; D-010; Task 4",
+      "version": "source ed0c972cf05f512c35861ef76cff8f87080f3133; descriptor/lock format 1",
+      "checked_at": "2026-11-14T17:58:46Z",
+      "status": "available",
+      "summary": "45 focused pack/publish/fetch tests успешны. Точный binding или lock без fallback, строгие schemas/derived keys, HTTPS/deadlines, archive size/SHA-256 до распаковки, ограниченный streaming USTAR, полный on-disk inventory, действующий catalog и атомарный source. Helper отдельно скопирован в свежий runner без соседних модулей/репозитория сцен; git намеренно недоступен. Реальный локальный пакет Task 3 через fake AWS CLI восстановлен в новый каталог: все 216 файлов/409577033 байта независимо совпали с inventory, 28 сцен и 13 обязательных проверены; archive 331159099 байт SHA-256 bd24b8141d94720cd280b29a1f02b21fef5a3ecd4b8ca22768c244a57a674526, inventory 34101 байт SHA-256 db218b7554d31738e17033da8fd64e9672a6f53f6d0e1ea1b2ab3e17b31a3c57. Это локальное доказательство без реальных S3-вызовов, не закрывающее k03/k06. Workflow/lock не создавались; полный k04 ожидает rollout/recovery."
     }
   ],
   "claims": [
@@ -192,7 +201,8 @@
     {"id": "F14", "status": "confirmed", "text": "k01 подтверждён: независимый защищённый архив и полный исходный инвентарь сохранены, 218 файлов совпали по режимам/размерам/SHA-256, все 13 обязательных сцен на месте.", "sources": ["S14"]},
     {"id": "F15", "status": "confirmed", "text": "Два проверенных backup содержат один исторический assetSha 0a3b492e788bad82bf20a92476a628bf30c6dfbe. Полнота всех требуемых исторических версий этим не доказана; неизвестный rollback остаётся заблокирован.", "sources": ["S17"]},
     {"id": "F16", "status": "confirmed", "text": "k02 подтверждён: приватный GitVerse содержит новый root ed0c972cf05f512c35861ef76cff8f87080f3133 с теми же 218 исходными файлами/режимами и только RECOVERY.md сверх них; контрольный clone, fsck, inventory и живые remote refs/private visibility проверены.", "sources": ["S18"]},
-    {"id": "F17", "status": "confirmed", "text": "Локальные pack/publish и исторический descriptor проверены; реальная публикация не состоялась. Обычные S3 writer PUT/reader GET требуют положительной проверки доступа; fixture-тесты не закрывают k03/k06.", "sources": ["S19"]}
+    {"id": "F17", "status": "confirmed", "text": "Локальные pack/publish и исторический descriptor проверены; реальная публикация не состоялась. Обычные S3 writer PUT/reader GET требуют положительной проверки доступа; fixture-тесты не закрывают k03/k06.", "sources": ["S19"]},
+    {"id": "F18", "status": "confirmed", "text": "Fetch точного релиза реализован и покрыт 45 helper tests; полный локальный пакет восстановлен через fake AWS без Git сцен с совпадением всех 216 файлов/409577033 байт и полнотой действующего каталога. Реальный S3 и rollout/recovery этим не подтверждены.", "sources": ["S20"]}
   ],
   "gaps": [
     {"question": "Как получить положительные writer PUT/GET и reader GET в существующем приватном бакете при AccessDenied?", "blocking": true, "next_step": "Task 1 access и внешняя часть Task 3 остаются открыты. Локальная реализация продолжается через обычный S3 согласно D-007; панель и Selectel-specific API повторно не вызываются. После восстановления минимального доступа повторить условную публикацию, read-back и проверки reader/writer/anonymous без расширения ролей или публичного доступа."},
