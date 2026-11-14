@@ -1,0 +1,80 @@
+{
+  "schema": 1,
+  "task": "Приватные сцены: восстановленный снимок в GitVerse vrata-lab, immutable Selectel S3 release и проверенный staging без checkout репозитория сцен",
+  "domain": "general",
+  "scope": ["."],
+  "criteria": [
+    {
+      "id": "k01",
+      "description": "Исходный shallow-снимок сохранён независимо от /tmp, происхождение и неполная история явно записаны; полный SHA-256 инвентарь исходных tracked files и 13 обязательных сцен проверен.",
+      "required": true,
+      "kind": "evidence"
+    },
+    {
+      "id": "k02",
+      "description": "Приватный GitVerse vrata-lab/vrata-scene-assets-private содержит согласованный снимок с новой историей; независимый clone совпадает по исходным файлам/хешам, source SHA и видимость подтверждены.",
+      "required": true,
+      "kind": "evidence"
+    },
+    {
+      "id": "k03",
+      "description": "Полный assets release опубликован в приватном Selectel S3: archive/inventory SHA-256 и размеры сверены после скачивания, reader не пишет/не удаляет, anonymous GET/list запрещены, повтор не меняет release bytes.",
+      "required": true,
+      "kind": "evidence"
+    },
+    {
+      "id": "k04",
+      "description": "Release helper и staging integration проходят негативные/граничные тесты загрузки, immutable binding, snapshot и A-B-failed gate-A без Git-сцен.",
+      "required": true,
+      "kind": "command",
+      "argv": ["bash", "-o", "pipefail", "-lc", "python3 tools/private-scene-release.test.py && node --test tools/staging-scene-files.test.mjs tools/staging-scene-snapshot.test.mjs tools/staging-accepted-release.test.mjs tools/staging-remote-release.test.mjs tools/private-scene-recovery.test.mjs"],
+      "timeout_seconds": 900
+    },
+    {
+      "id": "k05",
+      "description": "Фактический rollout читает fixed descriptor/старый binding из S3, не использует GitHub/GitVerse private checkout; helper версии workflow сохранён до checkout старого target без helper/lock, а operation lock, accepted state, room URLs, retention и post-acceptance repair сохранены.",
+      "required": true,
+      "kind": "evidence"
+    },
+    {
+      "id": "k06",
+      "description": "Для каждой реально необходимой asset version из исходного и обновлённого после bootstrap инвентаря current/previous/Wave 2/room URLs скачаны и сверены pinned descriptor/archive/inventory, восстановление выполнено без Git-сцен. Нужны фактические SHA-256/числа файлов/версия источника; fixture-тесты отдельно проходят в k04, но не заменяют эту проверку. Отсутствие требуемых bytes блокирует готовность.",
+      "required": true,
+      "kind": "evidence"
+    },
+    {
+      "id": "k07",
+      "description": "Полные штатные локальные lint/typecheck/build/unit проходят на окончательном дереве; обязательные относящиеся fixtures подготовлены, skips не маскируют новую функциональность.",
+      "required": true,
+      "kind": "command",
+      "argv": ["bash", "-o", "pipefail", "-lc", "pnpm lint && pnpm typecheck && pnpm build && pnpm test"],
+      "timeout_seconds": 1800
+    },
+    {
+      "id": "k08",
+      "description": "Полный локальный e2e на конечном дереве проходит с workers=1/retries=0 и аппаратной отрисовкой обязательных visual-сценариев; private-assets набор выполняется с восстановленным пакетом, сцены/DPR/сроки не меняются.",
+      "required": true,
+      "kind": "command",
+      "argv": ["bash", "-o", "pipefail", "-lc", "pnpm test:e2e:gpu --workers=1 --retries=0 && pnpm test:e2e:private-assets --workers=1 --retries=0"],
+      "timeout_seconds": 10800
+    },
+    {
+      "id": "k09",
+      "description": "CI и Docker Publish успешны на точном поставляемом SHA; приватные scene bytes и credentials не попадают в публичные образы и артефакты CI.",
+      "required": true,
+      "kind": "evidence"
+    },
+    {
+      "id": "k10",
+      "description": "Узкий S3 infra PR от main слит обычным согласованным путём без остальных runtime-изменений T17; S3 workflow/helper/lock доступны из main, затем main влит в T17 и выбран новый exact-SHA кандидат. Обязательное review не обойдено без отдельного разрешения.",
+      "required": true,
+      "kind": "evidence"
+    },
+    {
+      "id": "k11",
+      "description": "Новый staging-хост под собственной арендой принял exact image/asset SHA из S3, bootstrap, полный catalog/staging gate и test:e2e:staging-extended на том же SHA успешны; все 13 комнат доступны, Hall/BlueOffice/ArtGallery loaded; браузер не обращается к S3, lease освобождён и phase записан.",
+      "required": true,
+      "kind": "evidence"
+    }
+  ]
+}
