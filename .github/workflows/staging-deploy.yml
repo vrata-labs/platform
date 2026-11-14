@@ -53,7 +53,7 @@ permissions:
 jobs:
   deploy:
     if: github.event_name == 'workflow_dispatch' || (vars.STAGING_AUTO_DEPLOY_ENABLED != 'false' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 205
     concurrency:
       group: staging-deploy
@@ -423,7 +423,7 @@ jobs:
     needs: deploy
     # Rutube is a third-party service: it reports after every successful deploy and never blocks or rolls back.
     if: needs.deploy.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 12
     concurrency:
       group: rutube-canary
