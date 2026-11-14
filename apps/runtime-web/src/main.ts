@@ -221,6 +221,7 @@ import { bindHostControls } from "./host-control-bindings.js";
 import { describeRoomAccessError, describeSessionControlReason } from "./room-access-messages.js";
 import { createDocumentLibraryRuntime } from "./document-library-runtime.js";
 import { createDocumentSurfaceView } from "./document-surface-view.js";
+import { createDocumentMediaPendingPatch } from "./document-media-pending.js";
 import { bindDocumentControls } from "./document-control-bindings.js";
 
 import { createRuntimeDiagnostics, reportRuntimeBootDiagnostics } from "./runtime-diagnostics.js";
@@ -4410,13 +4411,14 @@ const {
 window.addEventListener("pagehide", documentLibraryPageHide);
 window.addEventListener("pageshow", documentLibraryPageShow);
 
+const documentMediaPending = createDocumentMediaPendingPatch();
 const {
   presentationInputEventId, documentMediaInputEventId,
   renderDocumentMediaControls, renderPresentationControls
 } = createDocumentSurfaceView({
   get participantId() { return participantId; },
   currentPdfPresentationObject, currentImageViewerObject,
-  currentVideoPlayerObject, canPresentDocuments, getPdfPresentationRuntime,
+  currentVideoPlayerObject, canPresentDocuments, getPdfPresentationRuntime, documentMediaPending,
   // Surface actions are composed after the views, without eager callbacks.
   goToPresentationPage: (page) => goToPresentationPage(page),
   debugState, presentationControlsEl, presentationPrevButton,
@@ -4467,6 +4469,7 @@ const {
   presentationStatusEl,
   debugState,
   renderDocumentMediaControls,
+  documentMediaPending,
   documentMediaStatusEl,
   get presentationActionInFlight() { return presentationActionInFlight; },
   set presentationActionInFlight(value) { presentationActionInFlight = value; },

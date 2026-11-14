@@ -1,4 +1,5 @@
 import type { MediaObjectInstance, PdfPresentationState, VideoPlayerState } from "@vrata/shared-types";
+import type { DocumentMediaPendingPatch } from "./document-media-pending.js";
 import type { createMediaObjectQueries } from "./media/media-object-queries.js";
 import type { createPdfPresentationObjectRuntime } from "./media/pdf-presentation-object.js";
 import type { createRuntimeDebugState } from "./runtime-debug-state.js";
@@ -13,6 +14,7 @@ export interface DocumentSurfaceViewContext extends DocumentQueries {
   readonly selectedMediaSurfaceId: string;
   readonly presentationActionInFlight: boolean;
   canPresentDocuments: () => boolean;
+  documentMediaPending: Pick<DocumentMediaPendingPatch, "awaits" | "videoState" | "imageState">;
   goToPresentationPage: (page: number) => Promise<void>;
   getPdfPresentationRuntime: (surfaceId: string) => Pick<ReturnType<typeof createPdfPresentationObjectRuntime>, "renderThumbnail" | "createDebugSnapshot">;
   debugState: Pick<ReturnType<typeof createRuntimeDebugState>, "pdfPresentation">;
@@ -39,7 +41,7 @@ export interface DocumentSurfaceViewContext extends DocumentQueries {
 export function createDocumentSurfaceView(context: DocumentSurfaceViewContext) {
   const {
     currentPdfPresentationObject, currentImageViewerObject,
-    currentVideoPlayerObject, canPresentDocuments, goToPresentationPage,
+    currentVideoPlayerObject, canPresentDocuments, documentMediaPending, goToPresentationPage,
     getPdfPresentationRuntime, debugState, presentationControlsEl,
     presentationPrevButton, presentationNextButton, presentationPageLabel,
     presentationLargeButton, presentationStopButton, presentationThumbnailsEl,
@@ -82,8 +84,10 @@ export function createDocumentSurfaceView(context: DocumentSurfaceViewContext) {
       documentMediaStatusEl.textContent = "Media idle";
       return;
     }
-    const canPresent = canPresentDocuments() && !context.presentationActionInFlight;
-    const state = object.state;
+    // An unconfirmed request is shown as requested and still blocks repeated actions.
+    const canPresent = canPresentDocuments() && !context.presentationActionInFlight && !documentMediaPending.awaits(object);
+    const videoState = video ? documentMediaPending.videoState(video, context.roomStateServerOffsetMs) : null;
+    const state = videoState ?? documentMediaPending.imageState(image!);
     documentMediaTitleEl.textContent = `${video ? "Video" : "Image"}: ${state.filename ?? "media"}`;
     documentMediaFitButton.disabled = !canPresent;
     documentMediaFitButton.textContent = state.fitMode === "contain" ? "Cover" : "Contain";
@@ -95,13 +99,13 @@ export function createDocumentSurfaceView(context: DocumentSurfaceViewContext) {
     documentMediaPlayButton.disabled = !canPresent || !video;
     documentMediaLoopInput.disabled = !canPresent || !video;
     documentMediaSeekInput.disabled = !canPresent || !video;
-    if (video) {
-      const positionMs = currentVideoPositionMs(video.state);
-      documentMediaPlayButton.textContent = video.state.playbackState === "playing" ? "Pause" : "Play";
-      documentMediaLoopInput.checked = video.state.loop;
-      documentMediaSeekInput.max = String(video.state.durationMs);
+    if (videoState) {
+      const positionMs = currentVideoPositionMs(videoState);
+      documentMediaPlayButton.textContent = videoState.playbackState === "playing" ? "Pause" : "Play";
+      documentMediaLoopInput.checked = videoState.loop;
+      documentMediaSeekInput.max = String(videoState.durationMs);
       documentMediaSeekInput.value = String(Math.round(positionMs));
-      documentMediaTimeEl.textContent = `${formatMediaTime(positionMs)} / ${formatMediaTime(video.state.durationMs)}`;
+      documentMediaTimeEl.textContent = `${formatMediaTime(positionMs)} / ${formatMediaTime(videoState.durationMs)}`;
     }
   }
 
