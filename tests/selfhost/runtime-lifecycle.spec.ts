@@ -1,4 +1,4 @@
-import { test, expect, type Browser, type Page } from "@playwright/test";
+import { test, expect, type Browser, type Page, type Request } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { access, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -21,6 +21,8 @@ test("fresh self-host: standalone public SDK artifact, normal author UI, restart
   const core = { stateFile, baseUrl: origin, adminToken };
   const neighbourCore = { ...core, stateFile: neighbourFile };
   const actors: Awaited<ReturnType<typeof enter>>[] = [];
+  const authorHttp: Array<Record<string, unknown>> = [];
+  const pendingHttp = new Set<Promise<void>>();
   let author: Awaited<ReturnType<typeof createExternalAuthorProject>> | undefined;
   const facts: Record<string, unknown> = { runtimeSha, normalSceneAndRender: true, fakeMedia: false, lifecyclePassed: false };
   let primary: unknown;
@@ -47,11 +49,49 @@ test("fresh self-host: standalone public SDK artifact, normal author UI, restart
     await expect(host.page.locator("#room-plugin-author")).toBeVisible();
     const entry = host.page.locator(`[data-plugin-id="${pluginId}"]`);
     let authorRequests = 0, invalidAuthor = false;
+    const requestTimes = new WeakMap<Request, { seq: number; started: number; method: string; route: string }>();
+    let requestSequence = 0;
     host.page.on("request", request => {
       if (!new URL(request.url()).pathname.includes(`/rooms/${state.roomId}/plugins/`)) return;
       authorRequests++;
       const headers = request.headers();
       invalidAuthor ||= Boolean(headers["x-vrata-admin-token"]) || !headers.authorization?.startsWith("Bearer rs2.");
+      const path = new URL(request.url()).pathname, method = request.method();
+      const route = method === "PUT" && path.endsWith(`/bindings/${pluginId}`) ? "author-binding"
+        : method === "GET" && path.endsWith("/plugins/packages") ? "author-library" : null;
+      if (route && requestSequence < 128) requestTimes.set(request, {
+        seq: ++requestSequence, started: performance.now(), method, route
+      });
+    });
+    host.page.on("response", response => {
+      const timing = requestTimes.get(response.request());
+      if (!timing) return;
+      const event: Record<string, unknown> = { seq: timing.seq, method: timing.method, route: timing.route,
+        event: "response", elapsedMs: Math.round(performance.now() - timing.started), status: response.status(),
+        revision: null, error: null };
+      authorHttp.push(event);
+      const work = (async () => {
+        try {
+          const length = Number(await response.headerValue("content-length"));
+          if (Number.isFinite(length) && length > 512 * 1024) { event.error = "body_too_large"; return; }
+          const bytes = await response.body();
+          if (bytes.byteLength > 512 * 1024) { event.error = "body_too_large"; return; }
+          const body = JSON.parse(bytes.toString("utf8"));
+          if (Number.isSafeInteger(body?.revision) && body.revision >= 0) event.revision = body.revision;
+          if (typeof body?.error === "string"
+            && /^(?:plugin|identity|room_plugin|internal|invalid|service)_[a-z0-9_]{1,70}$/.test(body.error)) event.error = body.error;
+        } catch { event.error = "body_unavailable"; }
+      })();
+      pendingHttp.add(work);
+      void work.finally(() => pendingHttp.delete(work));
+    });
+    host.page.on("requestfailed", request => {
+      const timing = requestTimes.get(request);
+      if (!timing) return;
+      const code = request.failure()?.errorText;
+      authorHttp.push({ seq: timing.seq, method: timing.method, route: timing.route, event: "requestfailed",
+        elapsedMs: Math.round(performance.now() - timing.started), status: null, revision: null,
+        error: code && /^net::ERR_[A-Z0-9_]{1,80}$/.test(code) ? code : "request_failed" });
     });
     const call = (suffix: string, method = "GET", body?: unknown, actor = host) =>
       privateHttp(origin, pluginPath(state.roomId, suffix), method, bearer(actor.sessionToken), body);
@@ -167,6 +207,11 @@ test("fresh self-host: standalone public SDK artifact, normal author UI, restart
       const exists = await access(item.stateFile).then(() => true, () => false);
       if (exists) try { await demo.cleanupPublicDemo(item); } catch (e) { failures.push(e); }
     }
+    await Promise.allSettled([...pendingHttp]);
+    try {
+      await writeFile(join(output, "author-http.private.json"),
+        JSON.stringify({ schema: 1, events: authorHttp }, null, 2) + "\n", { mode: 0o600 });
+    } catch (error) { failures.push(error); }
     facts.cleanupPassed = failures.length === 0;
     await writeFile(join(output, "lifecycle-facts.json"), JSON.stringify(facts, null, 2) + "\n", { mode: 0o600 });
     if (primary || failures.length) {
