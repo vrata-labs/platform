@@ -128,45 +128,92 @@
 Состояние на 2026-11-14: **k02 подтверждён** (S18/F16). Source release — новый root `ed0c972cf05f512c35861ef76cff8f87080f3133`. Контрольный clone не shallow; все 218 исходных файлов, режимы, размеры и хеши сохранены, добавлен только `RECOVERY.md`. `assets` tree совпадает: `01c1df83a401389e644e79e09718c45bc481f663`. `git fsck --full --strict` успешен для обеих копий, исходник и защищённый backup сохранены. Живые API и refs подтверждают приватность, единственную ветку `main` на новом root и отсутствие временных refs. Task 1 access и k03 остаются открыты.
 
 ### Task 3. Упаковать и опубликовать готовый релиз в S3
-- [ ] Реализовать `pack/publish`, формат descriptor и inventory; добавить тесты детерминизма и неизменности исходных bytes.
+- [x] Реализовать `pack/publish`, формат descriptor и inventory; добавить тесты детерминизма и неизменности исходных bytes.
 - [ ] Создать/настроить согласованный приватный бакет и минимальные политики reader/writer. Секреты сохранить только в проектном защищённом хранилище и CI secrets.
 - [ ] Опубликовать полный пакет `assets/` из Task 2, проверить повторное скачивание, общий и пофайловые SHA-256. Проверить отказ анонимного GET/list и reader PUT/DELETE.
-- [ ] Только для доказанно восстановленных исторических assetSha подготовить совместимые descriptors; не присваивать всем старым bindings bytes нового снимка.
+- [x] Только для доказанно восстановленных исторических assetSha подготовить совместимые descriptors; не присваивать всем старым bindings bytes нового снимка.
 - Готово: **k03**, тестируемая публикация; source SHA и digest не зависят от SHA платформы. Оценка: 1–2 ч плюс сеть.
 
+Состояние на 2026-11-14: **локальная часть Task 3 выполнена, внешняя публикация заблокирована; k03 открыт**. `tools/private-scene-release.test.py`: 26 тестов успешны, Python compile и diff check успешны. Ветки workflow, fetch и recovery этим результатом не проверены; k04 остаётся открытым.
+
+Полное `assets/` из source `ed0c972cf05f512c35861ef76cff8f87080f3133` упаковано дважды с одинаковыми результатами: 28 сцен, 216 файлов, 409 577 033 исходных байта. Архив — 331 159 099 байт, SHA-256 `bd24b8141d94720cd280b29a1f02b21fef5a3ecd4b8ca22768c244a57a674526`. Канонический inventory — 34 101 байт, SHA-256 `db218b7554d31738e17033da8fd64e9672a6f53f6d0e1ea1b2ab3e17b31a3c57`. Все члены архива сверены потоково с inventory, исходные Git-деревья остались чистыми. Исторический `0a3b492e788bad82bf20a92476a628bf30c6dfbe` упакован из собственного исходного commit, а не переименован: assets tree, архив и inventory совпали с новым снимком. Оба descriptor подготовлены только локально (D-008/D-009).
+
+Обычный S3 API с существующими env credentials: reader GET descriptor и небольшая условная writer PUT в отдельном probe-префиксе возвращают `AccessDenied`; HEAD — 403. Полноразмерная PUT также не завершилась: virtual-hosted дал ошибку соединения, path addressing — `s3_cli_failed`. Descriptor не опубликован; положительная проверка прав, повторное скачивание и неизменяемость реального релиза остаются открыты. Настройки бакета, роли и ключи не менялись.
+
 ### Task 4. Реализовать проверяемую загрузку из S3
-- [ ] Добавить `fetch`: точный descriptor из lock/binding, HTTPS endpoint, ограниченные сетевые таймауты, потоковая загрузка во временный файл, проверка размера и SHA-256 до распаковки.
-- [ ] При распаковке запретить absolute/`..` paths, symlink/hardlink, специальные файлы, выход за destination, дубликаты путей и превышение заявленных размеров/числа файлов. Затем проверить inventory и обязательные 13 сцен.
-- [ ] Публиковать готовый source только атомарным rename; ошибка/обрыв не оставляет source, пригодный для rollout. Не выбирать произвольную более новую версию.
-- [ ] Тесты с fake S3/подменённым CLI: 403/404, неверный digest/размер, прерванный download, опасный архив, конфликт release ID, идемпотентность, свежая машина без `.git` сцен.
-- Готово: **k04**. Оценка: 1–2 ч.
+- [x] Добавить `fetch`: точный descriptor из lock/binding, HTTPS endpoint, ограниченные сетевые таймауты, потоковая загрузка во временный файл, проверка размера и SHA-256 до распаковки.
+- [x] При распаковке запретить absolute/`..` paths, symlink/hardlink, специальные файлы, выход за destination, дубликаты путей и превышение заявленных размеров/числа файлов. Затем проверить inventory и обязательные 13 сцен.
+- [x] Публиковать готовый source только атомарным rename; ошибка/обрыв не оставляет source, пригодный для rollout. Не выбирать произвольную более новую версию.
+- [x] Тесты с fake S3/подменённым CLI: 403/404, неверный digest/размер, прерванный download, опасный архив, конфликт release ID, идемпотентность, свежая машина без `.git` сцен.
+- Результат: helper-часть **k04**; полный критерий остаётся открытым до rollout/recovery-проверок Tasks 5–6. Оценка: 1–2 ч.
+
+Состояние на 2026-11-14: **Task 4 выполнена локально** (S20/D-010). Все 45 focused tests, включая прежние pack/publish, успешны. Fetch принимает ровно один источник identity: `--asset-sha` из сохранённого binding либо `--lock` для нового кандидата. Lock format 1 закрепляет descriptor, archive и inventory точными ключами/размерами/SHA-256; неизвестные поля и произвольные ключи запрещены. Output содержит исходное `assets/`, `inventory.json`, `release.json`; прежний rollout получает `--source <output>/assets`. Для старого checkout достаточно сохранить helper и передать сохранённый `staging-scene-catalog.json` через `--catalog`; зависимости на Git сцен или другие Python-модули отсутствуют.
+
+Полный локальный пакет Task 3 загружен через fake AWS CLI в свежий каталог без `.git`: повторно сверены все 216 файлов, 409 577 033 байта, 28 сцен и все 13 обязательных сцен из действующего каталога. Archive SHA-256 `bd24b8141d94720cd280b29a1f02b21fef5a3ecd4b8ca22768c244a57a674526`, inventory SHA-256 `db218b7554d31738e17033da8fd64e9672a6f53f6d0e1ea1b2ab3e17b31a3c57`. Это проверка настоящих bytes локального пакета, **не скачивание из Selectel S3**; k03/k06 и внешние условия D-006 остаются открыты. Workflow/lock-файл и staging на этом этапе не изменялись.
 
 ### Task 5. Заменить checkout сцен в workflow
-- [ ] Создать release lock для нового кандидата. Подключить reader secrets и `fetch` вместо checkout/freezing private Git HEAD; сохранить передачу проверенного source по SSH.
-- [ ] Сохранить S3 helper/зависимости версии workflow в `RUNNER_TEMP` до checkout целевого deploy SHA. Добавить отдельный тест старого target SHA без helper/lock, но с сохранённым историческим binding и доступным descriptor.
-- [ ] Сохранить preflight, operation lock, immutable image-to-asset binding, снимок room URLs, gate и acceptance/rollback. Для повторной поставки image SHA использовать прежнюю asset identity.
-- [ ] Расширить существующие workflow/scene tests: новый bootstrap, повтор, старый binding, A -> B -> failed gate -> A, отказ S3 до rollout без изменения accepted/active/room URLs.
-- [ ] Проверить, что код и secrets доступа к GitVerse не нужны Staging Deploy/Template Catalog, а публичный `scene-repositories.lock.json` продолжает использоваться независимо.
+- [x] Создать release lock для нового кандидата. Подключить reader secrets и `fetch` вместо checkout/freezing private Git HEAD; сохранить передачу проверенного source по SSH.
+- [x] Сохранить S3 helper/зависимости версии workflow в `RUNNER_TEMP` до checkout целевого deploy SHA. Добавить отдельный тест старого target SHA без helper/lock, но с сохранённым историческим binding и доступным descriptor.
+- [x] Сохранить preflight, operation lock, immutable image-to-asset binding, снимок room URLs, gate и acceptance/rollback. Для повторной поставки image SHA использовать прежнюю asset identity.
+- [x] Расширить существующие workflow/scene tests: новый bootstrap, повтор, старый binding, A -> B -> failed gate -> A, отказ S3 до rollout без изменения accepted/active/room URLs.
+- [x] Проверить, что код и secrets доступа к GitVerse не нужны Staging Deploy/Template Catalog, а публичный `scene-repositories.lock.json` продолжает использоваться независимо.
 - Готово: **k05**. Оценка: 1–2 ч.
 
+Состояние на 2026-11-14: **Task 5 выполнена локально** (S21/D-011); фактический S3 rollout из k05 остаётся внешней проверкой Tasks 7–9. Workflow сохраняет только fetch helper и каталог в отдельном runner-каталоге до смены checkout; они не входят в отправляемый хосту архив протокола. Binding передаётся первым через `--asset-sha`; новый кандидат без binding обязан иметь строгий lock целевого checkout. Отсутствие старого descriptor не переключает identity на новый lock. Canonical lock нового source `ed0c972cf05f512c35861ef76cff8f87080f3133` сверён с точными bytes descriptor (1311 байт, SHA-256 `862508766db53cf5b9c49e8ae305b7fd88f75f44ac708c9aea1745e4fe559867`), archive и inventory Task 3; **наличие lock не означает публикацию, k03 открыт**.
+
+Reader secrets `PRIVATE_SCENES_S3_READER_ACCESS_KEY_ID` и `PRIVATE_SCENES_S3_READER_SECRET_ACCESS_KEY` указаны только в fetch step; их установка в CI и положительное чтение S3 остаются внешними условиями. Endpoint/region/bucket задаются `VRATA_SCENES_S3_*` environment variables, для workflow — через одноимённые repository variables с текущими значениями по умолчанию. Изолированная установка AWS CLI 1.46.0 исполнена успешно, глобальная AWS configuration не меняется. Проверенный source остаётся в `RUNNER_TEMP/private-scene-source/assets` до прежней SSH-передачи и `staging-remote-release.py --source`. Зависимости deploy от private repository/deploy key/host dir удалены; Template Catalog и публичный lock не требуют правок.
+
+Проверки: 5 новых workflow tests (4 исполняемых сценария с fake AWS CLI, локальными SSH/HTTP/host fixtures и настоящими snapshot/accepted/remote transitions) и 69 прежних относящихся тестов успешны; отдельно все 45 helper tests успешны, всего 119. Подтверждены bootstrap/new lock, повтор binding, старый checkout без helper/lock с отдельно сохранённым каталогом, строгий lock, S3 отказ и недоступный исторический descriptor до rollout, A -> B -> failed gate -> A с восстановлением bytes/active/URLs и сохранением binding неудачного B. Actionlint без ShellCheck и ShellCheck четырёх изменённых шагов успешны; полный actionlint воспроизводит существующий SC2029 в неизменённом verification gate, тот же результат есть на исходном HEAD. Полный локальный набор, push/PR/CI/staging и Task 6 на этом этапе не выполнялись.
+
 ### Task 6. Сохранить восстановимость без репозитория сцен
-- [ ] Дополнить stage-specific backup/restore минимальными release descriptors/bindings и перечнем требуемых snapshot/room URL версий: существующий backup accepted metadata сам по себе не сохраняет все scene snapshots.
-- [ ] Обеспечить восстановление нужных bytes из проверенных pinned S3 releases либо включённых в backup snapshots. Не менять общий формат backups без необходимости и не подделывать designation/gate proof/accepted JSON.
-- [ ] Автотест восстановления в пустой каталог без доступа к Git-сценам; недоступный исторический релиз, повреждённый backup или смена acceptance во время экспорта должны давать отказ, а не неполный успех.
-- [ ] Добавить самостоятельный набор `tools/private-scene-recovery.test.mjs`, переиспользующий существующие stage fixtures, без подъёма production или реальных старых хостов.
+- [x] Дополнить stage-specific backup/restore минимальными release descriptors/bindings и перечнем требуемых snapshot/room URL версий: существующий backup accepted metadata сам по себе не сохраняет все scene snapshots.
+- [x] Обеспечить восстановление нужных bytes из проверенных pinned S3 releases либо включённых в backup snapshots. Не менять общий формат backups без необходимости и не подделывать designation/gate proof/accepted JSON.
+- [x] Автотест восстановления в пустой каталог без доступа к Git-сценам; недоступный исторический релиз, повреждённый backup или смена acceptance во время экспорта должны давать отказ, а не неполный успех.
+- [x] Добавить самостоятельный набор `tools/private-scene-recovery.test.mjs`, переиспользующий существующие stage fixtures, без подъёма production или реальных старых хостов.
 - [ ] Отдельно от fixture-тестов скачать и проверить реальные пакеты для каждого требуемого `assetSha` из инвентаря Task 1; сохранить очищенную таблицу `binding -> descriptor -> archive/inventory SHA-256 -> результат восстановления`. После нового bootstrap обновить её фактическими current/previous/Wave 2 и room URL версиями. Отсутствие нужного пакета оставляет k06 открытым.
 - Готово: **k06**, права на DELETE/автоматическая очистка S3 не добавлены. Оценка: 1–2 ч.
 
+Состояние на 2026-11-14: **DONE_LOCAL_EXTERNAL_BLOCKED** (S22/D-012). `backup-staging.py` под прежним operation lock, затем shared state lock сохраняет полные проверенные current/previous/Wave 2 snapshots, реальные bindings с derived S3 descriptor keys и room URLs из точного SQL-дампа, включая template snapshot. Вложенная версия по сохранённому URL проверяется по marker/binding даже после удаления её отдельного snapshot штатным retention. Общая схема `backup-restore.mjs` не меняется: companion добавляет checksum artifacts в `private-scenes/`. Незавершённый экспорт остаётся вне `vrata-*` до итогового атомарного rename и не засчитывается retention; при ошибке manifest помечается incomplete, частичные scene copies удаляются.
+
+`tools/private-scene-recovery.py validate/restore` проверяет основной backup, полный inventory и обязательные исторические bytes. Restore работает в отсутствующий/пустой каталог без Git сцен, публикуется атомарно и не создаёт designation/gate proof/accepted-release/active. Исходные accepted-записи сохраняются как свидетельства в backup; принятие нового хоста по-прежнему требует штатного протокола. Неизвестные bindings, повреждения, неполный исторический набор, изменение acceptance при экспорте и изменение backup при восстановлении дают отказ без изменения действующей accepted-записи или active pointer.
+
+Проверки: все 45 helper tests и 50 Node tests полного k04-набора успешны, включая 8 новых recovery tests. Дополнительно 140 относящихся backup tests успешны; один прежний необязательный real-fixture backup/restore сценарий пропущен, поскольку `VRATA_TEST_BACKUP_FIXTURE_JSON` не задан. Это не пропуск обязательного k04-сценария и не подтверждение полного k07/e2e. Python compile и diff check успешны.
+
+Отдельная локальная проверка настоящих архивов нового `ed0c972cf05f512c35861ef76cff8f87080f3133` и исторического `0a3b492e788bad82bf20a92476a628bf30c6dfbe`: каждый распакован в свежий каталог без Git, сверены все 216 файлов/409577033 байта, 28 сцен и 13 обязательных. Archive SHA-256 обоих `bd24b8141d94720cd280b29a1f02b21fef5a3ecd4b8ca22768c244a57a674526`, inventory SHA-256 `db218b7554d31738e17033da8fd64e9672a6f53f6d0e1ea1b2ab3e17b31a3c57`; descriptor SHA-256 нового `862508766db53cf5b9c49e8ae305b7fd88f75f44ac708c9aea1745e4fe559867`, исторического `4dccfa6857a443b74481ab99ac1fbd6286d5941cd0fc930f6c4b1a83740b66a4`. Два старых backup повторно прошли полную checksum-валидацию: 49/51 комнат, сохранённые versioned URLs указывают соответственно на images `3f4cda2…`/`380b2e7…`, обе accepted-записи связаны с `0a3b492…`. Companion отклоняет их как metadata-only, не выдумывая snapshots, previous или Wave 2. Очищенная приватная таблица проверок сохранена отдельно.
+
+Это **локальная проверка архивных bytes, не скачивание из Selectel S3**. Внешняя положительная проверка S3, полный исторический инвентарь удалённого хоста и обновление current/previous/Wave 2/room URLs после bootstrap остаются открыты; **k03/k06 не закрыты, общий READY не заявлен**. Push/PR, stage, runtime, модели и plugin storage в Task 6 не затрагивались; общая эксплуатационная документация остаётся Task 7.
+
 ### Task 7. Поставить узкий S3 infra PR в main
-- [ ] Обновить `docs/scene-assets-repository.md`, `docs/ci-cd.md`, `docs/deployment-staging.md`, реестр backup/restore и релизные инструкции: GitVerse recovery/source отдельно, S3 release отдельно, scopes credentials, bootstrap и откат.
-- [ ] Убедиться, что отдельная infra-ветка от актуального `origin/main` содержит только S3 delivery/recovery и относящиеся тесты/документацию, без остальных изменений T17 из PR #157.
+- [x] Обновить `docs/scene-assets-repository.md`, `docs/ci-cd.md`, `docs/deployment-staging.md`, реестр backup/restore и релизные инструкции: GitVerse recovery/source отдельно, S3 release отдельно, scopes credentials, bootstrap и откат.
+- [x] Убедиться, что отдельная infra-ветка от актуального `origin/main` содержит только S3 delivery/recovery и относящиеся тесты/документацию, без остальных изменений T17 из PR #157.
 - [ ] На infra-ветке выполнить новые release/recovery/rollout тесты, `pnpm lint`, `pnpm typecheck`, `pnpm build`, `pnpm test` и полный штатный `pnpm test:e2e --workers=1 --retries=0` с собственными fixtures. Если ветка уже содержит GPU-конфиг — использовать его для обязательных visual-сценариев.
-- [ ] Проверить итоговый diff, исключить credentials, scene binaries и временную обвязку. Commit/push и отдельный узкий PR без назначения reviewers; дождаться зелёного CI.
-- [ ] Обычным согласованным путём слить именно этот infra PR в `main`. При необходимости admin bypass отдельно спросить пользователя. Не сливать PR #157 ради инфраструктуры.
+- [x] Проверить итоговый diff, исключить credentials, scene binaries и временную обвязку. Commit/push и отдельный узкий PR без назначения reviewers; дождаться зелёного CI.
+- [x] Обычным согласованным путём слить именно этот infra PR в `main`. При необходимости admin bypass отдельно спросить пользователя. Не сливать PR #157 ради инфраструктуры.
 - Готово: **k10**; публичный CI не получает приватные scene bytes, образы платформы не содержат их. Оценка: до 1 ч работы плюс полные прогоны/CI/одобрение.
 
+Документация разделяет восстановленный GitVerse source, pinned S3 release и
+byte-only recovery без принятия хоста. Узкая ветка основана на
+`origin/main` `e0ea693e0fa5f35d2a47e9837a681657462d8d77` (remote main сверен);
+runtime-изменений и GPU-конфига T17 в её diff нет. Проверки Markdown/JSON и
+чистоты diff относятся только к подготовительной части. Полные локальные тесты,
+push, PR, CI и слияние в main остаются открыты; **k07–k10 этим не закрыты**.
+
+Итог: PR #159 (head `43b5e7927fe65d351d00b171808007c1b84e8f8c`) слит squash в
+`main` как `08b6d04e3e0d71b65093f622f93d17cc716b4adc` по отдельному
+разрешению пользователя на административное исключение из обязательного
+одобрения (D-013). CI run `43691120585` на head полностью успешен: core,
+checks, asset-validation и шесть шардов e2e. Локально на том же SHA успешны
+lint, typecheck, build и полный `pnpm test` (root tools 420: 418 pass, 2
+прежних optional skip). Полный локальный `pnpm test:e2e --workers=1
+--retries=0` не прошёл: 197 pass, 5 fail, 62 не запускались после лимита
+отказов. В diff PR нет файлов `apps/`, `packages/` и `tests/e2e/`, поэтому
+эти отказы не вызваны изменениями ветки; причина локальных отказов не
+установлена, пункт локального e2e остаётся открытым. Реальная публикация и
+загрузка из S3 по-прежнему заблокированы AccessDenied (k03/k06 открыты).
+
 ### Task 8. Получить окончательного кандидата T17
-- [ ] Влить актуальный `origin/main` с S3 workflow/helper в `feat/t17-product-acceptance`; сохранить изменения T17 и устранить только реальные конфликты.
+- [x] Влить актуальный `origin/main` с S3 workflow/helper в `feat/t17-product-acceptance`; сохранить изменения T17 и устранить только реальные конфликты.
+  Слит `main` `08b6d04`; конфликты были только add/add в четырёх файлах этого плана (plan/decisions/context/validation), взята более полная версия из `main`.
 - [ ] Выполнить **k04–k08** на этом окончательном дереве с собственными fixtures/credentials. Полный e2e: GPU-конфиг, workers=1, retries=0. Отдельно выполнить `pnpm test:e2e:private-assets` с восстановленным пакетом; исходные assertions не менять, существующие отказы не скрывать.
 - [ ] Commit/push итоговой ветки, зелёные CI и Docker Publish для нового точного SHA (**k09**). Прежние успешные прогоны `23cb4c6` сохраняются как история, не как подтверждение нового merge-коммита.
 - Готово: **k04–k09** актуальны для окончательного кандидата; S3-aware workflow уже в main. Оценка: до 1 ч работы плюс полные прогоны/CI.

@@ -65,8 +65,9 @@ jobs:
       STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
       STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
       STAGING_APP_DIR: ${{ secrets.STAGING_APP_DIR }}
-      PRIVATE_SCENE_ASSETS_REPOSITORY: ${{ secrets.PRIVATE_SCENE_ASSETS_REPOSITORY }}
-      PRIVATE_SCENE_ASSETS_HOST_DIR: ${{ secrets.PRIVATE_SCENE_ASSETS_HOST_DIR }}
+      VRATA_SCENES_S3_ENDPOINT: ${{ vars.VRATA_SCENES_S3_ENDPOINT || 'https://s3.ru-3.storage.selcloud.ru' }}
+      VRATA_SCENES_S3_REGION: ${{ vars.VRATA_SCENES_S3_REGION || 'ru-3' }}
+      VRATA_SCENES_S3_BUCKET: ${{ vars.VRATA_SCENES_S3_BUCKET || 'vrata-private-scene-releases' }}
       STAGING_ADMIN_TOKEN: ${{ secrets.STAGING_ADMIN_TOKEN }}
       YCR_USERNAME: ${{ secrets.YCR_USERNAME }}
       YCR_PASSWORD: ${{ secrets.YCR_PASSWORD }}
@@ -113,6 +114,10 @@ jobs:
           cp tools/staging-state-key.py "$RUNNER_TEMP/vrata-scene-rollback/"
           cp tools/staging-accepted-release.py tools/staging-remote-release.py tools/staging_gate_proof.py tools/staging_scene_files.py "$RUNNER_TEMP/vrata-scene-rollback/"
           cp infra/docker/rollout-staging-images.sh "$RUNNER_TEMP/vrata-scene-rollback/"
+          # Runner-only fetch protocol must survive checkout of a historical target.
+          # Keep it outside the helper archive sent to the host.
+          install -d -m 700 "$RUNNER_TEMP/vrata-private-scene-release"
+          cp tools/private-scene-release.py infra/docker/staging-scene-catalog.json "$RUNNER_TEMP/vrata-private-scene-release/"
           echo "REMOTE_HELPERS=${STAGING_APP_DIR}-stage-state/helpers/$GITHUB_SHA" >> "$GITHUB_ENV"
 
       - name: Wait for CI on exact SHA
@@ -166,26 +171,45 @@ jobs:
         env:
           SHA: ${{ steps.deploy.outputs.deploy_sha }}
         run: git fetch --no-tags --depth=1 origin "$SHA" && git checkout --detach FETCH_HEAD
-      - name: Checkout pinned private assets
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.PRIVATE_SCENE_ASSETS_REPOSITORY }}
-          ref: ${{ steps.previous.outputs.asset_sha || 'main' }}
-          ssh-key: ${{ secrets.PRIVATE_SCENE_ASSETS_DEPLOY_KEY }}
-          path: private-scene-assets
-          persist-credentials: false
-      - name: Freeze asset SHA
-        run: echo "ASSET_SHA=$(git -C private-scene-assets rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Install pinned scene S3 client
+        run: |
+          python3 -m venv "$RUNNER_TEMP/vrata-scenes-aws"
+          "$RUNNER_TEMP/vrata-scenes-aws/bin/pip" install --disable-pip-version-check awscli==1.46.0
+      - name: Fetch pinned private scene release
+        env:
+          BOUND_ASSET_SHA: ${{ steps.previous.outputs.asset_sha }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.PRIVATE_SCENES_S3_READER_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PRIVATE_SCENES_S3_READER_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          export PATH="$RUNNER_TEMP/vrata-scenes-aws/bin:$PATH"
+          # A saved image binding wins even if the target has no helper or lock.
+          # Missing historical bytes must fail, never fall back to the candidate lock.
+          if [ -n "$BOUND_ASSET_SHA" ]; then
+            IDENTITY=(--asset-sha "$BOUND_ASSET_SHA")
+          else
+            IDENTITY=(--lock infra/docker/private-scene-release.lock.json)
+          fi
+          python3 -B "$RUNNER_TEMP/vrata-private-scene-release/private-scene-release.py" fetch \
+            "${IDENTITY[@]}" --catalog "$RUNNER_TEMP/vrata-private-scene-release/staging-scene-catalog.json" \
+            --output "$RUNNER_TEMP/private-scene-source" --timeout 300 --addressing-style path \
+            > "$RUNNER_TEMP/private-scene-fetch.json"
+          node - "$RUNNER_TEMP/private-scene-fetch.json" <<'NODE'
+          const fs = require('node:fs');
+          const data = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (!/^[0-9a-f]{40}$/.test(data.assetSha)) throw new Error('invalid_fetched_asset_sha');
+          fs.appendFileSync(process.env.GITHUB_ENV, `ASSET_SHA=${data.assetSha}\n`);
+          NODE
       - run: pnpm install --frozen-lockfile
 
       - name: Upload candidate source without replacing accepted files
         env:
           SHA: ${{ steps.deploy.outputs.deploy_sha }}
         run: |
-          test -f private-scene-assets/assets/manifest.json
+          test -f "$RUNNER_TEMP/private-scene-source/assets/manifest.json"
           echo "REMOTE_SOURCE=${STAGING_APP_DIR}-stage-state/source/$SHA/$ASSET_SHA" >> "$GITHUB_ENV"
           # shellcheck disable=SC2029
-          tar -C private-scene-assets/assets -czf - . | ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo mkdir -p '${STAGING_APP_DIR}-stage-state/source/$SHA/$ASSET_SHA' && sudo tar -xzf - -C '${STAGING_APP_DIR}-stage-state/source/$SHA/$ASSET_SHA'"
+          tar -C "$RUNNER_TEMP/private-scene-source/assets" -czf - . | ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo mkdir -p '${STAGING_APP_DIR}-stage-state/source/$SHA/$ASSET_SHA' && sudo tar -xzf - -C '${STAGING_APP_DIR}-stage-state/source/$SHA/$ASSET_SHA'"
       - name: Capture pre-rollout scene URLs
         if: steps.previous.outputs.previous_sha != ''
         timeout-minutes: 5
