@@ -139,7 +139,9 @@ Deploy job сериализован группой `staging-deploy`; canary ис
 
 Конфигурация по умолчанию: endpoint `https://s3.ru-3.storage.selcloud.ru`, region
 `ru-3`, bucket `vrata-private-scene-releases`. Зона сервера не определяет S3-пул.
-Используются стандартный S3 API и изолированный AWS CLI `1.46.0`, а не API панели.
+Используются стандартный S3 API и изолированный AWS CLI `1.46.0` с `certifi`
+`2026.10.23`, а не API панели. Закреплённый набор доверенных корневых сертификатов
+нужен для действующей цепочки GlobalSign у Selectel; проверка TLS остаётся включённой.
 Reader имеет только GET в `private-scenes/releases/*`; отдельный writer —
 GET/PUT без DELETE/list. Секреты writer в workflow не передаются. Настройка
 внешнего release bucket не меняет Compose SeaweedFS, `MINIO_*` или plugin storage.
