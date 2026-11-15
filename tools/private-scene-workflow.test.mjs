@@ -257,6 +257,12 @@ test("workflow isolates reader credentials, pins CLI, retains helper/catalog and
   assert.equal(lock.archive.sha256, "bd24b8141d94720cd280b29a1f02b21fef5a3ecd4b8ca22768c244a57a674526");
 });
 
+test("isolated S3 client pins current CA roots without disabling certificate verification", () => {
+  const install = script("Install pinned scene S3 client");
+  assert.match(install, /awscli==1\.46\.0 certifi==2026\.10\.23/);
+  assert.doesNotMatch(workflow, /--no-verify-ssl|PYTHONHTTPSVERIFY|CURL_CA_BUNDLE|AWS_CA_BUNDLE/);
+});
+
 test("actual bootstrap/new lock, repeat binding and old target without helper/lock use saved fetch protocol", async t => {
   const f = await fixture(t);
   await f.bootstrap();
