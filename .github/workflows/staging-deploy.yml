@@ -174,7 +174,7 @@ jobs:
       - name: Install pinned scene S3 client
         run: |
           python3 -m venv "$RUNNER_TEMP/vrata-scenes-aws"
-          "$RUNNER_TEMP/vrata-scenes-aws/bin/pip" install --disable-pip-version-check awscli==1.46.0
+          "$RUNNER_TEMP/vrata-scenes-aws/bin/pip" install --disable-pip-version-check awscli==1.46.0 certifi==2026.10.23
       - name: Fetch pinned private scene release
         env:
           BOUND_ASSET_SHA: ${{ steps.previous.outputs.asset_sha }}
