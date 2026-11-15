@@ -151,6 +151,9 @@ test("fresh self-host: standalone public SDK artifact, normal author UI, restart
     expect(await library()).toEqual(installed);
     for (const actor of actors) {
       await actor.page.reload({ waitUntil: "domcontentloaded" });
+      const session = await continueWithoutAudio(actor.page, actor.role);
+      expect(session.participantId).toBe(actor.participantId);
+      actor.sessionToken = session.token;
       await expect.poll(() => actor.page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected), { timeout: 30_000 }).toBe(true);
       await status(actor.page, "Selfhost v2");
     }
@@ -285,6 +288,16 @@ async function runtimeRenderer(page: Page) {
   });
 }
 
+async function continueWithoutAudio(page: Page, role: "host" | "guest") {
+  await page.locator("#guest-name-input").fill(`T17 self-host ${role}`);
+  const admission = page.waitForResponse(r => new URL(r.url()).pathname === "/api/tokens/state" && r.status() === 200);
+  void admission.catch(() => undefined);
+  await page.locator("#guest-enter-without-audio").click({ noWaitAfter: true });
+  const session = await (await admission).json();
+  expect(session.role).toBe(role); expect(session.token.startsWith("rs2.")).toBe(true);
+  return session as { role: "host" | "guest"; participantId: string; token: string };
+}
+
 async function enter(browser: Browser, state: any, role: "host" | "guest") {
   const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
   const page = await context.newPage();
@@ -296,12 +309,7 @@ async function enter(browser: Browser, state: any, role: "host" | "guest") {
     expect(url.origin).toBe(origin);
     expect(url.searchParams.has("role") || url.searchParams.has("onboard") || url.searchParams.has("debug")).toBe(false);
     await page.goto(inviteLink, { waitUntil: "domcontentloaded" });
-    await page.locator("#guest-name-input").fill(`T17 self-host ${role}`);
-    const admission = page.waitForResponse(r => new URL(r.url()).pathname === "/api/tokens/state" && r.status() === 200);
-    void admission.catch(() => undefined);
-    await page.locator("#guest-enter-without-audio").click({ noWaitAfter: true });
-    const session = await (await admission).json();
-    expect(session.role).toBe(role); expect(session.token.startsWith("rs2.")).toBe(true);
+    const session = await continueWithoutAudio(page, role);
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.sceneBundleState), { timeout: 90_000 }).toBe("loaded");
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected), { timeout: 30_000 }).toBe(true);
     const renderer = await runtimeRenderer(page);
