@@ -19,7 +19,7 @@
 - [Забытый стенд удаляется, только пока работает машина разработки](2026-10-25-stage-watcher-needs-operator-machine.md) — new — P2 — нужно решение владельца о сервисной учётной записи Selectel.
 - [При четырёх одновременных входах авторассадка иногда оставляет участника без места](2026-10-27-auto-seat-simultaneous-entry-unseated.md) — new — P2 — у одного из четырёх currentSeatId остаётся null 60 с; при повторе job проходит. Повторился 2026-10-27 в CI #149.
 - [Запрос теста portal-managed-grants к API иногда обрывается с socket hang up](2026-10-27-portal-managed-grants-socket-hang-up.md) — new — P2 — сервер фикстуры закрыл соединение без ответа; при повторе job проходит.
-- [Staging-сценарий pending retirement падает на программной отрисовке после повтора загрузки WASM](2026-11-15-auto-seat-pending-sticky-wasm-retry.md) — new — P2 — на SwiftShader первая загрузка WASM не укладывается в 3 с, запомненный lastInstanceFailure делает Staging Extended красным; на GPU 3 из 3 проходят.
+- [Срок загрузки WASM плагинов истекает во время первого кадра сцены](2026-11-15-auto-seat-pending-sticky-wasm-retry.md) — new — P2 — первый кадр сцены на программной отрисовке занимает 3,7–4,8 с, 3-секундный срок WASM срабатывает раньше обработки полученных байтов; Staging Extended красный, на слабых устройствах плагины стартуют позже или отказывают до перезагрузки.
 - [После перезапуска контейнера remote-browser не открывает страницы, а healthcheck зелёный](2026-10-29-remote-browser-restart-stale-display-lock.md) — new — P2 — устаревший `/tmp/.X99-lock` не даёт Xvfb стартовать, сессии падают с `executor_crashed`
 
 ## P3

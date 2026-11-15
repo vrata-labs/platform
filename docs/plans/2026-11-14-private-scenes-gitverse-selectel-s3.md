@@ -244,6 +244,8 @@ lint, typecheck, build и полный `pnpm test` (root tools 420: 418 pass, 2
 - Staging Extended 43758947354: обе попытки 5 passed / 1 failed, воспроизводимо падает `room-plugin-auto-seat-staging.spec.ts:22` на программной отрисовке; на GPU против того же стенда 3/3. Это отказ вне S3-поставки, но k11 требует зелёный Extended: [backlog](../backlog/2026-11-15-auto-seat-pending-sticky-wasm-retry.md).
 - Аренда `751c3168` освобождена, стенд удаляется штатно.
 
+После расследования по D-121 журнала T17: сигнал loaded предшествует длинной задаче первого кадра. Она перекрывает получение/компиляцию WASM или pending claim; в измеренных отказах просроченный таймер опережает завершение операции. Это реальный конфликт готовности и сроков, а не основание принять красный Extended как случайную нестабильность. Дополнительная аренда `dc5ac1ae` освобождена; runtime и ограничения не изменены. k11 остаётся открытым до исправления и повторной приёмки.
+
 ## Затронутые файлы
 
 - Новые: `tools/private-scene-release.py`, `tools/private-scene-release.test.py`, `infra/docker/private-scene-release.lock.json`.
