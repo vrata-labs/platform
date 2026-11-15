@@ -255,15 +255,33 @@ class RunnerTest(unittest.TestCase):
                 h.verify_shared_helpers()
 
     def test_browser_cli_uses_the_harness_installation_and_preserves_source_cwd(self):
-        env = {"T17_SELFHOST_ORIGIN": "http://127.0.0.1:47170"}
-        with mock.patch.object(h, "capture") as capture:
+        env = {"T17_SELFHOST_ORIGIN": "http://127.0.0.1:47170", "TMPDIR": str(h.Q)}
+
+        def run(argv, **kwargs):
+            temporary = Path(kwargs["env"]["TMPDIR"])
+            self.assertTrue(temporary.is_dir())
+            self.assertEqual(temporary.stat().st_mode & 0o777, 0o700)
+            self.assertLessEqual(len(os.fsencode(temporary)), 40)
+            self.assertNotEqual(temporary, h.Q)
+
+        with mock.patch.object(h, "capture", side_effect=run) as capture:
             h.run_browser(env)
         capture.assert_called_once_with(
             [h.NODE, str(h.ROOT / "node_modules/playwright/cli.js"), "test",
              "--config", str(h.ROOT / "tests/selfhost/playwright.config.ts")],
-            env=env, timeout=900)
+            env={**env, "TMPDIR": capture.call_args.kwargs["env"]["TMPDIR"]}, timeout=900)
         # No cwd override: capture defaults to the pristine runtime SOURCE.
         self.assertNotIn("cwd", capture.call_args.kwargs)
+        self.assertEqual(env["TMPDIR"], str(h.Q), "the caller's environment must remain unchanged")
+        self.assertFalse(Path(capture.call_args.kwargs["env"]["TMPDIR"]).exists())
+
+    def test_failed_browser_run_removes_only_its_short_temporary_directory(self):
+        with mock.patch.object(h, "capture", side_effect=RuntimeError("test_browser_failed")) as capture:
+            with self.assertRaisesRegex(RuntimeError, "test_browser_failed"):
+                h.run_browser({"TMPDIR": str(h.Q)})
+        temporary = Path(capture.call_args.kwargs["env"]["TMPDIR"])
+        self.assertFalse(temporary.exists())
+        self.assertTrue(h.Q.exists(), "durable failure evidence must be preserved")
 
 
 if __name__ == "__main__":

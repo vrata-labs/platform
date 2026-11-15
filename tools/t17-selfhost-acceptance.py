@@ -18,6 +18,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 import urllib.request
@@ -420,8 +421,16 @@ def run_browser(env):
     # Specs import Playwright from ROOT. A CLI from SOURCE creates a second
     # runner instance even when both installations have the same version.
     # Keep SOURCE as cwd for the exact-runtime demo and SDK operations.
-    capture([NODE, str(ROOT / "node_modules/playwright/cli.js"), "test",
-             "--config", str(ROOT / "tests/selfhost/playwright.config.ts")], env=env, timeout=900)
+    # Chromium also creates Unix socket/profile paths under TMPDIR. Keep that
+    # disposable directory short, private and separate from durable evidence.
+    with tempfile.TemporaryDirectory(prefix="t17-pw-", dir="/tmp/opencode") as temporary:
+        path = Path(temporary)
+        assert len(os.fsencode(temporary)) <= 40 and path.stat().st_mode & 0o777 == 0o700
+        write("browser-temporary.json", {"name": path.name, "pathBytes": len(os.fsencode(temporary)),
+                                          "privateMode": "0700", "separateFromEvidence": True})
+        capture([NODE, str(ROOT / "node_modules/playwright/cli.js"), "test",
+                 "--config", str(ROOT / "tests/selfhost/playwright.config.ts")],
+                env={**env, "TMPDIR": temporary}, timeout=900)
 
 
 def run(state):
