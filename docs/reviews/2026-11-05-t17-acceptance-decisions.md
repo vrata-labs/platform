@@ -127,3 +127,11 @@
   - playwright.gpu.config.ts: 5/5 passed за 50.4 s, renderer ANGLE (Microsoft Corporation, D3D12 (NVIDIA GeForce GTX 1060 6GB), OpenGL ES 3.1), required=true. Release: meeting 33 RAF/16 settling за 540 мс из оставшихся 14912 мс, presentation 32/16 за 514 мс из 14866 мс, delay 130 мс; visual 11.0 и 11.4 s;
   - штатный конфиг с VRATA_E2E_REQUIRE_HARDWARE_RENDERING=1: 3 passed, 2 failed с hardware_rendering_required и тем же SwiftShader renderer до создания комнаты (146 и 504 мс), exit 1.
 - Границы: push, CI, Docker и stage не выполнялись; результат CI с этой правкой не подтверждён. T17 NOT_READY.
+
+## D-112 — 2026-11-15 — Self-host закреплён на опубликованном кандидате после S3-поставки
+- Контекст: прежний target 9d7b2db не включает последующие изменения runtime D-103–D-111. В main слита поставка приватных сцен из S3 (#159), затем main влит в ветку T17.
+- Решение: immutable runtime target — 4d5ca28883cffbf08a82112f33a25fca18431164. Runner и browser spec используют один полный SHA; отдельный коммит оснастки и документации не меняет runtime target (D-098). D-102 сохраняется как история предыдущего кандидата.
+- Происхождение: self-host собирается из нового clone/git archive этого SHA. Нужны новые env/project/volumes; прежние prepared state, использованные claims/intents и истёкшие приглашения не переиспользуются и не продлеваются.
+- Совместимость: self-host Compose, API, SDK, demo и authority-контракты относительно 9d7b2db не изменены. Meeting-tools helper теперь импортирует functional-diagnostics; этот транзитивный файл включён в побайтную exact-SHA сверку и итоговые hashes, чтобы изменение наблюдателя также делало доказательство недействительным.
+- Проверка подготовки: 18 регрессий, включая несовпадение транзитивного helper, Python syntax, полная проверка типов оснастки и валидация пакета оснований прошли. Для TYPECHECK использованы существующие зависимости оснастки (Playwright 1.58.2); это не свежая установка runtime. Shared helpers побайтно совпадают с 4d5ca28.
+- Границы: штатные сцены/DPR/TTL, бюджеты 3/600000, 20000/5000/3000 мс, окна 5/15/20 секунд и 16 RAF не меняются. Подготовка и проверка типов не заменяют новый lifecycle, final local, CI/Docker/staging, визуальную приёмку и реальные устройства. T17 остаётся NOT_READY.

@@ -23,14 +23,14 @@ import traceback
 import urllib.request
 
 os.umask(0o077)
-SHA = "9d7b2db4c60df1d39dd5769f6f4676addfb0f03c"
+SHA = "4d5ca28883cffbf08a82112f33a25fca18431164"
 ORIGIN = "https://github.com/vrata-labs/platform.git"
 ROOT = Path(__file__).resolve().parent.parent
 DOCKER = ["/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe", "--host", "npipe:////./pipe/dockerDesktopLinuxEngine"]
 NODE = "/usr/bin/node"
 PORTS = {"http": 47170, "state": 27170, "livekit": 27880, "rtc": 27881, "storage": 29170}
 HARNESS_FILES = ["tools/t17-selfhost-acceptance.py", "tools/t17-selfhost-acceptance.test.py", "tests/selfhost/playwright.config.ts", "tests/selfhost/runtime-lifecycle.spec.ts"]
-SHARED_HELPERS = ["tests/e2e/" + name + ".ts" for name in ["plugin-author-scenarios", "plugin-author-ui", "room-state-observation", "meeting-tools-acceptance", "test-cleanup"]]
+SHARED_HELPERS = ["tests/e2e/" + name + ".ts" for name in ["plugin-author-scenarios", "plugin-author-ui", "room-state-observation", "meeting-tools-acceptance", "functional-diagnostics", "test-cleanup"]]
 seq = 0
 
 
@@ -411,14 +411,18 @@ def runtime_audit(state):
     write("storage-audit.json", {"pluginRows": 0, "bindings": 0, "privateBucketObjects": 0, "runtimeSha": SHA})
 
 
+def verify_shared_helpers():
+    for rel in SHARED_HELPERS:
+        assert (ROOT / rel).read_bytes() == capture(["git", "show", SHA + ":" + rel]), "shared_helper_not_exact_runtime_sha"
+
+
 def run(state):
     assert state["phase"] == "prepared", "t17_run_is_single_attempt_preserve_existing_result"
     model_preflight(state)
     state.update(phase="running", ownerPid=os.getpid())
     write("runner.private.json", state)
     hashes = {rel: hashlib.sha256((ROOT / rel).read_bytes()).hexdigest() for rel in HARNESS_FILES + SHARED_HELPERS}
-    for rel in SHARED_HELPERS:
-        assert (ROOT / rel).read_bytes() == capture(["git", "show", SHA + ":" + rel]), "shared_helper_not_exact_runtime_sha"
+    verify_shared_helpers()
     write("harness-provenance.json", {"files": hashes, "head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
                                       "sharedHelpersMatchRuntimeSha": True})
     result = {"runtimeSha": SHA, "runId": state["runId"], "status": "failed", "startedAt": time.time()}

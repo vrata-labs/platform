@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "task": "T17: итоговая продуктовая приёмка WM-01…12; runtime candidate SHA 9d7b2db4c60df1d39dd5769f6f4676addfb0f03c, документация и оснастка имеют отдельный docs/harness SHA; main 51668aa — исторический baseline",
+  "task": "T17: итоговая продуктовая приёмка WM-01…12; runtime candidate SHA 4d5ca28883cffbf08a82112f33a25fca18431164, документация и оснастка имеют отдельный docs/harness SHA; main 51668aa — исторический baseline",
   "domain": "general",
   "scope": ["."],
   "criteria": [

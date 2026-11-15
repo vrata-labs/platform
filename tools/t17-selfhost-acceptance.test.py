@@ -235,6 +235,25 @@ class RunnerTest(unittest.TestCase):
         self.run_with_diagnostic_failure(activated_health=1)
         self.assertIn("AssertionError", (h.Q / "failure.private.log").read_text())
 
+    def test_shared_helpers_include_transitive_diagnostics_and_match_exact_candidate(self):
+        helper = "tests/e2e/functional-diagnostics.ts"
+        self.assertIn(helper, h.SHARED_HELPERS)
+        with mock.patch.object(h, "capture", side_effect=lambda argv: (h.ROOT / argv[2].split(":", 1)[1]).read_bytes()) as capture:
+            h.verify_shared_helpers()
+        self.assertIn(mock.call(["git", "show", h.SHA + ":" + helper]), capture.call_args_list)
+
+    def test_transitive_diagnostics_mismatch_blocks_harness(self):
+        helper = "tests/e2e/functional-diagnostics.ts"
+
+        def capture(argv):
+            rel = argv[2].split(":", 1)[1]
+            content = (h.ROOT / rel).read_bytes()
+            return content + b"\nchanged" if rel == helper else content
+
+        with mock.patch.object(h, "capture", side_effect=capture):
+            with self.assertRaisesRegex(AssertionError, "shared_helper_not_exact_runtime_sha"):
+                h.verify_shared_helpers()
+
 
 if __name__ == "__main__":
     unittest.main()
