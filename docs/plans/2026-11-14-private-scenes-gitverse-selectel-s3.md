@@ -176,7 +176,7 @@ Reader secrets `PRIVATE_SCENES_S3_READER_ACCESS_KEY_ID` и `PRIVATE_SCENES_S3_RE
 - [x] Обеспечить восстановление нужных bytes из проверенных pinned S3 releases либо включённых в backup snapshots. Не менять общий формат backups без необходимости и не подделывать designation/gate proof/accepted JSON.
 - [x] Автотест восстановления в пустой каталог без доступа к Git-сценам; недоступный исторический релиз, повреждённый backup или смена acceptance во время экспорта должны давать отказ, а не неполный успех.
 - [x] Добавить самостоятельный набор `tools/private-scene-recovery.test.mjs`, переиспользующий существующие stage fixtures, без подъёма production или реальных старых хостов.
-- [ ] Отдельно от fixture-тестов скачать и проверить реальные пакеты для каждого требуемого `assetSha` из инвентаря Task 1; сохранить очищенную таблицу `binding -> descriptor -> archive/inventory SHA-256 -> результат восстановления`. После нового bootstrap обновить её фактическими current/previous/Wave 2 и room URL версиями. Отсутствие нужного пакета оставляет k06 открытым.
+- [x] Отдельно от fixture-тестов скачать и проверить реальные пакеты для каждого требуемого `assetSha` из инвентаря Task 1; сохранить очищенную таблицу `binding -> descriptor -> archive/inventory SHA-256 -> результат восстановления`. После нового bootstrap обновить её фактическими current/previous/Wave 2 и room URL версиями. Отсутствие нужного пакета оставляет k06 открытым.
 - Готово: **k06**, права на DELETE/автоматическая очистка S3 не добавлены. Оценка: 1–2 ч.
 
 Состояние на 2026-11-14: **DONE_LOCAL_EXTERNAL_BLOCKED** (S22/D-012). `backup-staging.py` под прежним operation lock, затем shared state lock сохраняет полные проверенные current/previous/Wave 2 snapshots, реальные bindings с derived S3 descriptor keys и room URLs из точного SQL-дампа, включая template snapshot. Вложенная версия по сохранённому URL проверяется по marker/binding даже после удаления её отдельного snapshot штатным retention. Общая схема `backup-restore.mjs` не меняется: companion добавляет checksum artifacts в `private-scenes/`. Незавершённый экспорт остаётся вне `vrata-*` до итогового атомарного rename и не засчитывается retention; при ошибке manifest помечается incomplete, частичные scene copies удаляются.
@@ -220,18 +220,31 @@ lint, typecheck, build и полный `pnpm test` (root tools 420: 418 pass, 2
 ### Task 8. Получить окончательного кандидата T17
 - [x] Влить актуальный `origin/main` с S3 workflow/helper в `feat/t17-product-acceptance`; сохранить изменения T17 и устранить только реальные конфликты.
   Слит `main` `08b6d04`; конфликты были только add/add в четырёх файлах этого плана (plan/decisions/context/validation), взята более полная версия из `main`.
-- [ ] Выполнить **k04–k08** на этом окончательном дереве с собственными fixtures/credentials. Полный e2e: GPU-конфиг, workers=1, retries=0. Отдельно выполнить `pnpm test:e2e:private-assets` с восстановленным пакетом; исходные assertions не менять, существующие отказы не скрывать.
-- [ ] Commit/push итоговой ветки, зелёные CI и Docker Publish для нового точного SHA (**k09**). Прежние успешные прогоны `23cb4c6` сохраняются как история, не как подтверждение нового merge-коммита.
+- [x] Выполнить **k04–k08** на этом окончательном дереве с собственными fixtures/credentials. Полный e2e: GPU-конфиг, workers=1, retries=0. Отдельно выполнить `pnpm test:e2e:private-assets` с восстановленным пакетом; исходные assertions не менять, существующие отказы не скрывать.
+- [x] Commit/push итоговой ветки, зелёные CI и Docker Publish для нового точного SHA (**k09**). Прежние успешные прогоны `23cb4c6` сохраняются как история, не как подтверждение нового merge-коммита.
 - Готово: **k04–k09** актуальны для окончательного кандидата; S3-aware workflow уже в main. Оценка: до 1 ч работы плюс полные прогоны/CI.
 
+Состояние на 2026-11-15: **Task 8 выполнена**. Окончательный runtime `4d5ca28883cffbf08a82112f33a25fca18431164` (F): k04/k07/k08 успешны, полный GPU e2e 271/271 с workers=1/retries=0, private-assets 3 passed и 2 прежних необязательных пропуска. CI 43702462375 проверил synthetic merge с деревом, равным F; Docker Publish 43702698904 собрал образы из F. После squash-слияния PR #157 main CI 43755563620 и Docker Publish 43755563608 успешны на `32c8198`, чьи runtime-пути побайтно равны F (D-119 журнала T17).
+
 ### Task 9. Проверить новый staging-хост
-- [ ] Проверить **k10**, не создавать новый хост с workflow, который ещё требует GitHub private checkout.
-- [ ] После успешных CI/Docker взять `vrata-stage acquire platform --purpose deploy --sha <точный SHA> --note "<задача>"`; дождаться штатного bootstrap и gated Template Catalog. Существующие чужие аренды/поставки не менять.
-- [ ] Под своей арендой проверить accepted-release на этот SHA и assetSha/digest, полный `pnpm test:e2e:staging`, все 13 сцен, Hall/BlueOffice/ArtGallery `loaded`, отсутствие браузерных обращений к S3. Ни GitHub private key, ни GitVerse token в deploy не используются.
+- [x] Проверить **k10**, не создавать новый хост с workflow, который ещё требует GitHub private checkout.
+- [x] После успешных CI/Docker взять `vrata-stage acquire platform --purpose deploy --sha <точный SHA> --note "<задача>"`; дождаться штатного bootstrap и gated Template Catalog. Существующие чужие аренды/поставки не менять.
+- [x] Под своей арендой проверить accepted-release на этот SHA и assetSha/digest, полный `pnpm test:e2e:staging`, все 13 сцен, Hall/BlueOffice/ArtGallery `loaded`, отсутствие браузерных обращений к S3. Ни GitHub private key, ни GitVerse token в deploy не используются.
 - [ ] Выполнить `pnpm test:e2e:staging-extended` на том же SHA под арендой: расширенный набор обязателен вокруг bootstrap/необратимой активации каталога. Указать отдельный run ID/результат; его пропуск не закрывает k11.
-- [ ] Обновить реальное свидетельство **k06** после активации: подтвердить восстановимость всех теперь необходимых asset versions, а не только тестовых fixtures.
+- [x] Обновить реальное свидетельство **k06** после активации: подтвердить восстановимость всех теперь необходимых asset versions, а не только тестовых fixtures.
 - [ ] Зафиксировать фактические числа, run IDs и поведение отката; удалить только свою временную обвязку, освободить аренду. Выполнить общий gate JSON-контракта; оставшиеся блокеры T17 не закрывать.
 - Готово: **k11** и все остальные обязательные критерии актуальны. Оценка: до 1 ч работы плюс создание стенда/проверки (около двух часов).
+
+Состояние на 2026-11-15: **Task 9 выполнена, кроме Staging Extended и записи общего gate; k11 открыт** (D-017). Числа и run IDs зафиксированы ниже, аренда освобождена; протоколы k01–k11 для общего gate JSON-контракта ещё не записаны.
+- k10: CA-исправление #160 и S3-workflow в main (`36a02c6`, затем `32c8198`); bootstrap запущен из main без GitHub private key и GitVerse token.
+- k05: bootstrap 43755854604 на новом хосте получил сцены из S3 по lock (binding на свежем хосте пуст), assetSha `ed0c972cf05f512c35861ef76cff8f87080f3133`; gate, публикация accepted release и удаление устаревших копий успешны, откат не понадобился. Откат при отказе gate на хосте не проверялся, его покрывают тесты rollout.
+- Accepted record: imageSha F, assetSha `ed0c972`, runId 43755854604, mode ordinary; active указывает на снимок F-ed0c972, маркер Wave 2 равен F. Дайджесты работающих образов совпадают с Docker Publish 43702698904.
+- Template Catalog activate 43757059152 на checkout F: полный staging-набор 56/56, все 13 комнат, Hall/BlueOffice/ArtGallery loaded. Браузер в трёх комнатах обращается только к стенду, его поддоменам state и livekit и к blob:, к selcloud.ru ни одного запроса.
+- k06: backup хоста проверен на хосте и после копирования вне хоста, затем восстановлен в пустой каталог без Git сцен: 303 файла, 498 701 176 байт. 215 файлов совпали побайтно с локальной сборкой F, ещё 88 — версионные копии F для Hall и BlueOffice. В recovery.json: current и Wave 2 — F/ed0c972, previous отсутствует, 42 комнаты (5 на версионных URL F, 11 на текущем дереве, 2 со встроенным manifest, 24 без сцены). Версии исходного инвентаря (`0a3b492`) скачаны из S3 и сверены в Task 3. Очищенная таблица восстановления хранится приватно.
+- Staging Extended 43758947354: обе попытки 5 passed / 1 failed, воспроизводимо падает `room-plugin-auto-seat-staging.spec.ts:22` на программной отрисовке; на GPU против того же стенда 3/3. Это отказ вне S3-поставки, но k11 требует зелёный Extended: [backlog](../backlog/2026-11-15-auto-seat-pending-sticky-wasm-retry.md).
+- Аренда `751c3168` освобождена, стенд удаляется штатно.
+
+После расследования по D-121 журнала T17: сигнал loaded предшествует длинной задаче первого кадра. Она перекрывает получение/компиляцию WASM или pending claim; в измеренных отказах просроченный таймер опережает завершение операции. Это реальный конфликт готовности и сроков, а не основание принять красный Extended как случайную нестабильность. Дополнительная аренда `dc5ac1ae` освобождена; runtime и ограничения не изменены. k11 остаётся открытым до исправления и повторной приёмки.
 
 ## Затронутые файлы
 
