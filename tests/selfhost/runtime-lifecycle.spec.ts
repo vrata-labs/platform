@@ -210,12 +210,7 @@ test("fresh self-host: standalone public SDK artifact, normal author UI, restart
             .slice(-128).map(item => ({ route: new URL(item.name).pathname.endsWith("/runtime") ? "runtime" : "content",
               startTime: item.startTime, requestStart: item.requestStart, responseStart: item.responseStart,
               responseEnd: item.responseEnd, duration: item.duration, transferSize: item.transferSize })));
-          const renderer = await actor.page.evaluate(() => {
-            const canvas = document.querySelector("canvas");
-            const gl = canvas?.getContext("webgl2");
-            const extension = gl?.getExtension("WEBGL_debug_renderer_info");
-            return gl && extension ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) : null;
-          });
+          const renderer = await runtimeRenderer(actor.page);
           const client: Record<string, unknown> = { role: actor.role, observation, resources, renderer };
           runtimeDiagnostics.push(client);
           // Read-only, after the original failure: distinguish server/transport
@@ -282,6 +277,14 @@ async function noInstanceFailure(actors: Array<{ page: Page }>) {
   }
 }
 
+async function runtimeRenderer(page: Page) {
+  return page.evaluate(() => {
+    const gl = document.querySelector("canvas")?.getContext("webgl2");
+    const extension = gl?.getExtension("WEBGL_debug_renderer_info");
+    return gl && extension ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) as string : null;
+  });
+}
+
 async function enter(browser: Browser, state: any, role: "host" | "guest") {
   const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
   const page = await context.newPage();
@@ -301,6 +304,12 @@ async function enter(browser: Browser, state: any, role: "host" | "guest") {
     expect(session.role).toBe(role); expect(session.token.startsWith("rs2.")).toBe(true);
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.sceneBundleState), { timeout: 90_000 }).toBe("loaded");
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected), { timeout: 30_000 }).toBe(true);
+    const renderer = await runtimeRenderer(page);
+    const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight, dpr: devicePixelRatio }));
+    await writeFile(join(output, `renderer-${role}.json`), JSON.stringify({ renderer, viewport }, null, 2) + "\n", { mode: 0o600 });
+    expect(renderer, "selfhost_requires_a_verified_hardware_renderer").not.toBeNull();
+    expect(renderer!, "selfhost_hardware_rendering_required").not.toMatch(/swiftshader|llvmpipe|software/i);
+    expect(viewport).toEqual({ width: 1280, height: 720, dpr: 1 });
     return { context, page, authority, observation, role, roomId: state.roomId as string,
       participantId: session.participantId as string, sessionToken: session.token as string };
   } catch (e) { await observation.close(); await authority.close(); await context.close(); throw e; }
