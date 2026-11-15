@@ -1,0 +1,232 @@
+{
+  "schema": 1,
+  "goal": "Восстановить локальный снимок приватных сцен в согласованной GitVerse vrata-labs (D-003) и поставлять закреплённые готовые пакеты из приватного Selectel S3 без checkout репозитория сцен в deploy.",
+  "scope": "Приватные SenseTower assets из найденного shallow-клона, staging fetch/accepted snapshots/recovery. Публичные репозитории сцен, runtime loader, plugin storage и production исключены.",
+  "sources": [
+    {
+      "id": "S1",
+      "system": "user",
+      "locator": "Запрос plan-make от 2026-11-14 и выбор «S3 — источник для деплоя»",
+      "version": "2026-11-14",
+      "checked_at": "2026-11-14T12:20:00Z",
+      "status": "available",
+      "summary": "Требуется перенос локального репозитория в организацию GitVerse vrata-lab и существующих собранных сцен в Selectel S3. Выбран private S3 -> deploy -> HTTP-маршруты платформы, не прямой browser S3."
+    },
+    {
+      "id": "S2",
+      "system": "user",
+      "locator": "Выбор «Перенести снимок» после сообщения о shallow-клоне",
+      "version": "2026-11-14",
+      "checked_at": "2026-11-14T12:23:00Z",
+      "status": "available",
+      "summary": "Согласована новая история в GitVerse с сохранением исходной локальной копии и SHA происхождения. Восстановление отсутствующих родителей не требуется."
+    },
+    {
+      "id": "S3",
+      "system": "github-actions",
+      "locator": "https://github.com/vrata-labs/platform/actions/runs/43593026411",
+      "version": "workflow e0ea693e0fa5f35d2a47e9837a681657462d8d77; deploy candidate 23cb4c69b2847494464b726b45eb857d0ed8ab76",
+      "checked_at": "2026-11-14T12:07:00Z",
+      "status": "available",
+      "summary": "Bootstrap остановился до rollout на Checkout pinned private assets: repository disabled. Read-only GitHub API приватного источника вернул HTTP 403 с ограничением account private services по GitHub Trade Controls. CI 43591509009, Seat marker 43591508965 и Docker 43591499985 кандидата успешны."
+    },
+    {
+      "id": "S4",
+      "system": "local-git",
+      "locator": "/tmp/opencode/vrata-beget-private-assets: .git/config, .git/shallow, assets/manifest.json, LICENSES.md",
+      "version": "HEAD 0a3b492e788bad82bf20a92476a628bf30c6dfbe; clean; shallow, 1 commit",
+      "checked_at": "2026-11-14T12:21:00Z",
+      "status": "available",
+      "summary": "Remote psilon2000/noah-scene-assets-private; main и origin/main совпадают, других веток/тегов нет. Родитель ea04324ec94d49aa1d813326165cf925f66fe3ce отсутствует. fsck connectivity-only успешен для доступной shallow-границы, alternates/promisor отсутствуют. 218 tracked files; assets содержит 216 файлов, 28 сцен, 409577033 байта. Нет LFS pointers; крупнейший файл 28248900 байт. Все 13 сцен staging на месте. Есть неподтверждённые права распространения и отсутствующие текстуры вне staging-каталога у legacy sense-office-v1 FBX. Первоначальное наблюдение дополнено независимым SHA-256 сравнением в S14."
+    },
+    {
+      "id": "S5",
+      "system": "git",
+      "locator": ".github/workflows/staging-deploy.yml:135-188; infra/docker/staging-scene-catalog.json",
+      "version": "23cb4c69b2847494464b726b45eb857d0ed8ab76",
+      "checked_at": "2026-11-14T12:21:00Z",
+      "status": "available",
+      "summary": "Workflow выполняет preflight и читает binding, затем checkout private assets и SSH-upload готового assets каталога. Текущий stage-каталог содержит 13 сцен. Готовый source может поступать не из Git."
+    },
+    {
+      "id": "S6",
+      "system": "git",
+      "locator": "tools/staging_scene_files.py:60-184,187-259; tools/staging-accepted-release.py:177-199; tools/staging-remote-release.py:90-116,281-300; tools/staging_gate_proof.py:9-12",
+      "version": "23cb4c69b2847494464b726b45eb857d0ed8ab76",
+      "checked_at": "2026-11-14T12:21:00Z",
+      "status": "available",
+      "summary": "Существуют immutable source snapshots, inventory SHA-256, atomic active, retained previous/Wave 2/room URL versions и rollback до acceptance. Binding imageSha -> assetSha неизменяем даже после отказа кандидата; assetSha требует 40 hex. После принятия JSON используется repair, не автоматический откат контейнеров. Схему accepted-release для отдельного archive SHA-256 менять не требуется."
+    },
+    {
+      "id": "S7",
+      "system": "git",
+      "locator": "tools/vrata-stage.py:973-1000,1042; infra/staging/on-demand-hook.sh:52-61; .github/workflows/template-catalog.yml:119",
+      "version": "23cb4c69b2847494464b726b45eb857d0ed8ab76",
+      "checked_at": "2026-11-14T12:21:00Z",
+      "status": "available",
+      "summary": "Hooks/workflow по умолчанию берутся из remote main; --sha выбирает приложение, не версию workflow. Новый bootstrap и каталог требуют предварительной согласованной поставки нового workflow в main. Обычные права review/admin не расширяются прежним исключением для PR #158."
+    },
+    {
+      "id": "S8",
+      "system": "git",
+      "locator": "tools/backup-staging.py:79-89; tools/backup-restore.mjs:709-743,1084-1175; docs/deployment-staging.md:159-162,228-245",
+      "version": "23cb4c69b2847494464b726b45eb857d0ed8ab76",
+      "checked_at": "2026-11-14T12:21:00Z",
+      "status": "available",
+      "summary": "Backup сохраняет accepted metadata и проверяет стабильность релиза, но общий backup/restore не включает все scene snapshots/bindings. Для восстановления без private Git нужны pinned releases и проверяемые descriptors/bindings либо сохранённые snapshots."
+    },
+    {
+      "id": "S9",
+      "system": "git",
+      "locator": "docs/scene-assets-repository.md; docs/asset-license-audit.md; scene-repositories.lock.json; AGENTS.md",
+      "version": "23cb4c69b2847494464b726b45eb857d0ed8ab76",
+      "checked_at": "2026-11-14T12:21:00Z",
+      "status": "available",
+      "summary": "Приватные SenseTower bundles не имеют подтверждённых прав на публичное распространение. Публичные scene repositories — отдельный контур. Bundled SeaweedFS, MINIO_* и plugin storage fingerprint не следует менять для внешнего release S3."
+    },
+    {
+      "id": "S10",
+      "system": "git",
+      "locator": "tools/patch-staging-scene-bundles.mjs:30-35; infra/docker/Caddyfile.staging:12-25; infra/docker/compose.staging.yml:245-249; apps/api/src/uploaded-object-storage.ts:70,188,317",
+      "version": "23cb4c69b2847494464b726b45eb857d0ed8ab76",
+      "checked_at": "2026-11-14T12:21:00Z",
+      "status": "available",
+      "summary": "Платформа уже раздаёт snapshots через текущие app/state origins; Hall/BlueOffice по умолчанию используют state.<host>, не app origin. В приложении есть S3-хранилище загрузок, но его buffered GET/overwrite publisher не является готовым immutable deployment-release механизмом."
+    },
+    {
+      "id": "S11",
+      "system": "gitverse-docs-api",
+      "locator": "https://gitverse.ru/docs/developers/public-api/repositories/api-post-orgs-repos ; https://api.gitverse.ru/orgs/vrata-lab/repos?type=public&per_page=1 ; https://gitverse.ru/docs/limits-lfs-cicd/limits-lfs",
+      "version": "наблюдение 2026-11-14; API без авторизации HTTP 401",
+      "checked_at": "2026-11-14T12:23:00Z",
+      "status": "available",
+      "summary": "Создание private repo требует прав организации/Repository Write и явной private visibility. Unauthenticated 401 и web404 не доказывают существование или отсутствие приватной org. Официальные страницы LFS противоречат друг другу по transport limits; обычные файлы найденного снимка меньше 100 МБ. Авторизованный доступ и общая квота назначения не проверены."
+    },
+    {
+      "id": "S12",
+      "system": "selectel-docs",
+      "locator": "https://docs.selectel.ru/s3/tools/aws-cli/ ; https://docs.selectel.ru/api/urls/ ; https://docs.selectel.ru/s3/about/manage-access/ ; https://docs.selectel.ru/s3/buckets/bucket-policy/about-bucket-policy/ ; https://docs.selectel.ru/s3/objects/conditional-requests/",
+      "version": "официальные результаты поиска 2026-11-14",
+      "checked_at": "2026-11-14T12:23:00Z",
+      "status": "available",
+      "summary": "S3 требует Access Key ID/Secret Key, отдельные от Keystone токена. Endpoint и region зависят от S3-пула, а не compute зоны. Доступен приватный бакет и разделение read/write/delete политиками. ETag не заменяет SHA-256. Возможность конкретной условной записи/квоты нужно проверять на выбранном пуле. Прямое чтение некоторых страниц завершалось timeout; положения собраны по официальным поисковым результатам, не проверены живым S3-запросом."
+    },
+    {
+      "id": "S13",
+      "system": "local-config-metadata",
+      "locator": "/home/sda/inprojects/vrata/.secrets/README.md ; .secrets/selectel/selectel.py ; command -v aws ; наличие ~/.aws/config и ~/.aws/credentials",
+      "version": "read-only наблюдение 2026-11-14",
+      "checked_at": "2026-11-14T12:23:00Z",
+      "status": "available",
+      "summary": "Первоначально были project-scoped Selectel member и Keystone helper; роль не только compute. AWS CLI 1.46.0 установлен, AWS config/credentials отсутствовали, S3-ключи в исходном реестре не описаны. Это не доказательство отсутствия ключей во всех возможных местах. Созданные позднее отдельные credentials и результат проверки отражены в S16."
+    },
+    {
+      "id": "S14",
+      "system": "protected-source-recovery",
+      "locator": "private-scene-recovery/0a3b492e788bad82bf20a92476a628bf30c6dfbe: provenance.json, tracked-inventory.tsv, source-snapshot.tar.sha256",
+      "version": "commit 0a3b492e788bad82bf20a92476a628bf30c6dfbe; tree 8b09bb8cd401611e74416382b2f60e0af9b8de1c",
+      "checked_at": "2026-11-14T16:15:52Z",
+      "status": "available",
+      "summary": "Независимый защищённый архив 615413760 байт содержит .git и исходные файлы; SHA-256 cb6c6081d115f884116176b52a941806edf44e5b0c323521206c7dcec0253db0. Архив независимо распакован: все 218 tracked files совпали по режимам/размерам/SHA-256, fsck успешен; исходник не менялся. Инвентарь SHA-256 2c7ab5bc304256bbb7cf9e8b44702be656b6e8151d996c84d297ac0c4e1a1639. Прочитаны provenance и метаданные: каталог 0700, четыре файла 0600. Все 13 staging-сцен присутствуют (217868504 байта); GLB имеют glTF2 header и встроенные images/buffers без внешних URI."
+    },
+    {
+      "id": "S15",
+      "system": "gitverse-authorized",
+      "locator": "https://gitverse.ru/vrata-labs/vrata-scene-assets-private ; D-003",
+      "version": "наблюдение 2026-11-14; root ed0c972cf05f512c35861ef76cff8f87080f3133",
+      "checked_at": "2026-11-14T16:15:52Z",
+      "status": "available",
+      "summary": "Пользователь подтвердил vrata-labs вместо исходного vrata-lab. Авторизованное членство/admin и private create/push подтверждены; репозиторий создан без auto_init. Обычный полный HTTPS push вернул 413, загрузка небольшими временными refs завершилась успешно, временные remote refs удалены. Восстановленный root ed0c972cf05f512c35861ef76cff8f87080f3133. Task 1 подтверждает доступ; принятие контрольного clone и совпадения инвентаря остаётся отдельной Task 2/k02."
+    },
+    {
+      "id": "S16",
+      "system": "selectel-panel-and-s3",
+      "locator": "https://my.selectel.ru/storage/972b9babdd42440eae4bb2e2cceb701b/containers/ru-3/vrata-private-scene-releases/bucket-policy/edit ; https://s3.ru-3.storage.selcloud.ru",
+      "version": "наблюдение 2026-11-14; AWS CLI 1.46.0; virtual-hosted addressing",
+      "checked_at": "2026-11-14T16:15:52Z",
+      "status": "available",
+      "summary": "Существующий приватный бакет vrata-private-scene-releases, ru-3, versioning включён, Object Lock выключен. Writer d5dc1dff19d7478289b97fb017e50271 и reader a56dc968231347eebacd05653bc94f8b имеют только s3.user в проекте My First Project; роль vrata-automation не менялась. Ключи и пароли зарегистрированы вне Git, каталог 0700/файлы 0600. Панель сформировала два Allow: writer GetObject/PutObject, reader GetObject, Resource arn:aws:s3:::vrata-private-scene-releases/private-scenes/releases/*. Первые два PUT policy завершились net::ERR_CONNECTION_TIMED_OUT. Повторный вход через список бакетов дал GET policy 404 policy_not_found; третья попытка PUT также завершилась timeout. Оба ключа: HEAD 403, GET/PUT/DELETE AccessDenied; anonymous GET/list 403. Пробная запись не принята, положительный доступ не подтверждён, k03 открыт. Анонимный GET сначала завершился timeout, повтор дал 403."
+    },
+    {
+      "id": "S17",
+      "system": "protected-staging-backups",
+      "locator": "beget-stage backup accepted-release.json: 2026-10-13T20-56-10-768939Z и 2026-10-13T22-14-15-084252Z",
+      "version": "accepted images 3f4cda2688d757f23a3b302723df06118d2a4cae и 380b2e7ff1dd67f19821ca324c575c7b0935c451",
+      "checked_at": "2026-11-14T16:15:52Z",
+      "status": "available",
+      "summary": "В обоих прочитанных accepted-release.json assetSha равен 0a3b492e788bad82bf20a92476a628bf30c6dfbe. Других identities в этих проверенных backup не найдено. Это ограниченный инвентарь сохранённых оснований, а не доказательство полного состава current/previous/Wave 2/room URL версий удалённого хоста. Неизвестные версии нельзя подменять найденным снимком. Стенды отсутствуют по результату предыдущего vrata-stage status; новый стенд для поиска не создавался. Реальные descriptors/archive ещё предстоит проверить в Tasks 3/6 и обновить список после bootstrap в Task 9."
+    },
+    {
+      "id": "S18",
+      "system": "gitverse-control-clone",
+      "locator": "https://gitverse.ru/vrata-labs/vrata-scene-assets-private ; независимый clone ; protected-source-recovery S14",
+      "version": "root ed0c972cf05f512c35861ef76cff8f87080f3133; tree 31c28cc1971406d2f73d45b612004a3e95c757f7",
+      "checked_at": "2026-11-14T16:50:19Z",
+      "status": "available",
+      "summary": "k02: независимый контрольный clone не shallow, содержит ровно один root-коммит без родителей. Все 218 исходных tracked files совпали с защищённым инвентарём по режимам/размерам/SHA-256 и с исходным tree по Git blob IDs; единственный добавленный файл RECOVERY.md сохраняет SHA происхождения, shallow-ограничение и ссылки на исходные LICENSES без локальных путей. assets tree в обеих копиях 01c1df83a401389e644e79e09718c45bc481f663. Исходник и clone чистые; git fsck --full --strict успешен для обоих; исходник остаётся shallow на 0a3b492e788bad82bf20a92476a628bf30c6dfbe с отсутствующим прежним родителем. Инвентарь SHA-256 2c7ab5bc304256bbb7cf9e8b44702be656b6e8151d996c84d297ac0c4e1a1639 и архив SHA-256 cb6c6081d115f884116176b52a941806edf44e5b0c323521206c7dcec0253db0 повторно сверены, права backup 0700/0600. Авторизованный GET /repos/vrata-labs/vrata-scene-assets-private вернул 200, private=true, default_branch=main, pull/push/admin=true; анонимный GET — 401. Живой git ls-remote --symref вернул только HEAD -> main и refs/heads/main на ed0c972cf05f512c35861ef76cff8f87080f3133; других веток, тегов и временных refs нет."
+    },
+    {
+      "id": "S19",
+      "system": "private-scene-release-pack-and-standard-s3",
+      "locator": "tools/private-scene-release.py; tools/private-scene-release.test.py; D-008/D-009",
+      "version": "source ed0c972cf05f512c35861ef76cff8f87080f3133; historical 0a3b492e788bad82bf20a92476a628bf30c6dfbe; format 1",
+      "checked_at": "2026-11-14T17:13:55Z",
+      "status": "available",
+      "summary": "Локальная Task 3: 26 focused tests, compile и diff check успешны. Два pack нового source идентичны; отдельный pack исторического commit дал тот же assets tree 01c1df83a401389e644e79e09718c45bc481f663, inventory и archive. 28 сцен, 216 файлов, 409577033 байта source; archive 331159099 байт SHA-256 bd24b8141d94720cd280b29a1f02b21fef5a3ecd4b8ca22768c244a57a674526; inventory 34101 байт SHA-256 db218b7554d31738e17033da8fd64e9672a6f53f6d0e1ea1b2ab3e17b31a3c57. Все члены архива сверены потоково, оба source чистые. Существующие env credentials через стандартный S3: reader GET descriptor и небольшая условная writer PUT возвращают AccessDenied, HEAD 403. Полноразмерная PUT не завершилась: virtual-hosted дал ошибку соединения, path addressing — s3_cli_failed. Оба descriptor только локальные, публикация и k03 открыты; политики/роли не менялись. Fetch/workflow/recovery не реализованы этим этапом."
+    },
+    {
+      "id": "S20",
+      "system": "local-private-scene-fetch",
+      "locator": "tools/private-scene-release.py; tools/private-scene-release.test.py; D-010; Task 4",
+      "version": "source ed0c972cf05f512c35861ef76cff8f87080f3133; descriptor/lock format 1",
+      "checked_at": "2026-11-14T17:58:46Z",
+      "status": "available",
+      "summary": "45 focused pack/publish/fetch tests успешны. Точный binding или lock без fallback, строгие schemas/derived keys, HTTPS/deadlines, archive size/SHA-256 до распаковки, ограниченный streaming USTAR, полный on-disk inventory, действующий catalog и атомарный source. Helper отдельно скопирован в свежий runner без соседних модулей/репозитория сцен; git намеренно недоступен. Реальный локальный пакет Task 3 через fake AWS CLI восстановлен в новый каталог: все 216 файлов/409577033 байта независимо совпали с inventory, 28 сцен и 13 обязательных проверены; archive 331159099 байт SHA-256 bd24b8141d94720cd280b29a1f02b21fef5a3ecd4b8ca22768c244a57a674526, inventory 34101 байт SHA-256 db218b7554d31738e17033da8fd64e9672a6f53f6d0e1ea1b2ab3e17b31a3c57. Это локальное доказательство без реальных S3-вызовов, не закрывающее k03/k06. Workflow/lock не создавались; полный k04 ожидает rollout/recovery."
+    },
+    {
+      "id": "S21",
+      "system": "local-private-scene-workflow-integration",
+      "locator": ".github/workflows/staging-deploy.yml; infra/docker/private-scene-release.lock.json; tools/private-scene-workflow.test.mjs; D-011; Task 5",
+      "version": "Task 5 поверх dd9be7bb013c2e83b0d30553977866e24ab89221; lock source ed0c972cf05f512c35861ef76cff8f87080f3133",
+      "checked_at": "2026-11-14T18:12:57Z",
+      "status": "available",
+      "summary": "Workflow получает private source только через S3 fetch сохранённым до target checkout helper/catalog. Исторический binding первичен; новый кандидат требует строгий target lock, fallback identity отсутствует. Reader secrets ограничены fetch step; source в RUNNER_TEMP передаётся прежним SSH/--source, host protocol не меняется. Canonical lock byte-for-byte совпал с Task 4 lock и точным descriptor source ed0c972 (1311 bytes, SHA-256 862508766db53cf5b9c49e8ae305b7fd88f75f44ac708c9aea1745e4fe559867), archive/inventory Task 3; это не публикация. 5 новых tests и 69 прежних staging scene/snapshot/accepted/remote/catalog/minio/state-key/public-lock tests успешны, отдельно 45 helper tests: всего 119. Четыре новых исполняемых fixture-сценария выполняют workflow Bash, fake AWS, SSH, real host snapshot/acceptance/rollback и HTTP URLs без Git сцен: bootstrap/new lock, repeat binding, old no helper/lock, отказ S3/исторического descriptor до rollout, A-B-failed gate-A с прежними accepted/active/bytes/URLs. Изолированная установка CLI 1.46.0 успешна. YAML/actionlint без ShellCheck и ShellCheck изменённых шагов успешны; full actionlint воспроизводит старый SC2029 в неизменённом gate на baseline. Template Catalog/public lock не менялись, private Git deploy dependencies удалены. CI secrets не устанавливались, реальные S3 access/publication/rollout/recovery, полные suites, push/PR/deploy не выполнялись."
+    },
+    {
+      "id": "S22",
+      "system": "local-private-scene-recovery",
+      "locator": "tools/backup-staging.py; tools/private-scene-recovery.py; tools/private-scene-recovery.test.mjs; tools/backup-staging.test.mjs; D-012; Task 6",
+      "version": "Task 6 поверх 57110e78d442f205edd26644a2be383436db598c",
+      "checked_at": "2026-11-14T18:36:59Z",
+      "status": "available",
+      "summary": "DONE_LOCAL_EXTERNAL_BLOCKED. Stage backup включает проверенные полные current/previous/Wave 2 snapshots, реальные bindings/derived descriptor keys, полный inventory и room URLs точного SQL-дампа с template snapshot; вложенные версии проверяются по marker/binding даже после prune. Operation lock затем shared state lock и конечная проверка исключают смешение acceptance; незавершённый каталог не участвует в retention, ошибка инвалидирует manifest и удаляет частичные scene copies. Общий backup format/restore не изменён. Companion validate/restore проверяет основной backup и все scene files, атомарно восстанавливает отдельный каталог без Git сцен и без создания host designation/gate/accepted-release/active. Все 45 helper и 50 обязательных Node tests k04 успешны, включая 8 новых recovery tests; 140 дополнительных backup tests успешны, один прежний optional real-fixture test пропущен без VRATA_TEST_BACKUP_FIXTURE_JSON. Compile/diff успешны. Два настоящих локальных пакета ed0c972/0a3b492 распакованы отдельно: 216 files/409577033 bytes/28 scenes и 13 required; archive SHA256 bd24b8141d94720cd280b29a1f02b21fef5a3ecd4b8ca22768c244a57a674526, inventory db218b7554d31738e17033da8fd64e9672a6f53f6d0e1ea1b2ab3e17b31a3c57. Исторический descriptor SHA256 4dccfa6857a443b74481ab99ac1fbd6286d5941cd0fc930f6c4b1a83740b66a4; новый совпадает с S21. Два старых backup повторно checksum-valid: 49/51 rooms, versioned URLs на соответствующие accepted images, assetSha у обоих 0a3b492; snapshots в них нет, полное scene recovery отклоняется. Приватная таблица связывает исходные bindings с descriptors/archive/inventory и локальными результатами. Это не S3 download и не полная история хоста; k03/k06, after-bootstrap inventory, CI/stage остаются открыты. Внешние policy/role/key операции не повторялись."
+    }
+  ],
+  "claims": [
+    {"id": "F1", "status": "confirmed", "text": "Выбран раздельный контур: GitVerse для репозитория; private S3 для закреплённых готовых пакетов; раздача браузеру остаётся у платформы.", "sources": ["S1"]},
+    {"id": "F2", "status": "confirmed", "text": "Текущий private GitHub checkout является фактическим внешним блокером staging до rollout, при успешных CI и Docker кандидата.", "sources": ["S3"]},
+    {"id": "F3", "status": "confirmed", "text": "Найдена связная доступная shallow-копия одного коммита с 28 сценами и всеми 13 staging-сценами; полнота исходной истории не подтверждается и не требуется после выбора пользователя.", "sources": ["S2", "S4"]},
+    {"id": "F4", "status": "confirmed", "text": "Согласовано восстановление снимка с новой историей и сохранением оригинала; нельзя незаметно удалить shallow-границу или объявить миграцию полной истории.", "sources": ["S2", "S4"]},
+    {"id": "F5", "status": "confirmed", "text": "Есть переиспользуемый source/snapshot/accepted-release путь; внешний S3 может заменить только получение source без замены runtime loader и протокола acceptance.", "sources": ["S5", "S6", "S10"]},
+    {"id": "F6", "status": "confirmed", "text": "assetSha остаётся 40-hex Git identity и binding для image SHA нельзя изменять; digest архива должен храниться отдельно.", "sources": ["S6"]},
+    {"id": "F7", "status": "confirmed", "text": "Восстановление без репозитория требует явного сохранения/восстановления scene descriptors/bindings/snapshots, которого нынешний общий backup полностью не обеспечивает.", "sources": ["S8"]},
+    {"id": "F8", "status": "confirmed", "text": "Workflow/helper необходимо поставить в main согласованным способом до bootstrap нового хоста; прежний admin merge не разрешает новый bypass.", "sources": ["S7"]},
+    {"id": "F9", "status": "confirmed", "text": "Сцены должны остаться вне публичного репозитория/образов и приватного S3 без анонимного доступа; публичные scene repositories и plugin storage не входят в перенос.", "sources": ["S9"]},
+    {"id": "F10", "status": "confirmed", "text": "Для текущего снимка нет файлов больше 100 МБ и LFS pointers; необходимость LFS или изменения бинарных файлов не установлена.", "sources": ["S4", "S11"]},
+    {"id": "F11", "status": "confirmed", "text": "Авторизованные private create/push в согласованной GitVerse vrata-labs подтверждены. S3-проект/пул/бакет/ключи выбраны, но положительные GET/PUT заблокированы несохранённой bucket policy; наличие ключей и отрицательные отказы не означают готовности доступа.", "sources": ["S15", "S16"]},
+    {"id": "F12", "status": "confirmed", "text": "Сохранение всех существующих bytes не исправляет legacy FBX с отсутствующими текстурами; его дефект вне каталога 13 сцен не следует выдавать за успешную загрузку.", "sources": ["S4"]},
+    {"id": "F13", "status": "confirmed", "text": "Существующие платформенные URLs не все same-origin с приложением. S3 как deployment source не требует менять эти URLs или вводить browser S3/CORS.", "sources": ["S1", "S10"]},
+    {"id": "F14", "status": "confirmed", "text": "k01 подтверждён: независимый защищённый архив и полный исходный инвентарь сохранены, 218 файлов совпали по режимам/размерам/SHA-256, все 13 обязательных сцен на месте.", "sources": ["S14"]},
+    {"id": "F15", "status": "confirmed", "text": "Два проверенных backup содержат один исторический assetSha 0a3b492e788bad82bf20a92476a628bf30c6dfbe. Полнота всех требуемых исторических версий этим не доказана; неизвестный rollback остаётся заблокирован.", "sources": ["S17"]},
+    {"id": "F16", "status": "confirmed", "text": "k02 подтверждён: приватный GitVerse содержит новый root ed0c972cf05f512c35861ef76cff8f87080f3133 с теми же 218 исходными файлами/режимами и только RECOVERY.md сверх них; контрольный clone, fsck, inventory и живые remote refs/private visibility проверены.", "sources": ["S18"]},
+    {"id": "F17", "status": "confirmed", "text": "Локальные pack/publish и исторический descriptor проверены; реальная публикация не состоялась. Обычные S3 writer PUT/reader GET требуют положительной проверки доступа; fixture-тесты не закрывают k03/k06.", "sources": ["S19"]},
+    {"id": "F18", "status": "confirmed", "text": "Fetch точного релиза реализован и покрыт 45 helper tests; полный локальный пакет восстановлен через fake AWS без Git сцен с совпадением всех 216 файлов/409577033 байт и полнотой действующего каталога. Реальный S3 и rollout/recovery этим не подтверждены.", "sources": ["S20"]},
+    {"id": "F19", "status": "confirmed", "text": "Task 5 локально интегрировала S3 workflow с binding-first/strict-lock, сохранённым helper/catalog и reader secrets только fetch. 119 focused tests подтверждают в fixtures bootstrap/repeat/old target и S3 refusal/rollback без Git сцен; реальный rollout k05/k11 и публикация k03 остаются открыты.", "sources": ["S21"]},
+    {"id": "F20", "status": "confirmed", "text": "Task 6 локально сохраняет проверенные scene snapshots/bindings/room URL versions и восстанавливает точные bytes без Git сцен, не подменяя acceptance. Обязательный k04-набор успешен. Настоящие локальные new/historical архивы проверены полностью, старые metadata-only backups не объявлены восстановленными snapshots. Реальный S3 и полный after-bootstrap recovery inventory k06 остаются открыты.", "sources": ["S22"]}
+  ],
+  "gaps": [
+    {"question": "Как получить положительные writer PUT/GET и reader GET в существующем приватном бакете при AccessDenied?", "blocking": true, "next_step": "Task 1 access и внешняя часть Task 3 остаются открыты. Локальная реализация продолжается через обычный S3 согласно D-007; панель и Selectel-specific API повторно не вызываются. После восстановления минимального доступа повторить условную публикацию, read-back и проверки reader/writer/anonymous без расширения ролей или публичного доступа."},
+    {"question": "Какие ещё исторические bindings/snapshots требуются для current, previous, Wave 2 и сохранённых room URLs и доступны ли точные bytes?", "blocking": true, "next_step": "Task 1 выявила только assetSha 0a3b492 в двух сохранённых backup. Task 6 полностью проверила его настоящий локальный архив и новый ed0c972, но не скачивание из S3; старые metadata-only backups не содержат snapshots/previous/Wave 2. Нужны положительные S3 downloads и обновление инвентаря после bootstrap в Task 9. Остальные identities не установлены и не подменяются новой."},
+    {"question": "Пользователь выберет обычное одобрение merge workflow в main или отдельно разрешит конкретное административное исключение?", "blocking": true, "next_step": "Task 7 после зелёного CI узкого infra PR: обычное согласование. Затем merge main в T17 и новые exact-SHA проверки в Tasks 8–9. Разрешение на PR #158 не переносится."}
+  ]
+}

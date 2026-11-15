@@ -27,7 +27,9 @@ UDP echo этого состояния не создают.
 | Private env | `/opt/vrata/infra/docker/.env.staging`, 0600 |
 | Release / assets / recovery | `/opt/vrata-stage-state`, вне checkout |
 
-Сцены доставляются из приватного репозитория, не из публичных platform images.
+Сцены доставляются готовым закреплённым пакетом из приватного Selectel S3,
+не из публичных platform images. Приватный GitVerse хранит восстановленный source
+отдельно; deployment workflow не читает GitHub/GitVerse с приватными сценами.
 Перенос сохраняет существующие GLB/manifest bytes и известные визуальные ограничения
 сцен; новые visual acceptance или promotion-вердикты он не создаёт.
 
@@ -72,6 +74,12 @@ vrata-stage release <lease>                                     # последн
    за время создания, `status` показывает в `server.behind`; его выкатывает следующий
    push или ручной Staging Deploy под арендой.
 
+До первого `acquire` S3-aware workflow, helper и release lock должны попасть в
+default `main` через обычный PR, а exact candidate — пройти CI и Docker Publish.
+Наличие этих файлов только в feature-ветке недостаточно: bootstrap запускается
+из `main`. Также нужны опубликованный pinned пакет и положительный reader fetch;
+одни отрицательные отказы S3 или локальная упаковка этого не подтверждают.
+
 Удаление: нет живых аренд → нет активных прогонов Docker Publish, Staging Deploy,
 Rutube Canary, Staging Template Catalog, Staging Smoke и любых других workflow, кроме CI,
 Docker Release и Seat marker checks (разовые диагностики тоже ходят на стенд) → `STAGING_AUTO_DEPLOY_ENABLED=false` →
@@ -110,8 +118,11 @@ Docker bindings проверяются отдельно от ufw. TURN/TLS не 
 3. Завершить/отменить прежние queued deploy/canary. Переключить согласованный набор
    secrets целиком: `STAGING_SSH_HOST`, `STAGING_SSH_USER`, `STAGING_SSH_KEY`,
    `STAGING_SSH_KNOWN_HOSTS`, `STAGING_APP_DIR`, `STAGING_BASE_URL`,
-   `STAGING_ADMIN_TOKEN`, `PRIVATE_SCENE_ASSETS_HOST_DIR`.
-   Приватный asset repository/key и YCR credentials остаются отдельными входами.
+   `STAGING_ADMIN_TOKEN`; YCR credentials остаются отдельными входами.
+   Для S3 задать repository variables `VRATA_SCENES_S3_ENDPOINT`,
+   `VRATA_SCENES_S3_REGION`, `VRATA_SCENES_S3_BUCKET` и reader secrets
+   `PRIVATE_SCENES_S3_READER_ACCESS_KEY_ID`, `PRIVATE_SCENES_S3_READER_SECRET_ACCESS_KEY`.
+   Private Git repository/deploy key/host-dir больше не являются входами деплоя.
    Значения передавать через stdin/API защищённого операционного окружения.
 4. Выполнить manual Staging Deploy: `deploy_sha=<full SHA>`, `bootstrap=true`.
    Ordinary/automatic запуск без принятого релиза завершается до rollout.
@@ -122,7 +133,50 @@ Docker bindings проверяются отдельно от ufw. TURN/TLS не 
 
 Deploy job сериализован группой `staging-deploy`; canary использует отдельную группу
 `rutube-canary`. SHA приложения фиксирует asset SHA даже для неудачного кандидата.
-Повтор использует binding, а не новую версию private `main`.
+Повтор использует binding, а не новую версию private `main` или новый lock.
+
+## Доставка приватного S3 release
+
+Конфигурация по умолчанию: endpoint `https://s3.ru-3.storage.selcloud.ru`, region
+`ru-3`, bucket `vrata-private-scene-releases`. Зона сервера не определяет S3-пул.
+Используются стандартный S3 API и изолированный AWS CLI `1.46.0`, а не API панели.
+Reader имеет только GET в `private-scenes/releases/*`; отдельный writer —
+GET/PUT без DELETE/list. Секреты writer в workflow не передаются. Настройка
+внешнего release bucket не меняет Compose SeaweedFS, `MINIO_*` или plugin storage.
+
+Порядок до изменения приложения:
+
+1. Сохранить rollback helpers, fetch helper и `staging-scene-catalog.json`
+   версии workflow в `RUNNER_TEMP` **до** checkout целевого deploy SHA.
+   Fetch helper/catalog остаются только на runner, вне архива host helpers.
+2. Read-only preflight bootstrap-installed helper проверяет designation/accepted
+   state до отправки нового протокола/source. Второй preflight тем же протоколом
+   возвращает прежний image binding; catalog-state читается из принятой БД.
+3. После checkout target: если binding существует, fetch использует только его
+   `--asset-sha`. Если binding отсутствует, обязателен строгий
+   `infra/docker/private-scene-release.lock.json` **целевого** checkout.
+   Сохранённая копия helper не приносит с собой новый lock.
+4. Fetch получает reader secrets только через env этого шага, использует
+   `--catalog` сохранённой версии, `--addressing-style path` и timeout 300.
+   Проверяет descriptor, archive/inventory SHA-256 и размеры, безопасно
+   распаковывает и проверяет весь source и 13 обязательных сцен.
+5. Только полностью проверенный каталог появляется атомарно в
+   `RUNNER_TEMP/private-scene-source`. Его `assets/` передаётся по SSH в
+   `source/<imageSha>/<assetSha>` вне checkout и затем в
+   `staging-remote-release.py --source`. S3 credentials хосту не нужны.
+
+Сохранённый binding имеет приоритет и при историческом target без helper/lock.
+Descriptor находится по `private-scenes/releases/<assetSha>/release.json`;
+его отсутствие не разрешает использовать новый пакет с другой identity.
+`assetSha` — 40 hex Git SHA исходников сцен; archive digest — отдельный SHA-256.
+Наличие lock не означает, что release опубликован и доступен reader.
+Команды выпуска и локальной проверки: [приватные сцены](scene-assets-repository.md).
+
+`private_scene_release` возвращает ненулевой статус при AccessDenied/403/404,
+тайм-ауте, ошибке размера/хеша, опасном архиве или неполном inventory.
+Нет fallback на Git, `latest` или похожую версию. До rollout такой отказ
+оставляет прежние images, accepted JSON, active и room URLs неизменными.
+Браузер продолжает читать прежние app/state scene routes, не S3 и не presigned URL.
 
 ## Протокол релиза
 
@@ -159,7 +213,9 @@ run ID/attempt. `.staging-successful-image-tag` — производный фа�
 Снимки находятся в `snapshots/<imageSha>-<assetSha>/public`; Caddy читает `active`
 через mount всей state directory. После принятия cleanup оставляет current, previous
 и Wave 2 baseline. Referenced versioned URLs сохраняются в текущем дереве. Кандидатные
-bindings не удаляются; исходные upload-копии можно получить повторно по pinned SHA.
+bindings не удаляются; исходные upload-копии можно получить повторно только из
+точного S3 release с проверкой bytes. Полные исторические snapshots сохраняются
+также в stage-specific backup.
 
 ## Ошибка и восстановление
 
@@ -198,12 +254,18 @@ BASE_URL="$STAGING_BASE_URL" STAGING_ADMIN_TOKEN="${STAGING_ADMIN_TOKEN:?Export 
 
 После readback всех URL выполнить `/health`, `demo-room`, `control-plane` и staging e2e.
 Rollback требует доступных YCR images; удаление volumes в этот путь не входит.
+Уже сохранённый предыдущий snapshot не требует нового скачивания из S3.
+Если его нужно восстанавливать, допустим только точный pinned release или
+проверенные backup bytes. Неизвестный binding/пропавшая история блокируют откат,
+а не заменяются новым `assetSha`. Возвращать обязательный private Git checkout
+как способ отката поставки нельзя.
 
 ## Backup и off-host копия
 
 Во время backup исключить одновременную поставку и записи, которые должны попасть в
-единую recovery point. `backup-staging.py` проверяет accepted record, working API
-image и env до экспорта и повторно после. Релиз, принятый ещё на MinIO, экспортируется
+единую recovery point. `backup-staging.py` удерживает сначала host operation lock,
+затем shared accepted-state lock на весь экспорт и проверяет accepted record,
+working API image и env до экспорта и повторно после. Релиз, принятый ещё на MinIO, экспортируется
 с общим override pinned MinIO/MC; более новый — образами хранилища из своего Compose:
 
 ```bash
@@ -212,16 +274,57 @@ sudo python3 -B /opt/vrata/tools/backup-staging.py --root /opt/vrata \
 ```
 
 SQL, inventory и объекты хранилища, image metadata и accepted JSON входят в checksum manifest.
+Дополнительно `private-scenes/recovery.json` format 1 (`included-snapshots`)
+фиксирует current/previous accepted records, Wave 2, требуемые image/asset bindings,
+derived S3 descriptor keys и room URLs из **этого же** SQL-дампа, включая
+`template_snapshot.roomConfig.sceneBundleUrl`. Рядом сохраняются полные проверенные
+`snapshot.json` и public trees current/previous/Wave 2. Versioned URLs, чей отдельный
+snapshot уже удалён retention, проверяются по binding/marker и сохраняются внутри
+текущего public tree. Derived descriptor key — locator, не доказательство
+наличия descriptor в S3. Включённые snapshots не требуют S3 credentials на хосте.
+
+Все scene files входят в существующий checksum manifest как artifacts
+`kind: private-scene-recovery`; общая схема backup не меняется. Потерянные bytes,
+неизвестный binding, несогласованный active или смена acceptance дают отказ.
+Экспорт сначала находится в `.incomplete-vrata-*`, вне retention. Только итоговая
+проверка разрешает atomic rename в `vrata-*`; при ошибке manifest помечается
+incomplete, частичные scene copies убираются, принятый релиз не меняется.
+
 Directories получают 0700, файлы 0600. Передать выбранную копию через SSH/tar в
 gitignored `backups/beget-stage/` на рабочей машине и повторно валидировать:
 
 ```bash
 node tools/backup-restore.mjs validate --backup-dir "$OFF_HOST_BACKUP"
+python3 -B tools/private-scene-recovery.py validate --backup-dir "$OFF_HOST_BACKUP"
 node tools/backup-restore.mjs prune --output-dir backups/beget-stage --retention-days 14
 ```
 
 Для удаления добавить `--confirm-prune`. Cleanup сохраняет минимум две более новые
 checksum-verified копии; повреждённые/незавершённые копии не разрешают удаление старой.
+Для scene recovery общей checksum-валидации недостаточно: companion проверяет
+точный набор snapshots, bindings, URL-версии и inventory. Старый metadata-only
+backup остаётся полезным для SQL/объектов, но не объявляется полным backup сцен.
+
+### Восстановление только байтов сцен
+
+В platform checkout с согласованным набором tools, Node и Python:
+
+```bash
+python3 -B tools/private-scene-recovery.py restore \
+  --backup-dir "$OFF_HOST_BACKUP" --output "$RECOVERED_SCENES"
+```
+
+Родитель output должен существовать, сам output — отсутствовать или быть пустым
+и находиться вне backup. Helper блокирует публикацию через parent-directory lock,
+проверяет исходный backup и скопированные bytes, повторно проверяет backup и
+публикует результат атомарным rename. Ошибка/порча/изменение backup не оставляют
+частичного результата и не заменяют существующий непустой каталог.
+
+Результат содержит **только** `recovery.json` и `snapshots/`. Это byte recovery,
+не AcceptedState: helper не устанавливает accepted-release, designation, gate proof
+или active. Не копировать старый accepted JSON как authority нового хоста.
+Новый live-хост по-прежнему требует реального designation, штатной поставки,
+gate и acceptance. Recovery points и scene trees остаются приватными.
 
 ## Изолированный local restore
 
@@ -242,7 +345,9 @@ node tools/backup-restore.mjs restore --backup-dir "$OFF_HOST_BACKUP" \
 
 5. Сравнить room records, inventory объектов и SHA256 контрольного документа;
    скачать документ из локального восстановленного хранилища. Scene URLs из БД могут
-   указывать на stage: для полностью локальной сцены нужны private assets по asset SHA.
+   указывать на stage: для полностью локальной сцены восстановить точные bytes
+   companion helper выше либо fetch pinned S3 release по сохранённому asset binding.
+   Новый пакет не восстанавливает прежние room URL версии автоматически.
 6. Сохранить restore evidence и удалить только временный restore project после проверки.
 
 ## Проверки и запись результатов
@@ -258,3 +363,9 @@ pnpm test:e2e:rutube:canary
 Хранить image/asset SHA, CI/Publish/Deploy/canary URLs, gate results, A/B recovery и
 backup/local restore evidence. Локальный green, наличие image или состояние `loaded`
 сами по себе не подтверждают media или визуальную приёмку.
+
+После bootstrap/активации дополнить приватный реестр восстановления фактическими
+current/previous/Wave 2 и версиями из room URLs: image binding, descriptor key,
+archive/inventory SHA-256, результат S3 fetch или snapshot restore. Проверка одного
+локального пакета не доказывает полноту истории нового хоста. Реестр и результаты
+с персональными данными/scene bytes не публиковать в общих CI artifacts.

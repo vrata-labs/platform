@@ -11,6 +11,7 @@ Vrata self-host and production compose profiles use named Docker volumes for per
 - Platform metadata: manifest schema version, created timestamp, Vrata package version, `IMAGE_TAG`, git commit, compose profile, compose/env file names, artifact sizes, and SHA-256 checksums.
 - Compose image snapshot: `docker compose images` output for operator diagnostics.
 - Staging exports can include the checksum-bound accepted release record and all Compose override filenames. See `docs/deployment-staging.md` for the staging-specific wrapper.
+- Stage-specific `tools/backup-staging.py` дополнительно сохраняет полные приватные scene snapshots и recovery inventory. Обычный Compose backup или один accepted JSON не являются полным backup внешних сцен.
 
 Backups are written under `backups/` by default. That directory is ignored by git because backup artifacts can contain private room metadata and scene assets.
 
@@ -49,6 +50,59 @@ Validation checks:
 - the captured private policy has no statements granting anonymous access.
 
 Corrupt or incomplete manifests fail non-zero before restore starts.
+
+## Реестр восстановления приватных staging-сцен
+
+Это дополнение stage-specific wrapper, не смена общего формата backup и не backup
+внешнего S3 как сервиса. GitVerse хранит восстановленный source отдельно; S3 хранит
+готовые pinned releases. Ни Git сцен, ни S3 credentials на хосте для включённых
+snapshots не требуются.
+
+| Артефакт / identity | Что сохраняется и как проверяется |
+| --- | --- |
+| `accepted-release.json` | Обязательный checksum artifact принятого image/asset SHA; свидетельство исходного хоста, не designation нового |
+| `private-scenes/recovery.json` | Format 1, `included-snapshots`: current/previous records, Wave 2, точные bindings, derived descriptor keys, SQL room URLs и файловый inventory |
+| `private-scenes/snapshots/<imageSha>-<assetSha>/snapshot.json` и `public/` | Полные verified snapshots current/previous/Wave 2 с размерами и SHA-256 файлов |
+| Сохранённые versioned room URLs | Читаются из точного `postgres.sql`, включая template snapshot; вложенные версии в текущем public tree проверяются по immutable binding и marker даже после prune их отдельных snapshots |
+| `private-scenes/releases/<assetSha>/release.json` в S3 | Locator для повторного fetch точной identity; запись key в backup не подтверждает существование S3 объекта |
+
+Scene artifacts добавляются в существующий manifest как `kind: private-scene-recovery`.
+Companion требует точного совпадения artifacts, payload inventory, accepted metadata
+и SQL URLs. Symlinks, лишние/пропавшие файлы, неизвестная история и подмена identity
+не допускаются. Backup держит host operation lock, затем shared state lock на весь
+экспорт; смена acceptance/active/working image отклоняет recovery point.
+Только завершённый проверенный экспорт получает имя `vrata-*`; `.incomplete-vrata-*`
+не участвует в штатном retention.
+
+После off-host копирования выполнить обе проверки:
+
+```bash
+node tools/backup-restore.mjs validate --backup-dir "$OFF_HOST_BACKUP"
+python3 -B tools/private-scene-recovery.py validate --backup-dir "$OFF_HOST_BACKUP"
+python3 -B tools/private-scene-recovery.py restore \
+  --backup-dir "$OFF_HOST_BACKUP" --output "$RECOVERED_SCENES"
+```
+
+Для companion нужны tools платформы, Node и Python. Output должен отсутствовать
+или быть пустым, иметь существующего родителя и находиться вне backup. Проверка
+копии и повторная проверка source предшествуют atomic rename; публикации
+сериализуются parent-directory lock. Непустой каталог и действующий host state
+не заменяются. Ошибки `private_scene_recovery_*` возвращают ненулевой статус;
+metadata-only архив без snapshots не дополняется догадками или более новым release.
+
+Restore выдаёт только `recovery.json` и `snapshots/`, **не** accepted-release,
+designation, gate proof или active pointer. Восстановление bytes не является
+принятием нового хоста. Его запуск требует штатного designation/gate/acceptance;
+старый accepted record нельзя устанавливать вместо новой приёмки. Обычный
+Compose restore ниже восстанавливает SQL/объекты и не устанавливает scene snapshots.
+
+Для каждой фактически нужной current/previous/Wave 2/room URL identity вести
+приватную запись `imageSha -> assetSha -> descriptor key -> archive/inventory
+SHA-256 -> результат восстановления`. Обновлять её после bootstrap по реальным
+данным хоста, не выводить полноту из одного найденного source-пакета.
+Точный S3 fetch допускается по сохранённому binding, без Git-сцен и без fallback
+на новый lock; отдельно нужны все исторические URL bytes.
+См. [доставка сцен](scene-assets-repository.md) и [операции staging](deployment-staging.md).
 
 ## Restore
 

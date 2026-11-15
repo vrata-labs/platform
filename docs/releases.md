@@ -27,6 +27,54 @@ The workflow intentionally fails if root `LICENSE` is missing, because public re
 
 The workflow also runs `tools/check-public-assets.mjs`; it fails if non-cleared scene bundles are included in the public runtime assets directory.
 
+## Приватные scene releases и внутренний staging
+
+Их выпуск независим от публичного SemVer-релиза платформы:
+
+1. Зафиксировать согласованный source commit в приватном GitVerse
+   `vrata-labs/vrata-scene-assets-private`; сохранять provenance восстановленного
+   снимка и ограничения прав. Не выдавать новый root за полную прежнюю историю.
+2. Выполнить `tools/private-scene-release.py pack` без переэкспорта моделей.
+   Отдельный writer публикует полный пакет в приватный S3 через AWS CLI `1.46.0`:
+   conditional PUT архива, read-back, затем immutable descriptor.
+   Положительные PUT/GET, повтор тех же bytes и reader fetch обязательны;
+   одни отказы anonymous/reader write не подтверждают готовность.
+3. Закрепить новый пакет в `infra/docker/private-scene-release.lock.json` по
+   фактическим descriptor/archive/inventory bytes, размерам и SHA-256.
+   `assetSha` — source Git SHA, не platform SHA и не archive SHA-256.
+   Endpoint/region/bucket — environment configuration, credentials в lock не входят.
+4. Проверить узкий platform diff, release/recovery/rollout tests, полные локальные
+   lint/typecheck/build/unit и штатный e2e. Поставить workflow/helper/lock обычным PR
+   в default `main` с обязательными проверками и review, без обхода защиты.
+   Существование изменений только в feature-ветке не меняет workflow bootstrap.
+5. После зелёных CI/Docker Publish точного кандидата взять `vrata-stage` lease.
+   Bootstrap отсутствующего стенда запускается из `main`, получает пакет только
+   reader-ключом и проходит gate; затем gated catalog activation выполняет полный
+   staging-набор. При существующем binding сохраняется его `assetSha`, даже если
+   новый lock указывает на другой релиз.
+6. На exact deployed SHA проверить accepted record, каталог сцен, полный staging
+   gate и `pnpm test:e2e:staging-extended` вокруг bootstrap/необратимой активации.
+   Обновить приватный recovery inventory current/previous/Wave 2/room URLs,
+   проверить off-host backup и byte-only restore; освободить аренду.
+
+Reader ограничен GET, writer — GET/PUT в `private-scenes/releases/*`, без DELETE/list.
+GitVerse token/deploy key не используются деплоем; S3 secrets остаются только в
+fetch step runner. Private scene bytes не попадают в публичные Git, CI artifacts,
+source archives и Docker layers. Публичный `scene-repositories.lock.json` остаётся
+отдельным контрактом разрешённых сцен.
+
+До acceptance ошибка gate возвращает предыдущие images/snapshot/room URLs;
+ошибка S3 до rollout не меняет их. После atomic accepted JSON требуется repair
+метаданных, не откат контейнеров с сохранением новой accepted-записи.
+Предыдущие S3 releases и verified backup snapshots сохраняются. Недоступная
+историческая identity блокирует восстановление; новый source нельзя переименовать
+в старый binding или вернуть private Git checkout как fallback.
+Byte restore не создаёт designation/gate proof и не принимает новый хост.
+
+Точные команды и входы: [приватные сцены](scene-assets-repository.md),
+[CI/CD](ci-cd.md), [staging](deployment-staging.md),
+[backup/restore](backup-restore.md).
+
 ## Release Checklist
 
 - [ ] Phase 0 safety gate is complete: secret scan, license audit, asset audit.
