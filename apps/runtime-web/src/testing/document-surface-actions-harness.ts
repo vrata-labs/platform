@@ -3,6 +3,7 @@ import {
   PDF_PRESENTATION_OBJECT_TYPE, IMAGE_VIEWER_OBJECT_TYPE, VIDEO_PLAYER_OBJECT_TYPE,
   type MediaObjectInstance, type PdfPresentationState, type ImageViewerState, type VideoPlayerState
 } from "@vrata/shared-types";
+import { createDocumentMediaPendingPatch } from "../document-media-pending.js";
 import { createDocumentSurfaceActions, type DocumentSurfaceActionsContext } from "../document-surface-actions.js";
 import type { RuntimeDocumentRecord } from "../index.js";
 import type { SurfaceCommandResult } from "../room-state-client.js";
@@ -91,6 +92,7 @@ export function createHarness(kind: DocumentKind = "pdf") {
     renderDocumentsUi(message?: string) { log("renderDocuments", message, context.presentationActionInFlight); },
     renderPresentationControls() { log("renderPresentation", context.presentationActionInFlight); },
     renderDocumentMediaControls() { log("renderMedia", context.presentationActionInFlight); },
+    documentMediaPending: createDocumentMediaPendingPatch(),
     documentStatusEl: { textContent: "initial" },
     presentationStatusEl: { textContent: "initial" },
     documentMediaStatusEl: { textContent: "initial" },

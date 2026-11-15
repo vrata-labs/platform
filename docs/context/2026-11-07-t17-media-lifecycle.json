@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "goal": "Различить незавершённое подключение SDK, установку текущей комнаты и video binding/attach внутри исходного окна Guest, не изменяя поведение продукта",
+  "scope": "Только пассивный existing debug=1 snapshot runtime; локальные модульные проверки и новая сборка. Браузерная приёмка и поставка выполняются отдельно на новом exact SHA",
+  "sources": [
+    {"id":"S1","system":"requirement","locator":"Разрешение владельца критерия от 2026-11-07; docs/reviews/2026-11-05-t17-acceptance-decisions.md:D-104","version":"2026-11-07","checked_at":"2026-11-07T15:00:00Z","status":"available","summary":"Разрешена ограниченная пассивная debug-телеметрия подключения, установки SDK-комнаты и привязки видео; без публичного API, идентификаторов, изменения guards или таймаутов. Новая сборка обязательна"},
+    {"id":"S2","system":"git","locator":"apps/runtime-web/src/main.ts:mediaRoomConnection,installMediaRoom,setupAudio,resolveScreenShareObjectForTrack,attachVideoTrack; apps/runtime-web/src/media/coalesced-connection.ts; apps/runtime-web/src/runtime-diagnostics.ts","version":"af03ea44d1481ec7acf15a1cdcaed87cf8cdb04d до изменения телеметрии","checked_at":"2026-11-07T15:00:00Z","status":"available","summary":"room.connect и applyPreferredAudioDevices предшествуют установке и сверке потоков. Ранний TrackSubscribed отбрасывается существующим guard. Исторический audioState и отчёт после stats/screenshot не являются временем завершения этих переходов"},
+    {"id":"S3","system":"observation","locator":"observations-238db12-analysis.json (приватный очищенный анализ T17)","version":"sha256:574c8f49112ec1e5902bac0e790556b85aaa88800f275de571b8b601aea6c007; runtime 9d7b2db4c60df1d39dd5769f6f4676addfb0f03c","checked_at":"2026-11-07T15:00:00Z","status":"available","summary":"Guest count=0 при ожидаемом 1 в исходные 20 секунд; native transport подключён, но авторитетное завершение текущего SDK connect/devices/install/reconcile в этом окне отсутствует. Первопричина не установлена"},
+    {"id":"S4","system":"documentation","locator":"https://docs.livekit.io/frontends/build/authentication/; installed livekit-client src/room/Room.ts:connect,TrackSubscribed","version":"Документация прочитана 2026-11-07; установленный livekit-client 2.18.0","checked_at":"2026-11-07T15:00:53Z","status":"available","summary":"Ручной Room.connect остаётся существующим Promise-контрактом; установленный SDK возвращает Promise<void> и испускает TrackSubscribed с track/publication/participant. Версия SDK и операции не меняются"}
+  ],
+  "claims": [
+    {"id":"F1","status":"confirmed","text":"Нужен исход текущего поколения на часах performance.now, а не вывод о готовности приложения по native transport или историческому audioState","sources":["S2","S3"]},
+    {"id":"F2","status":"confirmed","text":"Разрешён только ограниченный snapshot с локальными порядковыми номерами, стадиями и фиксированными причинами; сырые идентификаторы, URL, токены, ошибки и их хеши исключены","sources":["S1"]},
+    {"id":"F3","status":"confirmed","text":"Результаты прежнего runtime 9d7b2db не подтверждают новую телеметрию; требуется новый exact-SHA кандидат и отдельная проверка потребителя snapshot","sources":["S1","S3"]}
+  ],
+  "gaps": [
+    {"question":"Завершилась ли установка SDK-комнаты Guest в исходном 20-секундном окне и какой фактический binding/attach outcome был получен?","blocking":true,"next_step":"На новом exact runtime SHA подключить разрешённый snapshot к существующей корреляции исходного predicate; отсутствие результата не трактовать как успех. До новых доказательств T17 NOT_READY"}
+  ]
+}

@@ -28,7 +28,8 @@ retry() {
   done
 }
 
-retry mc alias set vrata "${MINIO_ENDPOINT:-http://minio:9000}" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
+# Quoting preserves argv boundaries; -- also prevents credentials from becoming flags (and leaking in parser errors).
+retry mc alias set -- vrata "${MINIO_ENDPOINT:-http://minio:9000}" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
 retry mc mb --ignore-existing "vrata/$ROOM_PLUGIN_BUCKET"
 # SeaweedFS rejects removing a policy that does not exist, so each attempt reads the policy, removes only one
 # that is there and reads it again: a removal whose answer was lost is not repeated. A failed read (missing

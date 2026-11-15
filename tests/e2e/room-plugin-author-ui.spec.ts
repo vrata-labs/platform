@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { bearer, createExternalAuthorProject, downloadPublicSdk, nativeMarker, pluginPath, privateHttp } from "./plugin-author-scenarios";
 import { enterOwnedPluginRoom, enterPluginRoom, expectPluginStatus, startRoomPluginFixture, useOwnedActor } from "./room-plugin-fixture";
 import { uploadThroughUi, chooseVersion, act } from "./plugin-author-ui";
+import { observeFunctionalClient, writeFunctionalDiagnostics, type FunctionalObservation } from "./functional-diagnostics";
 
 // Room invitations, RS2 and private config must never enter trace/video/snapshots.
 test.use({ trace: "off", screenshot: "off", video: "off" });
@@ -13,20 +14,26 @@ const statusBody = (suffix: string) =>
 test("isolated v2 Host installs, updates, rolls back, disables and deletes external behaviors in the room UI; a Member sees them live", async ({ browser }) => {
   test.setTimeout(480_000); const value = await startRoomPluginFixture(2);
   let author: Awaited<ReturnType<typeof createExternalAuthorProject>> | undefined;
+  const diagnostics: FunctionalObservation[] = [];
   try {
-    const host = await enterOwnedPluginRoom(browser, value);
+    // External SDK compilation is setup, not room interaction. Do it before
+    // opening real 3D clients; no engine rebuild, lease/VM guard or budget changes.
+    author = await createExternalAuthorProject(await downloadPublicSdk(value.origin));
+    const id = `external.t08-${randomUUID().replaceAll("-", "")}`;
+    const secondId = `external.t08b-${randomUUID().replaceAll("-", "")}`;
+    const v1 = await author.build(id, "1.0.0", ["status.set"], statusBody(" v1"));
+    const v2 = await author.build(id, "1.0.1", ["status.set"], statusBody(" v2"));
+    const secondArtifact = await author.build(secondId, "1.0.0", ["status.set"], statusBody(" second"));
+    const prepare = async (_context: unknown, page: Parameters<typeof observeFunctionalClient>[0]) => { diagnostics.push(await observeFunctionalClient(page)); };
+    const host = await enterOwnedPluginRoom(browser, value, prepare);
     await useOwnedActor(host, async () => {
-      const member = await enterPluginRoom(browser, value, host.roomId, "member", "Owned plugin runtime Member");
+      const member = await enterPluginRoom(browser, value, host.roomId, "member", "Owned plugin runtime Member", prepare);
       try {
         const panel = host.page.locator("#room-plugin-author"), message = host.page.locator("#room-plugin-author-message");
         await expect(panel).toBeVisible({ timeout: 15_000 }); await expect(panel).toContainText("No packages uploaded");
         await expect(member.page.locator("#room-plugin-author")).toBeHidden();
         expect(member.requests.workers).toBe(0); expect(member.requests.wasm).toBe(0);
 
-        author = await createExternalAuthorProject(await downloadPublicSdk(value.origin));
-        const id = `external.t08-${randomUUID().replaceAll("-", "")}`;
-        const v1 = await author.build(id, "1.0.0", ["status.set"], statusBody(" v1"));
-        const v2 = await author.build(id, "1.0.1", ["status.set"], statusBody(" v2"));
         await uploadThroughUi(host.page, v1);
         const entry = host.page.locator(`[data-plugin-id="${id}"]`);
         await expect(entry).toContainText("Not enabled in this room"); await expect(entry).toContainText("status.set");
@@ -36,9 +43,12 @@ test("isolated v2 Host installs, updates, rolls back, disables and deletes exter
         await act(host.page, entry, "enable", "Check the settings");
         await entry.locator('[data-config-key="greeting"]').fill("<b>Hello</b>");
         await entry.locator('[data-capability="status.set"]').check();
+        for (const observation of diagnostics) observation.mark("first-enable-click");
         await act(host.page, entry, "enable", "Behavior enabled");
+        for (const observation of diagnostics) observation.mark("first-enable-ui-ack");
         await expectPluginStatus(member.page, "member-first-enable", "<b>Hello</b> v1", 45_000);
         await expectPluginStatus(host.page, "host-first-enable", "<b>Hello</b> v1");
+        await writeFunctionalDiagnostics("F4-first-enable", await Promise.all(diagnostics.map(value => value.snapshot())));
         expect(await member.page.locator("#room-plugin-status-list b").count()).toBe(0);
         expect(member.requests.workers).toBeGreaterThan(0);
 
@@ -81,8 +91,7 @@ test("isolated v2 Host installs, updates, rolls back, disables and deletes exter
         await expect(entry).toContainText("Disabled, version 1.0.0");
 
         // A second external package ID runs through the same SDK without any platform build.
-        const secondId = `external.t08b-${randomUUID().replaceAll("-", "")}`;
-        await uploadThroughUi(host.page, await author.build(secondId, "1.0.0", ["status.set"], statusBody(" second")));
+        await uploadThroughUi(host.page, secondArtifact);
         const second = host.page.locator(`[data-plugin-id="${secondId}"]`);
         await second.locator('[data-config-key="greeting"]').fill("Second");
         await second.locator('[data-capability="status.set"]').check();
@@ -95,8 +104,14 @@ test("isolated v2 Host installs, updates, rolls back, disables and deletes exter
         await expect(entry).toHaveCount(0);
         await expect(member.page.locator("#room-plugin-status-list")).toContainText("Second second");
         for (const page of [host.page, member.page]) expect(await page.evaluate(marker => Reflect.has(window, marker), nativeMarker)).toBe(false);
-        await author.assertNotExecuted();
+        await author!.assertNotExecuted();
+      } catch (error) {
+        await writeFunctionalDiagnostics("F4-before-cleanup", await Promise.all(diagnostics.map(value => value.snapshot())));
+        throw error;
       } finally { await member.context.close(); }
     });
-  } finally { await author?.close(); await value.close(); }
+  } finally {
+    await Promise.allSettled(diagnostics.map(value => value.close()));
+    await author?.close(); await value.close();
+  }
 });

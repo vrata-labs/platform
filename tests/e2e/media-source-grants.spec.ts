@@ -8,6 +8,8 @@ import { startLocalLiveKitFixture } from "./local-livekit-fixture.js";
 import { startReferenceTemplateFixture } from "./reference-template-fixture.js";
 import { presenterMeetingScenario } from "./presenter-meeting-scenarios.js";
 import { chooseMeetingPanel } from "./meeting-tools-acceptance.js";
+import { observeFunctionalClient, writeFunctionalDiagnostics, mediaParticipantFacts, readGuestSubscriptionSample,
+  withFailureMediaLifecycle, failureMediaLifecycleFacts, type FunctionalObservation } from "./functional-diagnostics.js";
 
 // Genuine self-hosted RTC and the built main runtime. Credentials/SDP/candidates remain in memory, never in artifacts.
 test.use({ trace: "off", screenshot: "off", video: "off", launchOptions: { args: ["--autoplay-policy=no-user-gesture-required", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] } });
@@ -151,9 +153,9 @@ async function roomFixture(request: any) {
         timer = setTimeout(() => reject(new Error("fixture_surface_audio_timeout")), 10_000);
         client = connectRoomState(fixture.stateOrigin.replace("http:", "ws:"), roomId, participantId, {
           onOpen: () => sendSurfaceMediaAudioCommand(client!, { commandId: randomUUID(), surfaceId: "debug-main", enabled: true }),
-          onRoomState: snapshot => { if (snapshot.mediaObjects.surfaces["debug-main"]?.mediaAudioEnabled) done(); },
+          onRoomState: (snapshot: { mediaObjects: { surfaces: Record<string, { mediaAudioEnabled?: boolean }> } }) => { if (snapshot.mediaObjects.surfaces["debug-main"]?.mediaAudioEnabled) done(); },
           onError: () => reject(new Error("fixture_surface_audio_socket_failed")),
-          onSurfaceCommandResult: result => { if (!result.accepted) reject(new Error("fixture_surface_audio_denied")); }
+          onSurfaceCommandResult: (result: { accepted: boolean }) => { if (!result.accepted) reject(new Error("fixture_surface_audio_denied")); }
         }, token);
       });
     } finally { clearTimeout(timer!); client?.close(); }
@@ -279,10 +281,18 @@ test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone
   const { WebSocket } = createRequire(resolve("apps/room-state/package.json"))("ws");
   const sockets: any[] = [], stale = new Map<number, { socket: any; messages: any[] }>();
   const microphones = new Map<number, string[]>(), knownMicrophoneParticipants = new Set<string>(); let mediaRoom = "";
+  const diagnostics = new Map<Page, FunctionalObservation>();
+  let primaryFailed = false;
   try {
     await h.activateV2();
     await presenterMeetingScenario({ browser, request, origin: h.fixture.origin, adminToken: h.fixture.adminToken }, {
       async failed(phase) {
+        // Hooks run before presenterMeetingScenario closes ANY of its four clients.
+        await writeFunctionalDiagnostics(`F1-${phase}`, {
+          clients: await Promise.all([...diagnostics.values()].map(value => value.snapshot(true))),
+          participants: mediaRoom ? mediaParticipantFacts(await h.service.listParticipants(mediaRoom)) : [],
+          observerFrames: await receiver.evaluate(() => (window as any).__sourceObserver?.frames).catch(() => null)
+        });
         const { Pool } = createRequire(resolve("apps/api/package.json"))("pg");
         const pool = new Pool({ connectionString: process.env.VRATA_TEST_POSTGRES_URL, connectionTimeoutMillis: 5000,
           options: `-c search_path=${h.fixture.schema},public -c statement_timeout=5000` });
@@ -297,9 +307,14 @@ test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone
         } finally { await pool.end(); }
       },
       async prepareActor(page, origin) {
+        diagnostics.set(page, await observeFunctionalClient(page));
         // Capture uses Chromium's fake device through the original native API,
         // not the application audiomock path or a getUserMedia replacement.
         await page.context().grantPermissions(["microphone"], { origin });
+        // Verify the browser fixture's origin-scoped permission before loading
+        // four scenes; this is a prerequisite, not a renderer-latency assertion.
+        await page.goto(`${origin}/health`);
+        await expect.poll(() => page.evaluate(async () => (await navigator.permissions.query({ name: "microphone" as PermissionName })).state)).toBe("granted");
         await captureSetup(page);
         await page.addInitScript(() => {
           const calls: string[] = []; (window as any).__handoffMicrophoneCalls = calls;
@@ -329,18 +344,24 @@ test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone
         await actor.page.bringToFront();
         await expect.poll(() => actor.page.evaluate(() => document.visibilityState)).toBe("visible");
         await chooseMeetingPanel(actor.page, "audio", false);
-        await expect.poll(() => actor.page.evaluate(async () => (await navigator.permissions.query({ name: "microphone" as PermissionName })).state)).toBe("granted");
         expect(await actor.page.evaluate(() => (window as any).__handoffMicrophoneCalls.length)).toBe(0);
         const joinStartedAt = Date.now();
         await actor.page.locator("#join-muted").uncheck(); await actor.page.locator("#join-audio").click();
         try { await expect(actor.page.locator("#toggle-mute")).toBeEnabled({ timeout: microphoneReadyTimeoutMs }); }
         catch (error) {
-          console.warn("presenter_microphone_join_failed", JSON.stringify(await actor.page.evaluate(() => {
-            const debug = (window as any).__VRATA_DEBUG__;
-            return { audioState: debug?.audioState, joined: debug?.media?.audioJoined, published: debug?.media?.publishedAudio,
-              source: debug?.media?.audioSource, calls: (window as any).__handoffMicrophoneCalls,
-              clicks: (window as any).__sourceJoinClicks, visibility: document.visibilityState };
-          }).catch(() => ({ unavailable: true }))));
+          try {
+            const sampleStartedAtMs = Date.now();
+            const facts = await actor.page.evaluate<any>(withFailureMediaLifecycle(readLifecycle => {
+              const debug = (window as any).__VRATA_DEBUG__;
+              return { mediaLifecycleSnapshot: readLifecycle(), audioState: debug?.audioState, joined: debug?.media?.audioJoined, published: debug?.media?.publishedAudio,
+                source: debug?.media?.audioSource, calls: (window as any).__handoffMicrophoneCalls,
+                clicks: (window as any).__sourceJoinClicks, visibility: document.visibilityState };
+            })).catch(() => ({ unavailable: true }));
+            const sampleResolvedAtMs = Date.now();
+            facts.mediaLifecycleSnapshot = failureMediaLifecycleFacts(facts.mediaLifecycleSnapshot);
+            console.warn("presenter_microphone_join_failed", JSON.stringify({ ...facts, presenter: index + 1,
+              nodeClockDomain: "node:Date.now", sampleStartedAtMs, sampleResolvedAtMs }));
+          } catch { /* Diagnostics must never replace the original microphone assertion. */ }
           throw error;
         }
         console.info("presenter_microphone_ready", JSON.stringify({ presenter: index + 1, elapsedMs: Date.now() - joinStartedAt }));
@@ -350,6 +371,7 @@ test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone
         await expect(actor.page.locator("#start-share")).toBeEnabled();
         const framesBefore = await receiver.evaluate(() => (window as any).__sourceObserver.frames);
         const screenStartedAt = Date.now();
+        for (const observation of diagnostics.values()) observation.mark(`presenter-${index + 1}-screen-start`);
         await actor.page.locator("#start-share").click();
         try { await expect.poll(() => actor.page.evaluate(() => (window as any).__VRATA_DEBUG__?.screenShare?.localPublishing), { timeout: screenPublishReadyTimeoutMs }).toBe(true); }
         catch (error) {
@@ -363,7 +385,12 @@ test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone
         }
         console.info("presenter_screen_ready", JSON.stringify({ presenter: index + 1, elapsedMs: Date.now() - screenStartedAt }));
         await expect.poll(() => receiver.evaluate(() => (window as any).__sourceObserver.frames), { timeout: 20_000 }).toBeGreaterThan(framesBefore + 2);
-        await expect.poll(() => guest.page.evaluate(() => (window as any).__VRATA_DEBUG__?.screenShare?.remoteSubscribedTrackCount), { timeout: 20_000 }).toBe(1);
+        const guestPoll = diagnostics.get(guest.page)!.observeGuestSubscription(index + 1);
+        try {
+          await guestPoll.start(() => expect.poll(() => guestPoll.sample(() => guest.page.evaluate(readGuestSubscriptionSample))
+            .then(value => value.subscribed), { timeout: 20_000 }).toBe(1));
+          guestPoll.finish(true);
+        } catch (error) { guestPoll.finish(false); throw error; }
         await expect.poll(async () => (await h.service.listParticipants(mediaRoom)).flatMap((person: any) => person.tracks.filter((track: any) => track.source === 2)).length, { timeout: 20_000 }).toBe(index + 1);
         const participants = await h.service.listParticipants(mediaRoom);
         const microphoneTracks = participants.flatMap((person: any) => person.tracks.filter((track: any) => track.source === 2));
@@ -405,9 +432,16 @@ test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone
         expect((await denied.json()).reason).toBe("media_publish_not_allowed");
       }
     });
-  } finally {
+  } catch (error) { primaryFailed = true; throw error; }
+  finally {
+    const closed = await Promise.allSettled([...diagnostics.values()].map(value => value.close()));
     for (const socket of sockets) socket.terminate();
     await receiver.close(); await h.fixture.close();
+    const diagnosticFailure = closed.find(result => result.status === "rejected");
+    if (diagnosticFailure?.status === "rejected") {
+      if (!primaryFailed) throw diagnosticFailure.reason;
+      console.warn("guest_subscription_diagnostic_cleanup_failed");
+    }
   }
 });
 
