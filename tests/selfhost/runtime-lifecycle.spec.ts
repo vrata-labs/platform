@@ -7,6 +7,7 @@ import { createExternalAuthorProject, downloadPublicSdk, nativeMarker, privateHt
 import { uploadThroughUi, chooseVersion, act } from "../e2e/plugin-author-ui";
 import { captureRoomAuthority, expectExactRoomAuthority } from "../e2e/room-state-observation";
 import { chooseMeetingPanel } from "../e2e/meeting-tools-acceptance";
+import { observeFunctionalClient } from "../e2e/functional-diagnostics";
 
 const runtimeSha = "4d5ca28883cffbf08a82112f33a25fca18431164";
 const origin = process.env.T17_SELFHOST_ORIGIN!;
@@ -23,6 +24,7 @@ test("fresh self-host: standalone public SDK artifact, normal author UI, restart
   const actors: Awaited<ReturnType<typeof enter>>[] = [];
   const authorHttp: Array<Record<string, unknown>> = [];
   const pendingHttp = new Set<Promise<void>>();
+  const runtimeDiagnostics: Array<Record<string, unknown>> = [];
   let author: Awaited<ReturnType<typeof createExternalAuthorProject>> | undefined;
   const facts: Record<string, unknown> = { runtimeSha, normalSceneAndRender: true, fakeMedia: false, lifecyclePassed: false };
   let primary: unknown;
@@ -182,10 +184,10 @@ test("fresh self-host: standalone public SDK artifact, normal author UI, restart
     for (const actor of actors) expect(await actor.page.evaluate(marker => Reflect.has(window, marker), nativeMarker)).toBe(false);
     await author.assertNotExecuted();
     expect(authorRequests > 0 && !invalidAuthor).toBe(true);
-    await guest.authority.close(); await guest.context.close(); actors.splice(actors.indexOf(guest), 1);
+    await guest.observation.close(); await guest.authority.close(); await guest.context.close(); actors.splice(actors.indexOf(guest), 1);
     await expectExactRoomAuthority([host]);
     expect(Object.keys(host.authority.snapshot()!.occupancy)).toHaveLength(0);
-    await host.authority.close(); await host.context.close(); actors.splice(actors.indexOf(host), 1);
+    await host.observation.close(); await host.authority.close(); await host.context.close(); actors.splice(actors.indexOf(host), 1);
     await demo.cleanupPublicDemo(core);
     await expect(access(stateFile)).rejects.toThrow();
     await expect(demo.cleanupPublicDemo({ ...core, stateFile: demo.publicDemoCleanupRecordPath(stateFile) })).resolves.toMatchObject({ cleaned: true });
@@ -199,6 +201,45 @@ test("fresh self-host: standalone public SDK artifact, normal author UI, restart
   finally {
     const failures: unknown[] = [];
     for (const actor of actors) {
+      if (primary) {
+        try {
+          const observation = await actor.observation.snapshot();
+          const resources = await actor.page.evaluate(() => performance.getEntriesByType("resource")
+            .filter((item): item is PerformanceResourceTiming => item instanceof PerformanceResourceTiming)
+            .filter(item => /\/plugins\/(?:runtime|packages\/[^/]+\/content)$/.test(new URL(item.name).pathname))
+            .slice(-128).map(item => ({ route: new URL(item.name).pathname.endsWith("/runtime") ? "runtime" : "content",
+              startTime: item.startTime, requestStart: item.requestStart, responseStart: item.responseStart,
+              responseEnd: item.responseEnd, duration: item.duration, transferSize: item.transferSize })));
+          const renderer = await actor.page.evaluate(() => {
+            const canvas = document.querySelector("canvas");
+            const gl = canvas?.getContext("webgl2");
+            const extension = gl?.getExtension("WEBGL_debug_renderer_info");
+            return gl && extension ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) : null;
+          });
+          const client: Record<string, unknown> = { role: actor.role, observation, resources, renderer };
+          runtimeDiagnostics.push(client);
+          // Read-only, after the original failure: distinguish server/transport
+          // latency from a delayed browser event loop. Never retry the author PUT.
+          const started = performance.now();
+          try {
+            const response = await privateHttp(origin, pluginPath(actor.roomId, "runtime"), "GET", bearer(actor.sessionToken));
+            const elapsedMs = Math.round(performance.now() - started), body = response.json<any>();
+            client.directRuntimeGet = { elapsedMs, status: response.status,
+              revision: Number.isSafeInteger(body?.revision) ? body.revision : null,
+              leaseExpiresAtMs: Number.isSafeInteger(body?.leaseExpiresAtMs) ? body.leaseExpiresAtMs : null,
+              receivedAtMs: Date.now(), bindingCount: Array.isArray(body?.bindings) ? body.bindings.length : null,
+              error: typeof body?.error === "string"
+                && /^(?:plugin|identity|room_plugin|internal|invalid|service)_[a-z0-9_]{1,70}$/.test(body.error) ? body.error : null };
+          } catch (error) {
+            client.directRuntimeGet = { elapsedMs: Math.round(performance.now() - started), failed: true,
+              error: error instanceof Error ? error.name : "unknown" };
+          }
+        } catch (error) {
+          runtimeDiagnostics.push({ role: actor.role, unavailable: true,
+            error: error instanceof Error ? error.name : "unknown" });
+        }
+      }
+      try { await actor.observation.close(); } catch (e) { failures.push(e); }
       try { await actor.authority.close(); } catch (e) { failures.push(e); }
       try { await actor.context.close(); } catch (e) { failures.push(e); }
     }
@@ -211,6 +252,8 @@ test("fresh self-host: standalone public SDK artifact, normal author UI, restart
     try {
       await writeFile(join(output, "author-http.private.json"),
         JSON.stringify({ schema: 1, events: authorHttp }, null, 2) + "\n", { mode: 0o600 });
+      await writeFile(join(output, "runtime-diagnostics.private.json"),
+        JSON.stringify({ schema: 1, clients: runtimeDiagnostics }, null, 2) + "\n", { mode: 0o600 });
     } catch (error) { failures.push(error); }
     facts.cleanupPassed = failures.length === 0;
     await writeFile(join(output, "lifecycle-facts.json"), JSON.stringify(facts, null, 2) + "\n", { mode: 0o600 });
@@ -243,6 +286,7 @@ async function enter(browser: Browser, state: any, role: "host" | "guest") {
   const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
   const page = await context.newPage();
   const authority = await captureRoomAuthority(page);
+  const observation = await observeFunctionalClient(page);
   try {
     const inviteLink = state.resources.invites.find((i: any) => i.role === role).inviteLink;
     const url = new URL(inviteLink);
@@ -257,6 +301,7 @@ async function enter(browser: Browser, state: any, role: "host" | "guest") {
     expect(session.role).toBe(role); expect(session.token.startsWith("rs2.")).toBe(true);
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.sceneBundleState), { timeout: 90_000 }).toBe("loaded");
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected), { timeout: 30_000 }).toBe(true);
-    return { context, page, authority, participantId: session.participantId as string, sessionToken: session.token as string };
-  } catch (e) { await authority.close(); await context.close(); throw e; }
+    return { context, page, authority, observation, role, roomId: state.roomId as string,
+      participantId: session.participantId as string, sessionToken: session.token as string };
+  } catch (e) { await observation.close(); await authority.close(); await context.close(); throw e; }
 }
