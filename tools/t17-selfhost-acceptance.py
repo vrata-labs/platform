@@ -416,6 +416,14 @@ def verify_shared_helpers():
         assert (ROOT / rel).read_bytes() == capture(["git", "show", SHA + ":" + rel]), "shared_helper_not_exact_runtime_sha"
 
 
+def run_browser(env):
+    # Specs import Playwright from ROOT. A CLI from SOURCE creates a second
+    # runner instance even when both installations have the same version.
+    # Keep SOURCE as cwd for the exact-runtime demo and SDK operations.
+    capture([NODE, str(ROOT / "node_modules/playwright/cli.js"), "test",
+             "--config", str(ROOT / "tests/selfhost/playwright.config.ts")], env=env, timeout=900)
+
+
 def run(state):
     assert state["phase"] == "prepared", "t17_run_is_single_attempt_preserve_existing_result"
     model_preflight(state)
@@ -448,7 +456,7 @@ def run(state):
         env = {**os.environ, "PATH": "/usr/bin:/bin", "TMPDIR": str(Q), "T17_SELFHOST_ORIGIN": f"http://127.0.0.1:{PORTS['http']}",
                "T17_SELFHOST_OUTPUT": str(Q), "T17_SELFHOST_CONTROL": str(control_file), "T17_BROWSER_LOCK_HELD": "1",
                "T17_RUN_ID": state["runId"], "VRATA_ADMIN_TOKEN": readenv()["CONTROL_PLANE_ADMIN_TOKEN"]}
-        capture(["corepack", "pnpm", "exec", "playwright", "test", "--config", str(ROOT / "tests/selfhost/playwright.config.ts")], env=env, timeout=900)
+        run_browser(env)
         report = json.loads((Q / "playwright.private.json").read_text())
         assert report["stats"]["expected"] == 1 and report["stats"]["unexpected"] == report["stats"]["skipped"] == report["stats"]["flaky"] == 0
         runtime_audit(state)

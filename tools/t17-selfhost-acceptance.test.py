@@ -254,6 +254,17 @@ class RunnerTest(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, "shared_helper_not_exact_runtime_sha"):
                 h.verify_shared_helpers()
 
+    def test_browser_cli_uses_the_harness_installation_and_preserves_source_cwd(self):
+        env = {"T17_SELFHOST_ORIGIN": "http://127.0.0.1:47170"}
+        with mock.patch.object(h, "capture") as capture:
+            h.run_browser(env)
+        capture.assert_called_once_with(
+            [h.NODE, str(h.ROOT / "node_modules/playwright/cli.js"), "test",
+             "--config", str(h.ROOT / "tests/selfhost/playwright.config.ts")],
+            env=env, timeout=900)
+        # No cwd override: capture defaults to the pristine runtime SOURCE.
+        self.assertNotIn("cwd", capture.call_args.kwargs)
+
 
 if __name__ == "__main__":
     unittest.main()
