@@ -169,7 +169,18 @@ test("fresh self-host: standalone public SDK artifact, normal author UI, restart
     }
     facts.cleanupPassed = failures.length === 0;
     await writeFile(join(output, "lifecycle-facts.json"), JSON.stringify(facts, null, 2) + "\n", { mode: 0o600 });
-    if (primary || failures.length) throw new AggregateError([...(primary ? [primary] : []), ...failures], "t17_selfhost_lifecycle_failed");
+    if (primary || failures.length) {
+      const details = (error: unknown) => error instanceof Error
+        ? { name: error.name, message: error.message, stack: error.stack }
+        : { message: String(error) };
+      try {
+        await writeFile(join(output, "lifecycle-failure.private.json"), JSON.stringify({
+          primary: primary ? details(primary) : null, cleanupFailures: failures.map(details)
+        }, null, 2) + "\n", { mode: 0o600 });
+      } catch (error) { failures.push(error); }
+      throw new AggregateError([...(primary ? [primary] : []), ...failures],
+        "t17_selfhost_lifecycle_failed", { cause: primary });
+    }
   }
 });
 
