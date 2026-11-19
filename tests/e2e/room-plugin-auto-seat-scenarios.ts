@@ -203,6 +203,7 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
   const runtimeReads: Array<{ at: number; status: number | null; revision: number | null; enabledBindings: number | null }> = [];
   const runtimeReadsPending = new Set<Promise<void>>();
   let runtime: { revision: number | null; lastInstanceFailure: unknown; readyDeliveries: unknown; pendingBeforeSend: boolean; startup: any; entry: any; releaseDeltaMs: number | null;
+    firstSceneFrameAtMs: number | null; wasmRequestAtMs: number | null;
     seating: { settlements?: Array<{ reason: string }> } | null } | null = null;
   // Passive timing only: never intercept or replace runtime authority. Keep no
   // URLs, credentials, binding identities, config, source or raw response bytes.
@@ -327,8 +328,10 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     expect(releaseAt > claimAt && releaseAt - claimAt < 3000).toBe(true); // Not the adapter's lost-answer timeout.
     expect(claimCount).toBe(1); expect(releaseCount).toBe(1);
     runtime = await member.page.evaluate(() => {
-      const plugins = (window as any).__VRATA_DEBUG__?.plugins;
+      const debug = (window as any).__VRATA_DEBUG__, plugins = debug?.plugins;
+      const wasm = performance.getEntriesByType("resource").find(entry => /emscripten.*\.wasm$/.test(new URL(entry.name).pathname));
       return { revision: plugins?.revision ?? null, lastInstanceFailure: plugins?.lastInstanceFailure,
+        firstSceneFrameAtMs: debug?.sceneFirstFrameAtMs ?? null, wasmRequestAtMs: wasm?.startTime ?? null,
         readyDeliveries: plugins?.readyDeliveries ?? null,
         pendingBeforeSend: (window as any).__t16SeatDelivery?.pendingBeforeSend === true,
         startup: (window as any).__t16SeatDelivery?.startup ?? null, entry: (window as any).__t16SeatEntryFacts?.() ?? null,
@@ -341,6 +344,11 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     const startup = runtime.startup;
     expect(startup?.ready === true && startup.correlation === true && startup.online === true).toBe(true);
     expect([startup?.firstReadyAtMs, startup?.openedAtMs, startup?.claimAtMs].every(Number.isFinite)).toBe(true);
+    // Loaded bytes are not a rendered scene. Neither WASM's timed load nor the
+    // arrival grant may start before the first render returns.
+    expect(runtime.firstSceneFrameAtMs).toBeGreaterThan(0);
+    expect(runtime.wasmRequestAtMs).toBeGreaterThanOrEqual(runtime.firstSceneFrameAtMs!);
+    expect(startup.firstReadyAtMs).toBeGreaterThanOrEqual(runtime.firstSceneFrameAtMs!);
     expect(startup.openedAtMs >= startup.firstReadyAtMs && startup.openedAtMs - startup.firstReadyAtMs <= 20_000).toBe(true);
     expect(startup.claimAtMs >= startup.openedAtMs && startup.claimAtMs - startup.openedAtMs < 5000).toBe(true);
     expect(runtime.entry?.joinClicks.length === 1 && runtime.entry.joinClicks[0].trusted
@@ -427,8 +435,9 @@ async function disablePendingClaim(browser: Browser, value: RoomPluginOrigin, ro
     pendingPage?.off("requestfinished", onRuntimeFinished);
     await Promise.allSettled(runtimeReadsPending);
     const finalRuntime = runtime ?? (pendingPage && !pendingPage.isClosed() ? await pendingPage.evaluate(() => {
-      const plugins = (window as any).__VRATA_DEBUG__?.plugins;
+      const debug = (window as any).__VRATA_DEBUG__, plugins = debug?.plugins;
       return { revision: plugins?.revision ?? null, lastInstanceFailure: plugins?.lastInstanceFailure,
+        firstSceneFrameAtMs: debug?.sceneFirstFrameAtMs ?? null, startupTiming: plugins?.startupTiming ?? null,
         readyDeliveries: plugins?.readyDeliveries ?? null,
         pendingBeforeSend: (window as any).__t16SeatDelivery?.pendingBeforeSend === true,
         startup: (window as any).__t16SeatDelivery?.startup ?? null, entry: (window as any).__t16SeatEntryFacts?.() ?? null,

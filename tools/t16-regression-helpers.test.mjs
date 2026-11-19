@@ -490,6 +490,7 @@ for (const [startupAt, releaseDelta] of [[16_000, 1200], [100, 3200], [21_050, 1
   page.evaluate = async callback => {
     if (callback.toString().includes("localPose")) throw afterFence;
     if (callback.toString().includes("readyDeliveries")) return { revision: 9, lastInstanceFailure: null, readyDeliveries: [], pendingBeforeSend: true, releaseDeltaMs: releaseDelta,
+      firstSceneFrameAtMs: 5, wasmRequestAtMs: 7,
       startup: { ready: true, correlation: true, online: true, firstReadyAtMs: 10, openedAtMs: startupAt - 20, claimAtMs: startupAt },
       entry: { joinClicks: [{ trusted: true }], admissionStarts: [1], discovery: [{ status: 200 }] },
       seating: { settlements: [{ reason: "retired" }] } };
@@ -564,7 +565,8 @@ for (const [startupAt, releaseDelta] of [[16_000, 1200], [100, 3200], [21_050, 1
 
 // The VM/network/page boundaries are controlled; cancellation and sticky failure
 // come from the actual Controller/SeatAdapter, including real empty refresh.
-async function pendingCausalityFixture(earlyFailure = false, lateDiscovery = "complete") {
+async function pendingCausalityFixture(earlyFailure = false, lateDiscovery = "complete",
+  { sceneFirstFrameAtMs = 20, wasmRequestAtMs = 40 } = {}) {
   const { RoomPluginController } = loadHelper("apps/runtime-web/src/plugins/controller.ts");
   const { RoomPluginSeatAdapter } = loadHelper("apps/runtime-web/src/plugins/seat-adapter.ts");
   const { expectExactRoomAuthority } = loadHelper("tests/e2e/room-state-observation.ts");
@@ -607,7 +609,7 @@ async function pendingCausalityFixture(earlyFailure = false, lateDiscovery = "co
     timers: { schedule: () => ({}), cancel() {} }, http: { snapshot: async () => snapshot },
     seating: { ready: () => true, supported: () => true, activate: () => adapter.activate(),
       snapshot: (owner, seating) => adapter.snapshot(owner, seating), retire: owner => adapter.retire(owner) } });
-  const debug = { participantId: "pending", roomStateConnected: true, remoteParticipants: [], seatOccupancy: {},
+  const debug = { participantId: "pending", roomStateConnected: true, remoteParticipants: [], seatOccupancy: {}, sceneFirstFrameAtMs,
     currentSeatId: null, pendingSeatId: null, locomotionMode: "desktop", localPose: { root: { x: 0, y: 0, z: 0 } },
     get plugins() { return { ...controller.diagnostics(), seating: adapter.diagnostics() }; } };
   const window = { __VRATA_DEBUG__: debug, __t16SeatDelivery: { accepted: 0, occupied: 0, released: 0 },
@@ -615,8 +617,13 @@ async function pendingCausalityFixture(earlyFailure = false, lateDiscovery = "co
   function pageFor(ownWindow, closed) {
     const context = { close: async () => { closed(); } }, page = new EventEmitter();
     page.context = () => context; page.isClosed = () => false; page.addInitScript = async () => {};
+    const performance = { getEntriesByType: type => {
+      assert.equal(type, "resource");
+      return [{ name: "https://example.invalid/assets/scene.glb", startTime: 1 },
+        { name: "https://example.invalid/assets/emscripten-module-test.wasm", startTime: wasmRequestAtMs }];
+    } };
     page.evaluate = async (callback, arg) => vm.runInNewContext(`(${callback.toString()})(arg)`, {
-      window: ownWindow, arg, requestAnimationFrame: callback => { intermediateFrames++; callback(0); }, Promise, JSON });
+      window: ownWindow, arg, performance, URL, requestAnimationFrame: callback => { intermediateFrames++; callback(0); }, Promise, JSON });
     return { page, context };
   }
   const pending = pageFor(window, () => { pendingClosed++; });
@@ -698,6 +705,19 @@ test("actual helper rejects actual VM failure retirement before disable even aft
     assert.deepEqual(facts.settlements, [{ atMs: 1100, reason: "retired" }]);
     assert.deepEqual(await facts.flight, { result: "cancelled" });
     assert.equal(facts.enters, 1); assert.equal(facts.intermediateFrames, 0); assert.equal(facts.listeners, 0);
+  } finally { f.close(); }
+});
+
+for (const [label, timing, received] of [
+  ["WASM begins before the first scene frame", { wasmRequestAtMs: 19 }, 19],
+  ["seating becomes ready before the first scene frame", { sceneFirstFrameAtMs: 95, wasmRequestAtMs: 96 }, 90]
+]) test(`actual pending helper rejects startup ordering when ${label}`, async () => {
+  const f = await pendingCausalityFixture(false, "complete", timing);
+  try {
+    await assert.rejects(f.run(), new RegExp(`toBeGreaterThanOrEqual[\\s\\S]*Received:\\s+${received}\\b`));
+    const facts = f.facts();
+    assert.equal(facts.intermediateFrames, 0);
+    assert.equal(facts.listeners, 0);
   } finally { f.close(); }
 });
 
