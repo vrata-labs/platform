@@ -137,6 +137,7 @@ import { applySpatialSettings, createSpatialAudioSettings, resolveSpatialAudioMo
 import { captureCanvasDiagnostics, inspectSceneObject } from "./scene-debug.js";
 import { loadSceneBundle } from "./scene-loader.js";
 import { startSceneBundleSession } from "./scene-session.js";
+import { createSceneFrameReadiness } from "./scene-frame-readiness.js";
 import {
   createXrRendererWiringDebug,
   detectXrSupport,
@@ -2332,9 +2333,12 @@ standUpButton.addEventListener("click", () => {
   executeRuntimeCommandList(commands);
 });
 const roomPluginSeatOptOut = createRoomPluginSeatOptOut((() => { try { return sessionStorage; } catch { return null; } })(), roomId);
+const sceneFrameReadiness = createSceneFrameReadiness();
+const roomPluginBootReady = () => runtimeBootReady && sceneFrameReadiness.ready;
+const roomPluginSeatingReady = () => roomPluginBootReady() && sceneAnchorsReady && roomStateOccupancySeen;
 // Single arrival grant of this page session. Plugins only ask; the server decides and the frame pipeline seats.
 const roomPluginSeats = new RoomPluginSeatAdapter({
-  world: () => ({ ready: runtimeBootReady && sceneAnchorsReady && roomStateOccupancySeen, correlation: seatCommandCorrelationSupported,
+  world: () => ({ ready: roomPluginSeatingReady(), correlation: seatCommandCorrelationSupported,
     online: navigator.onLine && roomStateConnected, xr: renderer.xr.isPresenting, selfId: participantId,
     seats: sceneSeatAnchors.map(anchor => ({ id: anchor.id, yaw: anchor.yaw })), occupancy: roomSeatOccupancy,
     currentSeatId: getCurrentSeatId(), pendingSeatId: getPendingSeatId() }),
@@ -4262,13 +4266,13 @@ const roomPluginSeatChoice = createRoomPluginSeatChoiceView({ root: document.que
   veto: () => roomPluginSeats.manualIntent() });
 const roomPluginRuntime = new RoomPluginController({ apiBaseUrl, roomId,
   context: () => ({ active: activeIdentityProtocolVersion === 2 && !sessionControlBlocked && !runtimeSessionGate.reason,
-    ready: runtimeBootReady, online: navigator.onLine, visible: document.visibilityState !== "hidden",
+    ready: roomPluginBootReady(), online: navigator.onLine, visible: document.visibilityState !== "hidden",
     connection: roomStateConnected ? "connected" : "reconnecting" }),
   proof: () => roomPluginTokenBound.capture(), render: rows => { roomPluginStatusView.render(rows); roomPluginSeatChoice.render(rows); },
   identityRequired: reason => runtimeSessionGate.require(reason),
   seating: {
     supported: () => seatCommandCorrelationSupported,
-    ready: () => runtimeBootReady && sceneAnchorsReady && roomStateOccupancySeen,
+    ready: roomPluginSeatingReady,
     activate: () => roomPluginSeats.activate(),
     snapshot: (owner, seating) => roomPluginSeats.snapshot(owner, seating),
     port: owner => ({ claim: seatId => roomPluginSeats.claim(seatId, owner), cancel: () => roomPluginSeats.cancelOwn(owner) }),
@@ -4280,6 +4284,7 @@ const roomPluginRuntime = new RoomPluginController({ apiBaseUrl, roomId,
   }
 });
 Object.defineProperty(debugState, "plugins", { enumerable: true, get: () => ({ ...roomPluginRuntime.diagnostics(), seating: roomPluginSeats.diagnostics() }) });
+Object.defineProperty(debugState, "sceneFirstFrameAtMs", { enumerable: true, get: () => sceneFrameReadiness.firstFrameAtMs });
 Object.defineProperty(debugState, "mediaLifecycle", { enumerable: true, get: () => mediaLifecycle.snapshot() });
 const roomPluginAuthorPanel = createRoomPluginAuthorPanel({ document,
   root: document.querySelector<HTMLElement>("#room-plugin-author")!, list: document.querySelector<HTMLElement>("#room-plugin-author-list")!,
@@ -7753,6 +7758,13 @@ let documentMediaUiAccumulator = 0;
 let runtimeBootReady = false;
 let presenceSeq = 0;
 
+function notifyRoomPluginBootReady(): void {
+  if (!roomPluginBootReady()) return;
+  roomPluginRuntime.kick();
+  roomPluginSeats.observe();
+  roomPluginRuntime.seatingChanged();
+}
+
 renderer.setAnimationLoop(() => {
   const delta = clock.getDelta();
   const nowMs = Date.now();
@@ -7839,6 +7851,9 @@ renderer.setAnimationLoop(() => {
       diagnosticsAccumulator = 0;
       void reportDiagnostics();
     }
+  }
+  if (!sceneFrameReadiness.ready && sceneFrameReadiness.frameRendered(renderer.getContext().isContextLost())) {
+    notifyRoomPluginBootReady();
   }
 });
 
@@ -8067,6 +8082,7 @@ async function main(): Promise<void> {
       setFallbackEnvironmentVisible
     });
     activeSceneBundleRoot = sceneResult.activeSceneBundleRoot;
+    if (activeSceneBundleRoot) sceneFrameReadiness.sceneAttached();
     setSceneSeatAnchors(sceneResult.sceneManifest?.anchors?.seatAnchors ?? [], sceneResult.sceneManifest?.anchors?.teleportFloorY ?? 0);
     configureRuntimeMediaSurfaces(sceneResult.sceneManifest?.mediaSurfaces);
     syncSeatStateFromOccupancy();
@@ -8228,9 +8244,7 @@ async function main(): Promise<void> {
   presenceAccumulator = 0;
   diagnosticsAccumulator = 0;
   runtimeBootReady = !sessionControlBlocked;
-  roomPluginRuntime.kick();
-  roomPluginSeats.observe();
-  roomPluginRuntime.seatingChanged();
+  notifyRoomPluginBootReady();
   roomPluginAuthor.sync();
   reportRuntimeBootDiagnostics(reportDiagnostics);
 }
