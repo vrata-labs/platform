@@ -9,7 +9,7 @@ on:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       e2e: ${{ steps.scope.outputs.e2e }}
     steps:
@@ -37,7 +37,7 @@ jobs:
           echo "browser e2e: $e2e"
 
   core:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16
@@ -184,7 +184,7 @@ jobs:
   e2e:
     needs: changes
     if: needs.changes.outputs.e2e == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -260,7 +260,7 @@ jobs:
   checks:
     needs: [changes, core, e2e]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Require the unit job and every browser shard
         env:
@@ -274,7 +274,7 @@ jobs:
           if [ "$E2E_SCOPE" = false ]; then test "$E2E" = skipped; else test "$E2E" = success; fi
 
   scene-repositories:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.lock.outputs.matrix }}
     steps:
@@ -293,7 +293,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.scene-repositories.outputs.matrix) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -336,7 +336,7 @@ jobs:
     name: asset-validation
     needs: asset-validation
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Require every scene validation to succeed
         env:

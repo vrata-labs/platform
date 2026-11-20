@@ -47,6 +47,7 @@ Runtime boot/read endpoints stay public by design and must not mutate tenant or 
 - `GET /api/rooms`
 - `GET /api/rooms/:roomId`
 - `GET /api/rooms/:roomId/manifest`
+- `GET /api/rooms/:roomId/prejoin-settings` (template settings of a room open to anonymous guests only; see `docs/api-contracts.md`)
 - `GET /api/rooms/:roomId/spaces`
 - `GET /api/rooms/:roomId/presence`
 - `GET /api/rooms/:roomId/diagnostics`

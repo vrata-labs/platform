@@ -6,7 +6,7 @@ const imageTag = "a".repeat(40);
 const options = { envFile: "test.env", composeFile: "compose.test.yml", imageTag };
 function host({ floor = "2", bound = "f", policyExists = "t", authorityExists = "t", roomsExists = "t", schema = "t", ownerless = "f", apiLabel = "1", stateLabel = "1", readerLabel = "2",
   apiCodec = "2", browserCodec = "2", mediaCodec = "2", screenReconciler = "2", browser = true, browserTag = imageTag, malformed = false, database = "postgres://vrata:test-only@postgres:5432/vrata",
-  codecColumn = "f", policyCodec = "2", codecBoundary = "" } = {}) {
+  codecColumn = "f", policyCodec = "2", codecBoundary = "", rotationColumn = "f", rotated = "f", rotationLabel = "" } = {}) {
   const mutations = [], inspections = [];
   return { mutations, inspections, run(args, env) {
     const query = args.at(-1);
@@ -16,6 +16,8 @@ function host({ floor = "2", bound = "f", policyExists = "t", authorityExists = 
     if (query === "select exists(select 1 from room_identity_authority_v2)") return bound;
     if (query.startsWith("select exists(select 1 from pg_attribute where attrelid=to_regclass('room_identity_protocol_policy') and attname='media_codec'")) return codecColumn;
     if (query === "select media_codec from room_identity_protocol_policy where singleton=true") return policyCodec;
+    if (query.startsWith("select exists(select 1 from pg_attribute where attrelid=to_regclass('room_identity_protocol_policy') and attname='rotated_media_namespace'")) return rotationColumn;
+    if (query === "select rotated_media_namespace is not null from room_identity_protocol_policy where singleton=true") return rotated;
     if (query === "select to_regclass('rooms') is not null") return roomsExists;
     if (query === ROOM_RECORD_SCHEMA_SQL) return schema;
     if (query === OWNERLESS_REFERENCE_PERSONAL_SQL) {
@@ -37,6 +39,7 @@ function host({ floor = "2", bound = "f", policyExists = "t", authorityExists = 
       if (args[3].includes("io.vrata.media-identity-codec")) return mediaCodec;
       if (args[3].includes("io.vrata.media-screen-reconciler")) return screenReconciler;
       if (args[3].includes("io.vrata.media-codec-boundary")) return codecBoundary;
+      if (args[3].includes("io.vrata.media-namespace-rotation")) return rotationLabel;
       if (args[3].includes("io.vrata.frame-token-codec")) return query.includes("/remote-browser:") ? browserCodec : query.includes("/api:") ? apiCodec : "";
       if (args[3].includes("io.vrata.room-record-reader")) return query.includes("/api:") ? readerLabel : "";
       return query.includes("room-state:") ? stateLabel : apiLabel;
@@ -76,6 +79,18 @@ test("a raised media codec boundary refuses a rollback image that would issue co
   assertIdentityRollbackTarget(options, host({ codecColumn: "t", policyCodec: "3", codecBoundary: "3" }).run);
   for (const corrupt of [{ codecColumn: "" }, { codecColumn: "t", policyCodec: "" }, { codecColumn: "t", policyCodec: "4" }, { codecColumn: "t", policyCodec: "3\n3" }]) {
     assert.throws(() => assertIdentityRollbackTarget(options, host(corrupt).run), /media_rollout_invalid_codec_boundary/);
+  }
+});
+
+test("a rotated media namespace refuses a rollback image that would issue in the activation namespace", () => {
+  for (const config of [{}, { rotationColumn: "t" }, { rotationColumn: "t", rotated: "f" }]) assertIdentityRollbackTarget(options, host(config).run);
+  for (const rotationLabel of ["", "<no value>", "0", "true"]) {
+    assert.throws(() => assertIdentityRollbackTarget(options, host({ rotationColumn: "t", rotated: "t", rotationLabel }).run),
+      /media_rollback_without_namespace_rotation_forbidden:api/);
+  }
+  assertIdentityRollbackTarget(options, host({ rotationColumn: "t", rotated: "t", rotationLabel: "1" }).run);
+  for (const corrupt of [{ rotationColumn: "" }, { rotationColumn: "t", rotated: "" }, { rotationColumn: "t", rotated: "1" }]) {
+    assert.throws(() => assertIdentityRollbackTarget(options, host(corrupt).run), /media_rollout_invalid_namespace_rotation/);
   }
 });
 

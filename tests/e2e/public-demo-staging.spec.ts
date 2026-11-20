@@ -14,7 +14,6 @@ test.use({
 // Extended staging suite (staging-extended.yml): four live participants, outside the deploy gate.
 test.describe("@staging-extended public demo production scenario", () => {
   test.describe.configure({ mode: "serial" });
-  test.skip(process.env.VRATA_REFERENCE_CATALOG_ACTIVE !== "1", "A new host first runs on the Wave 2 catalog; reference rooms with scenes exist after its gated activation");
   let origin = "";
   let adminToken = "";
 
@@ -24,6 +23,7 @@ test.describe("@staging-extended public demo production scenario", () => {
     adminToken = process.env.STAGING_ADMIN_TOKEN ?? process.env.VRATA_ADMIN_TOKEN ?? "";
     if (!configuredOrigin) throw new Error("BASE_URL is required for the public demo staging scenario");
     if (!adminToken) throw new Error("STAGING_ADMIN_TOKEN or VRATA_ADMIN_TOKEN is required for the public demo staging scenario");
+    if (process.env.VRATA_REFERENCE_CATALOG_ACTIVE !== "1") throw new Error("t16_requires_active_reference_catalog");
     const url = new URL(configuredOrigin);
     if (url.protocol !== "https:" || url.origin !== configuredOrigin.replace(/\/$/, "")) {
       throw new Error("public_demo_staging_base_url_must_be_https_origin");

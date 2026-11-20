@@ -30,7 +30,7 @@ concurrency:
 
 jobs:
   catalog:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       EXPECTED_SHA: ${{ inputs.expected_image_sha }}
       OPERATION: ${{ inputs.operation }}

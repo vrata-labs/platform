@@ -11,6 +11,7 @@ const total = Number(workflow.match(/shard: \[([\d, ]+)\]/)[1].split(",").length
 test("every local e2e spec runs in exactly one CI shard", () => {
   const specs = listSpecs();
   assert(specs.includes("tests/e2e/runtime.spec.ts") && specs.includes("tests/e2e/m0.5/reliable-room-scenario.spec.ts"));
+  assert(specs.includes("tests/e2e/room-plugin-auto-seat.spec.ts"), "both mandatory auto-seat cases must reach CI");
   const shards = assignShards(specs, readWeights(), total);
   const assigned = shards.flatMap(shard => shard.specs).sort();
   assert.deepEqual(assigned, specs);

@@ -2,7 +2,9 @@
 
 Room-plugin source artifacts use ROOM_PLUGIN_BUCKET, never MINIO_BUCKET or
 SCENE_BUNDLE_S3_BUCKET. All compose API/bootstrap services default to
-vrata-room-plugins; the namespace must differ from public scene/document buckets.
+vrata-room-plugins; the namespace must differ from the public scene bucket.
+Room documents share this private bucket under the documents/ prefix and are
+released only by the API (docs/self-hosting.md, "Room Document Storage").
 The API reuses existing storage endpoint, region and credentials only. No public
 URL or boolean privacy declaration can substitute for this private namespace.
 
@@ -12,7 +14,7 @@ Storage bootstrap (`minio-bootstrap`, the `mc` client against the bundled
 SeaweedFS) creates the private bucket idempotently and leaves it without any
 anonymous policy (an existing one is removed) before applying the public
 bucket's anonymous download policy and scene seed. Equal or malformed bucket names stop bootstrap before any policy
-change. Public scenes/documents retain their existing download policy.
+change. Public scenes retain their existing download policy.
 
 For s3-compatible storage, the operator must create ROOM_PLUGIN_BUCKET and deny
 anonymous object reads before use. The API does not fall back to a public bucket

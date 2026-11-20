@@ -26,3 +26,7 @@ temp
 *.tsbuildinfo
 *.log
 .DS_Store
+apps/.room-document-objects
+apps/.room-plugin-objects
+apps/runtime-web/public/assets/uploaded-documents
+apps/runtime-web/public/assets/uploaded-scene-bundles

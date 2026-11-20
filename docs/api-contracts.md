@@ -20,6 +20,9 @@ Response:
 }
 ```
 
+Once identity floor 2 is active, `features.identityProtocolVersion` is `2`; the runtime uses it to choose how it reads
+template defaults before entry and how it requests room access.
+
 ### `GET /api/rooms/:roomId/manifest`
 
 Returns the room manifest used by runtime boot.
@@ -48,6 +51,29 @@ Response shape:
   }
 }
 ```
+
+### `GET /api/rooms/:roomId/prejoin-settings`
+
+Anonymous pre-join read of a room's template settings. The identity boundary does not filter it by path: it answers
+only rooms an anonymous guest enters by link (public or unlisted, guests allowed, not disabled, not portal-managed).
+The settings are copied field by field and carry nothing else of the room.
+
+```json
+{
+  "roomId": "demo-room",
+  "settings": {
+    "layout": "meeting",
+    "notes": { "enabled": true, "defaultScope": "shared" },
+    "audio": { "enabled": true, "spatial": true, "joinMutedByDefault": false, "participantLayout": "round-table" },
+    "presentation": { "enabled": true, "surfaceId": "debug-main" }
+  }
+}
+```
+
+`settings` is `null` for such a room without template settings. Every other room, including a missing one, gets
+the refusal of an anonymous manifest read: `409 identity_upgrade_required` at floor 2 or for a bound room,
+otherwise `404 room_not_found`. At floor 2 the runtime reads this route before the guest screen; at floor 1 it
+keeps reading the manifest.
 
 ### `POST /api/tokens/state`
 

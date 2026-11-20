@@ -8,8 +8,14 @@ import type { MediaBoundary } from "./identity/protocol.js";
 import { mustEvictExecutorMedia, mustEvictUserMedia, screenSourceLowering, screenSourcesRetired, verifiedSourcePeer } from "./media-source-permissions.js";
 
 /** 3: eviction also checks the selected identity lineage (revocation, absence, codec-3 epoch) and the room generation.
- * 4: remote-browser executor connections are retired in missing, ended and retired-generation native rooms. */
-export const MEDIA_RECONCILIATION_VERSION = 4;
+ * 4: remote-browser executor connections are retired in missing, ended and retired-generation native rooms.
+ * 5: an executor instance is retired once room-state confirms it can never be current again; the shared legacy
+ *    executor address is retired outright.
+ * 6: native rooms of a retired owned media namespace are deleted. */
+export const MEDIA_RECONCILIATION_VERSION = 6;
+
+/** Room-state's answer for one executor instance; null when room-state cannot be asked. */
+export interface ExecutorAuthorityAnswer { readonly reason: string }
 
 export interface MediaScreenAuthority {
   readonly tenantId: string | null;
@@ -24,15 +30,16 @@ export interface MediaScreenReconciliationStatus {
   observedAtMs: number | null;
   nativeRoom: "unknown" | "present" | "absent";
 }
-type NativeRooms = Pick<RoomServiceClient, "listRooms" | "listParticipants" | "removeParticipant"> & {
+type NativeRooms = Pick<RoomServiceClient, "listRooms" | "listParticipants" | "removeParticipant" | "deleteRoom"> & {
   updateParticipant(room: string, identity: string, input: { permission: Partial<ParticipantPermission> }): Promise<ParticipantInfo>;
 };
 type Context = MediaBoundary & { prefix: string; native: NativeRooms };
 type Observation = { fingerprint: string; atMs: number; nativeRoom: "present" | "absent" };
 type Peer = { info: ParticipantInfo; binding: UserMediaBinding | null };
-type OwnedMediaRoom = ParsedMediaRoom & { readonly name: string };
+/** `retiredNamespace`: the room belongs to a namespace this database owned and retired; nothing in it is current. */
+type OwnedMediaRoom = ParsedMediaRoom & { readonly name: string; readonly retiredNamespace: boolean };
 
-const boundaryKey = (boundary: MediaBoundary) => `${boundary.codec}:${boundary.namespace}`;
+const boundaryKey = (boundary: MediaBoundary) => `${boundary.codec}:${boundary.namespace}:${boundary.retired.join(",")}`;
 const version = (value: MediaScreenAuthority) => ({ authorityRevision: value.authority?.revision ?? null,
   roomActive: value.authority?.roomActive ?? false });
 const authorityFingerprint = (boundary: string, value: MediaScreenAuthority) => JSON.stringify([boundary, value.tenantId,
@@ -48,8 +55,19 @@ const lineage = (value: MediaScreenAuthority, participantIds: readonly string[])
   return [id, state ? [state.epoch, state.active] : null];
 }));
 const userPeer = (peer: Pick<ParticipantInfo, "identity">) => !peer.identity.startsWith("remote-browser:");
-/** The executor identity of one object; it carries no binding attribute and is never a user. */
-const executorPeer = (peer: Pick<ParticipantInfo, "identity">) => /^remote-browser:[^:]+$/.test(peer.identity);
+/** The one classifier for executor connections: the shared legacy object address, or one instance's own address. */
+type ExecutorAddress = { kind: "legacy"; objectId: string } | { kind: "instance"; objectId: string; instanceId: string };
+function executorAddress(identity: string): ExecutorAddress | null {
+  const legacy = /^remote-browser:([^:]+)$/.exec(identity);
+  if (legacy) return { kind: "legacy", objectId: legacy[1]! };
+  const instance = /^remote-browser:([^:]+):instance:[^:]+$/.exec(identity);
+  return instance ? { kind: "instance", objectId: instance[1]!, instanceId: identity } : null;
+}
+const executorPeer = (peer: Pick<ParticipantInfo, "identity">) => executorAddress(peer.identity) !== null;
+/** These reasons never become authorized again for the same instance: room-state restores no room or object. */
+const TERMINAL_EXECUTOR_REASONS = new Set(["superseded", "stopped", "object_missing", "room_missing"]);
+/** The object's current instance, even off its surface or failed: it can become active again. */
+const CURRENT_EXECUTOR_REASONS = new Set(["authorized", "inactive", "failed"]);
 
 /** Reconstruct desired state from durable authority, not a process-local transition queue.
  * Permission writes use the fixed class lowering; public removal, inactive rooms, retired
@@ -61,7 +79,9 @@ export function createMediaScreenReconciler(input: {
   context: () => Promise<Context | null>;
   /** Selected participants are read in one snapshot with the room authority; read errors throw. */
   authority: (roomId: string, participantIds?: readonly string[]) => Promise<MediaScreenAuthority>;
-  event?: (event: "observed" | "pending" | "unavailable" | "lowered" | "evicted") => void;
+  /** Whether one executor instance is still its object's current one; absent means instances are never retired. */
+  executorAuthority?: (roomId: string, executor: { objectId: string; instanceId: string }) => Promise<ExecutorAuthorityAnswer | null>;
+  event?: (event: "observed" | "pending" | "unavailable" | "lowered" | "evicted" | "retired") => void;
   now?: () => number;
   intervalMs?: number;
   maxRooms?: number;
@@ -81,7 +101,7 @@ export function createMediaScreenReconciler(input: {
   const peerCursors = new Map<string, number>();
   const interests = new Map<string, number>();
   let interestSequence = 0;
-  let boundary: string | null = null, unavailable = false, roomCursor = 0;
+  let boundary: string | null = null, unavailable = false, roomCursor = 0, retiredCursor = 0, retiredTurn = true;
   let generation = 0, stopped = false, started = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let pendingPass: Promise<void> | null = null;
@@ -110,16 +130,34 @@ export function createMediaScreenReconciler(input: {
    * and a portal-managed room by any other access epoch (an unmanaged room has none). */
   const retired = (context: Context, room: OwnedMediaRoom, desired: MediaScreenAuthority) => (room.codec === 2
     ? context.codec >= 3 : desired.authority?.mediaIncarnation !== room.incarnation) || room.epoch !== (desired.accessEpoch ?? null);
+  /** "evict" only for a confirmed permanent loss of authority; anything uncertain keeps the executor. */
+  async function executorDecision(roomId: string, peer: ParticipantInfo): Promise<"keep" | "evict" | "unknown"> {
+    const address = executorAddress(peer.identity);
+    if (!address) return "unknown";
+    // The shared object address is no longer issued; such a connection predates per-instance media identities.
+    if (address.kind === "legacy") return "evict";
+    if (!input.executorAuthority) return "keep";
+    const answer = await input.executorAuthority(roomId, { objectId: address.objectId, instanceId: address.instanceId });
+    if (!answer) return "unknown";
+    if (CURRENT_EXECUTOR_REASONS.has(answer.reason)) return "keep";
+    return TERMINAL_EXECUTOR_REASONS.has(answer.reason) ? "evict" : "unknown";
+  }
   async function verify(room: OwnedMediaRoom, peer: ParticipantInfo): Promise<UserMediaBinding | null> {
     const binding = await verifiedSourcePeer(room.name, peer);
     // A room name fixes its codec; a binding of the other codec is unverified here.
     return binding && (binding.epoch !== undefined) === (room.codec === 3) ? binding : null;
   }
 
-  /** Every owned native room of this namespace, both codecs, in name order. */
+  /** Every owned native room, both codecs, of the current namespace and of the retired ones, in name order.
+   * A name of any other namespace is foreign: another deployment may share the SFU and prefix. */
   const listing = async (context: Context) => (await context.native.listRooms()).flatMap((room): OwnedMediaRoom[] => {
     const owned = parseMediaRoomName(room.name, context.prefix, context.namespace);
-    return owned ? [{ ...owned, name: room.name }] : [];
+    if (owned) return [{ ...owned, name: room.name, retiredNamespace: false }];
+    for (const namespace of context.retired) {
+      const retired = parseMediaRoomName(room.name, context.prefix, namespace);
+      if (retired) return [{ ...retired, name: room.name, retiredNamespace: true }];
+    }
+    return [];
   }).sort((a, b) => a.name.localeCompare(b.name));
 
   async function reconcileRoom(context: Context, room: OwnedMediaRoom, captured: number, deadline: number): Promise<void> {
@@ -152,12 +190,26 @@ export function createMediaScreenReconciler(input: {
       };
       let complete = peers.length <= maxPeers;
       let visited = 0;
+      /** Executors confirmed current in this pass; the post-read acknowledges no other executor connection. */
+      const keptExecutors = new Set<string>();
       for (const { info: peer, binding } of verified) {
         if (!alive(captured)) return;
         if (now() >= deadline) { complete = false; break; }
         peerCursors.set(room.name, start + ++visited);
         if (executorPeer(peer)) {
-          if (!mustEvictExecutorMedia(desired.authority, stale)) continue;
+          if (!mustEvictExecutorMedia(desired.authority, stale)) {
+            const decision = await executorDecision(roomId, peer);
+            if (!alive(captured)) return;
+            if (decision === "keep") keptExecutors.add(peer.identity);
+            if (decision === "unknown") complete = false;
+            // A fresh answer immediately before the RPC; the address is this instance's own, so it cannot hit another.
+            if (decision !== "evict" || await executorDecision(roomId, peer) !== "evict") continue;
+            if (!alive(captured)) return;
+            await context.native.removeParticipant(room.name, peer.identity);
+            if (!alive(captured)) return;
+            emit("evicted");
+            continue;
+          }
           if (!await recheck()) { complete = false; break; }
           if (!alive(captured)) return;
           await context.native.removeParticipant(room.name, peer.identity);
@@ -201,16 +253,25 @@ export function createMediaScreenReconciler(input: {
       let executorsPresent = false;
       for (const info of currentPeers.slice(0, maxPeers)) {
         if (!alive(captured)) return;
-        if (executorPeer(info)) { executorsPresent = true; continue; }
+        if (executorPeer(info)) {
+          executorsPresent = true;
+          // A legacy address, an instance not asked in this pass or one that outlived its removal is not acknowledged.
+          // A kept one is asked again: a final state is never left, so a keep after observedAtMs held at that time.
+          if (!keptExecutors.has(info.identity) || await executorDecision(roomId, info) !== "keep") complete = false;
+          if (!alive(captured)) return;
+          continue;
+        }
         if (!userPeer(info)) continue;
         const binding = await verify(room, info);
         if (!binding) complete = false;
         after.push({ info, binding });
       }
-      // Generations are re-listed after the post-read: a retired room created during this pass is seen too.
+      // Generations are re-listed after the post-read: a retired room created during this pass is seen too. In a
+      // retired namespace any connection blocks the observation, an unrecognised identity included.
       for (const sibling of (await listing(context)).filter(other => other.roomId === roomId && other.name !== room.name)) {
         if (!alive(captured)) return;
-        if ((await context.native.listParticipants(sibling.name)).some(peer => userPeer(peer) || executorPeer(peer))) complete = false;
+        const peers = await context.native.listParticipants(sibling.name);
+        if (sibling.retiredNamespace ? peers.length > 0 : peers.some(peer => userPeer(peer) || executorPeer(peer))) complete = false;
       }
       if (!alive(captured)) return;
       const afterIds = [...new Set([...ids, ...after.flatMap(peer => peer.binding ? [peer.binding.participantId] : [])])].sort();
@@ -240,23 +301,49 @@ export function createMediaScreenReconciler(input: {
       const context = await input.context();
       if (!alive(captured)) return;
       if (!context) { unavailable = true; observations.clear(); boundary = null; return; }
-      if (!/^[a-f0-9]{32}$/.test(context.namespace) || (context.codec !== 2 && context.codec !== 3)) throw new Error("media_screen_namespace_invalid");
+      if (![context.namespace, ...context.retired].every(namespace => /^[a-f0-9]{32}$/.test(namespace))
+        || context.retired.includes(context.namespace) || (context.codec !== 2 && context.codec !== 3)) throw new Error("media_screen_namespace_invalid");
       const bk = boundaryKey(context);
       if (boundary !== bk) observations.clear();
       boundary = bk;
       unavailable = false;
-      const owned = await listing(context);
+      const listed = await listing(context);
       if (!alive(captured)) return;
-      const present = new Set(owned.map(room => room.roomId));
-      const count = Math.min(maxRooms, owned.length);
-      let processed = 0;
-      for (let index = 0; index < count && now() < deadline; index++) {
-        const room = owned[(roomCursor + index) % owned.length];
-        await reconcileRoom(context, room, captured, deadline);
-        processed++;
-        if (!alive(captured)) return;
-      }
-      roomCursor = owned.length ? (roomCursor + processed) % owned.length : 0;
+      const owned = listed.filter(room => !room.retiredNamespace), retiredRooms = listed.filter(room => room.retiredNamespace);
+      // A room ID with a native room in a retired namespace is not idle, and an earlier observation of it is void.
+      const present = new Set(listed.map(room => room.roomId));
+      for (const room of retiredRooms) invalidate(room.roomId);
+      // Both kinds share one room budget. While both wait, they split it and take turns going first, so neither
+      // failing deletions nor slow current rooms can starve the other; each has its own cursor.
+      const half = Math.ceil(maxRooms / 2);
+      const retiredQuota = Math.min(retiredRooms.length, owned.length ? (retiredTurn ? half : maxRooms - half) : maxRooms);
+      const currentQuota = Math.min(owned.length, maxRooms - retiredQuota);
+      /** A retired namespace has no authority to consult: its rooms are deleted whole, executors and unknown
+       * identities included. A JWT that rejoins recreates its room, which a later pass deletes again. */
+      const retire = async () => {
+        let processed = 0;
+        for (; processed < retiredQuota && now() < deadline; processed++) {
+          const room = retiredRooms[(retiredCursor + processed) % retiredRooms.length];
+          try {
+            await context.native.deleteRoom(room.name);
+            if (alive(captured)) emit("retired");
+          } catch { if (alive(captured)) emit("pending"); }
+          if (!alive(captured)) return;
+        }
+        retiredCursor = retiredRooms.length ? (retiredCursor + processed) % retiredRooms.length : 0;
+      };
+      const reconcileCurrent = async () => {
+        let processed = 0;
+        for (; processed < currentQuota && now() < deadline; processed++) {
+          await reconcileRoom(context, owned[(roomCursor + processed) % owned.length], captured, deadline);
+          if (!alive(captured)) return;
+        }
+        roomCursor = owned.length ? (roomCursor + processed) % owned.length : 0;
+      };
+      if (retiredTurn) { await retire(); if (alive(captured)) await reconcileCurrent(); }
+      else { await reconcileCurrent(); if (alive(captured)) await retire(); }
+      if (retiredRooms.length && owned.length) retiredTurn = !retiredTurn;
+      if (!alive(captured)) return;
       // Authenticated HTTP readers may request an observation of an idle room.
       // Round-robin interests are bounded separately from active native-room discovery.
       const absent = [...interests].filter(([roomId]) => !present.has(roomId)).slice(0, maxRooms);

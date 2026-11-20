@@ -120,8 +120,10 @@ test("api remote browser flag defaults off in production", async () => {
   assert.equal(module.isRemoteBrowserFeatureEnabled({ NODE_ENV: "production" }), false);
   assert.equal(module.isRemoteBrowserFeatureEnabled({ NODE_ENV: "production", REMOTE_BROWSER_ENABLED: "true" }), true);
   assert.equal(module.isRemoteBrowserFeatureEnabled({ NODE_ENV: "development" }), true);
-  assert.equal(module.isRemoteBrowserIdentityBinding({ objectId: "object-1", executorSessionId: "remote-browser:object-1", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId: "remote-browser:object-1" }), true);
-  assert.equal(module.isRemoteBrowserIdentityBinding({ objectId: "object-1", executorSessionId: "remote-browser:other", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId: "remote-browser:object-1" }), false);
+  assert.equal(module.isRemoteBrowserIdentityBinding({ objectId: "object-1", executorSessionId: "remote-browser:object-1", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId: "remote-browser:object-1:instance:generation-1" }), true);
+  assert.equal(module.isRemoteBrowserIdentityBinding({ objectId: "object-1", executorSessionId: "remote-browser:other", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId: "remote-browser:object-1:instance:generation-1" }), false);
+  // The executor's media identity is its instance: the shared object address is no longer granted.
+  assert.equal(module.isRemoteBrowserIdentityBinding({ objectId: "object-1", executorSessionId: "remote-browser:object-1", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId: "remote-browser:object-1" }), false);
   assert.equal(module.resolveRemoteBrowserTokenTtlSeconds({ REMOTE_BROWSER_TOKEN_TTL_SECONDS: "1" }), 30);
   assert.equal(module.resolveRemoteBrowserTokenTtlSeconds({ REMOTE_BROWSER_TOKEN_TTL_SECONDS: "9999" }), 600);
   assert.equal(module.resolveRemoteBrowserTokenTtlSeconds({ REMOTE_BROWSER_TOKEN_TTL_SECONDS: "invalid" }), 300);
@@ -2063,7 +2065,7 @@ test("remote browser media token requires internal auth and scoped publisher ide
         objectId: "browser-1",
         executorSessionId: "remote-browser:browser-1",
         executorInstanceId: "remote-browser:browser-1:instance:generation-1",
-        mediaParticipantId: "remote-browser:browser-1"
+        mediaParticipantId: "remote-browser:browser-1:instance:generation-1"
       })
     });
     assert.equal(denied.status, 403);
@@ -2081,14 +2083,14 @@ test("remote browser media token requires internal auth and scoped publisher ide
         objectId: "browser-1",
         executorSessionId: "remote-browser:browser-1",
         executorInstanceId: "remote-browser:browser-1:instance:generation-1",
-        mediaParticipantId: "remote-browser:browser-1"
+        mediaParticipantId: "remote-browser:browser-1:instance:generation-1"
       })
     });
     assert.equal(response.ok, true);
     const payload = (await response.json()) as { token?: string; livekitUrl?: string; participantId?: string };
     assert.equal(typeof payload.token, "string");
     assert.equal(payload.livekitUrl, "wss://livekit.89.169.161.91.sslip.io");
-    assert.equal(payload.participantId, "remote-browser:browser-1");
+    assert.equal(payload.participantId, "remote-browser:browser-1:instance:generation-1");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.VRATA_DISABLE_AUTOSTART;
@@ -2116,7 +2118,7 @@ test("remote browser media token can prefer public livekit url for secure captur
       objectId: "browser-1",
       executorSessionId: "remote-browser:browser-1",
       executorInstanceId: "remote-browser:browser-1:instance:generation-1",
-      mediaParticipantId: "remote-browser:browser-1"
+      mediaParticipantId: "remote-browser:browser-1:instance:generation-1"
     };
     const internalResponse = await fetch("http://127.0.0.1:4028/api/tokens/remote-browser-media", {
       method: "POST",

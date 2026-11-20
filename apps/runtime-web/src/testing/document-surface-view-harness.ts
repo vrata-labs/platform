@@ -1,5 +1,6 @@
 import type { TestContext } from "node:test";
 import type { MediaObjectInstance, PdfPresentationState, ImageViewerState, VideoPlayerState } from "@vrata/shared-types";
+import { createDocumentMediaPendingPatch } from "../document-media-pending.js";
 import { createDocumentSurfaceView, type DocumentSurfaceViewContext } from "../document-surface-view.js";
 import type { PdfPresentationDebugSnapshot } from "../media/pdf-presentation-object.js";
 import { DocumentTestElement, installDocumentTestDom } from "./document-ui-dom.js";
@@ -30,6 +31,7 @@ export function createDocumentSurfaceViewHarness(t: TestContext) {
     currentImageViewerObject() { log("image"); return state.image; },
     currentVideoPlayerObject() { log("video"); return state.video; },
     canPresentDocuments() { return state.canPresent; },
+    documentMediaPending: createDocumentMediaPendingPatch(),
     async goToPresentationPage(page: number) { log("page", page); },
     getPdfPresentationRuntime(surfaceId: string) { log("runtime", surfaceId); return runtime; },
     debugState: { pdfPresentation: { ...state.snapshot } },

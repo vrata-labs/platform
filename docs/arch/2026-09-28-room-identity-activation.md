@@ -440,8 +440,8 @@ desired state from durable identity authority, not from a browser, room-state
 presence, webhook or an in-memory transition queue. Only rooms in the exact
 current persisted media namespace are eligible. A second deployment can share
 the SFU and room prefix; foreign namespaces are never assumed to be retired
-namespaces owned by this database. Cloning/restoring a database onto the same
-SFU still requires an explicit namespace/isolation procedure.
+namespaces owned by this database. Cloning or restoring a database onto the same
+SFU uses the explicit namespace rotation of T13a-S3b-4 below.
 
 `roomIdentities.screenSourceAuthority` reads room lifecycle, authority and the
 Host/Presenter identity records in one existing read-only repeatable-read
@@ -689,7 +689,8 @@ Activation (S3b-2) is a separate, irreversible operator step:
 through `staging-remote-release.py activate-media-codec3` (Staging Deploy input
 `activate_media_codec3`), after preflight of the running candidate and the accepted
 rollback target. From then on only codec 3 is issued, codec-2 rooms are retired and
-open tabs reconnect with codec-3 grants; health advertises `mediaIdentityCodec: 3`.
+open tabs lose their media connection and join audio again with codec-3 grants (the runtime
+does not rejoin by itself; backlog audio-not-rejoined-after-media-eviction); health advertises `mediaIdentityCodec: 3`.
 Executor leases and owned-namespace retirement remain separate S3b slices.
 
 Published image: `3445a5cd92088a784118caeba32c7ad7ad5634f0` on the shared floor-2 stand.
@@ -741,7 +742,7 @@ native RPC (two-second timeout), far shorter than creating a remote-browser
 object and starting its session; past the codec-3 boundary the recreated room has
 another native name and the window does not exist.
 
-Not covered here (S3b-3b): whether the connected executor instance is still the
+Not covered here (S3b-3b, below): whether the connected executor instance is still the
 object's current one. The executor identity is shared by every instance of an
 object, so a removal addressed to it could hit a newer instance, and a stale
 instance's JWT would displace the current one on rejoin. Room-state also answers
@@ -750,6 +751,174 @@ a stopped object and a different instance. A real instance lease needs a
 per-instance media identity across API, room-state and the executor, a
 three-state binding answer (authorized, denied, unknown) and the room generation
 in room-state.
+
+### Executor instance lease: T13a-S3b-3b
+
+Each accepted `open-url` already bound a fresh, server-owned executor instance
+(`remote-browser:<objectId>:instance:<revision>`); S3b-3b makes that instance the
+executor's media identity as well. Room-state sets `mediaParticipantId` to the
+instance on open, and room-state, remote-browser and the API token route refuse
+any other media identity, so the shared address `remote-browser:<objectId>` is no
+longer issued. A removal addressed to an old instance therefore can never reach
+the current one, and an old JWT that rejoins does not displace it. Object IDs are
+random UUIDs and revisions never repeat, so an instance is never reissued, even
+after a room-state restart.
+
+Room-state's binding check now classifies its answer: `authorized`, or why not —
+`superseded` (another instance is current), `stopped`, `object_missing`,
+`room_missing`, `inactive` (not on its surface), `failed`, `mismatch`. A stopped
+instance stays stopped: the reducer refuses `mark-publishing`, `mark-active` and
+`mark-failed` after a stop, and only a new `open-url` starts the next instance.
+An instance lives in its object and the object in its room; room-state keeps
+rooms only in memory and restores nothing after a restart. `superseded`,
+`stopped`, `object_missing` and `room_missing` are therefore final for that
+instance: after a room-state restart every old executor is an orphan.
+
+Reconciliation version 5 asks room-state about every executor instance in a room
+that is not terminal (terminal rooms are still handled by version 4 rules):
+
+- the shared legacy address is retired outright;
+- `authorized`, `inactive` and `failed` keep the executor: it is still the
+  object's current instance and can become active again;
+- a final reason retires it, but only if a second answer read immediately before
+  the removal is still final;
+- every other answer (`mismatch`, an unknown reason, an unreachable
+  room-state) is unknown: the executor stays and the room stays `pending`.
+
+The post-read acknowledges only executors confirmed current in the same pass and
+asks room-state about each of them once more: a legacy address, an instance that
+joined during the pass, one that outlived its removal or one that stopped before
+the post-read keeps the room `pending`. Final states are never left, so a keep
+after the observation time held at that time.
+
+This relies on one room-state process owning the rooms of a deployment and on
+the API asking that process (`ROOM_STATE_INTERNAL_URL`), the same check that
+issues the executor's media token; the room ID it asks about is the platform room
+ID parsed from the native room name, which is also room-state's key.
+
+A disabled room still does not retire its executor by itself (version 4 rule),
+but disabling disconnects the object's owner, room-state drops the owner's
+remote-browser object, and the instance is then retired as `object_missing`.
+The owned lifecycle e2e checks both sides: before disable the room is observed
+with the current instance kept, after disable or delete the executor is gone.
+
+Delivery consequences. The first deploy retires every running legacy executor
+once: open remote browsers stop and must be reopened, because the executor does
+not reconnect. A rollback to a version-4 image no longer recognizes instance
+identities as executors and leaves them alone, which is the behavior before
+S3b-3a. Room generation in room-state (a deleted and recreated room keeps its
+objects under the same room ID) stays in the backlog.
+
+### Owned media namespace rotation: T13a-S3b-4
+
+The media namespace is set once, when the identity floor is raised to 2, and every
+native room name carries it. Until now nothing could say "every media credential
+issued so far is void": a database restored from a backup onto the same SFU judged
+the live connections by rewound authority, a database cloned onto an SFU the original
+still uses reconciled the original's rooms, and a leak of media JWTs had no lever
+beyond the one-shot codec boundary.
+
+`apps/api/dist/identity/rotate-media-namespace.js --confirm-irreversible
+--previous=retire|disown [--retire=<namespace>...]` replaces the namespace with a fresh
+random one. The activation column `media_namespace` stays immutable (older images verify
+its trigger body byte for byte); the effective namespace is
+`coalesce(rotated_media_namespace, media_namespace)`, and two append-only lists record
+every namespace used before (`previous_media_namespaces`, never reused) and every one
+retired (`retired_media_namespaces`). A trigger admits only one whole rotation per update:
+a fresh hex namespace, the replaced one appended to the history, and the retired list
+extended without removals, duplicates or the new namespace. The rotation takes the
+policy table in EXCLUSIVE mode like the codec raise, so a grant prepared for the
+previous namespace is either released before it or refused after it by the existing
+namespace pin of both issuance fences.
+
+- `retire` keeps the replaced namespace owned. Reconciliation version 6 deletes every
+  native room of a retired namespace, both codecs and managed epochs included, with
+  `DeleteRoom` and without an authority read: nothing in it is current, so executors and
+  unrecognised identities go too. Such a room with the same room ID voids an earlier
+  observation of that room, blocks the current room's observation while it holds any
+  connection and keeps an idle room from being observed as absent. Retired and current
+  rooms share the per-pass room budget: while both wait they split it, take turns going
+  first and keep separate cursors, so failing deletions cannot starve current rooms or
+  the tail of the retired list.
+- `disown` leaves the replaced namespace to whoever else uses it; it becomes foreign and
+  is never touched. A clone keeps the retired list it inherited, which only names
+  namespaces the original has retired as well.
+- `--retire` names further namespaces of this deployment that the database does not know,
+  such as one created by a rotation after the backup it was restored from; every rotation
+  prints its new namespace for the backup records. A dry run lists the namespaces it finds
+  on the SFU under the deployment's prefix that the database neither uses, retired nor used
+  before, with their room counts. A namespace whose JWTs were issued but never used has no
+  room and is invisible; such a JWT stays valid until it expires, and only a LiveKit API key
+  rotation voids it earlier.
+
+The command migrates the schema first, as the API does on start, so it also runs on a
+database restored from an older backup without starting the API. It prints the namespace
+before and after (not secret: every grant names its room), so a lost reply is checked with
+`--dry-run` before running it again. Deleting a room ends connections;
+it is not admission control. A JWT of a retired namespace that rejoins recreates its room
+(LiveKit auto-create) and the following passes delete it again, subject to the same
+budget as every other room; between those passes the old connection is alive.
+
+Procedures (docs/backup-restore.md): restore onto the same SFU — stop the API, restore,
+rotate with `retire` (adding any namespace of a rotation made after the backup), then
+start the API; clone onto a shared SFU — rotate with `disown` before the clone's API first
+starts. Rotation revokes no credential: it isolates new grants in a fresh namespace and
+keeps deleting the rooms of retired ones, so an old media JWT is removed again whenever it
+rejoins, until it expires; a LiveKit API key rotation revokes all media JWTs at once. Room
+sessions and identity credentials signed before a restore, revocations the backup does not
+contain included, stay valid until the state-token secret is rotated as well. Open tabs lose their media connection
+once and need to join audio again; the runtime does not rejoin automatically after a
+server-side eviction. Remote browsers must be reopened.
+
+Rollout: the API image label `io.vrata.media-namespace-rotation=1` and the manifest key
+`mediaNamespaceRotation: 1`. Once the database has a rotated namespace, the staging
+catalog guard and `tools/identity-rollback-guard.mjs` refuse a rollback image without the
+capability, because an older image would issue grants in the activation namespace and
+never retire anything. On staging the irreversible step is the Staging Deploy input
+`rotate_media_namespace` (`staging-remote-release.py rotate-media-namespace`, always
+`retire`), which first checks that both the running candidate and the accepted rollback
+target carry the capability.
+
+Accepted on the on-demand floor-2 stand at codec 3: `b19595671adc910ef2463b1ab8dc2c8e660dea1c`,
+[Staging40554820976](https://github.com/vrata-labs/platform/actions/runs/40554820976) 53/53 plus the Rutube
+canary, then [Staging40558654514](https://github.com/vrata-labs/platform/actions/runs/40558654514) on the same SHA
+with `rotate_media_namespace`: the namespace was replaced, one retired, and the gate passed 53/53 again with grants
+in the new namespace.
+
+### Note and document effects under identity v2: T13a-S3b-4
+
+Every effect that reads or writes room notes and documents was inventoried: notes
+read/save/delete/versions/restore/export, document list/upload/download/presentation/
+content/surface/delete, room deletion, the room-state document objects and their
+internal cleanup. Writes run inside `withRoomIdentityEffect`; reads and bytes are
+prepared outside and released synchronously inside after a recheck. A pre-fence read
+cannot cross a room generation at floor 2, because the actor's identity is resolved at
+entry and identities cascade with their room. The audit closed these gaps:
+
+- Memory `deleteRoom` now drops the room's notes, note versions and documents, as the
+  PostgreSQL foreign keys cascade; a recreated room no longer inherits them in Memory.
+- Surface assignments in one room serialize on a transaction advisory lock, and a missing
+  or deleted target changes nothing, so two documents never share a surface and a
+  concurrent delete never unlinks the document being shown. An administrator's unfenced
+  call runs in its own short transaction.
+- A document read inside a room fence holds its row FOR SHARE until the fence ends: a
+  tombstone or surface change commits only after bytes released on that reading were sent.
+- Room deletion collects the object keys of all the room's documents, deleted ones
+  included, in its own FOR UPDATE transaction and removes those objects after commit. This
+  is best effort: a failed or interrupted removal leaves an orphan, counted and logged,
+  with no collector.
+- For v2 actors the note and document audit writes one record per request: the fenced
+  outcome — allowed once the response was released or the effect committed, denied when
+  the fence refused it, uncertain when the COMMIT outcome is unknown — or, for a request
+  that ends before any fenced effect, what its response ended with. Entry-time
+  authorization is no longer recorded as "allowed".
+
+Residuals: room-state accepts a document ID in its surface commands without asking the
+API, and it keeps the objects of a deleted room under the same room ID (backlog
+room-state-recreated-room-isolation); bytes are still released only by the API with its
+surface and tombstone checks. A failed cleanup after a document delete leaves its object
+without a collector. Deleted notes stay readable through versions and export to readers
+with `notes.view`, which restore relies on.
 
 ### Shared staging delivery (floor 1)
 
@@ -1023,7 +1192,10 @@ Coverage is the existing notes/document publication/surface/private-state
 callbacks, invite/waiting lists and decisions, scene binding, and ordinary
 manifest/room/presence write/release branches (including anonymous readers of
 existing rooms). Anonymous bound-room reads were already rejected at entry;
-this also closes a request that became bound while in flight. A missing-room
+this also closes a request that became bound while in flight. The one exception
+is `GET /api/rooms/:id/prejoin-settings`: the path boundary skips it, and the
+handler releases only the template settings of a room open to anonymous guests,
+calling `assertCompatible` for every other room, a missing one included. A missing-room
 manifest is built from the same checked snapshot, including explicit null, and
 never substitutes a new private record via a second read. Virtual v1 fallback
 presence now uses the separate virtual effect and live namespace described below; a cached v2
@@ -1631,3 +1803,53 @@ The shared storage suite covers concurrency, epoch/revision and migration. The
 client suite covers ID adoption before first publish, tab/room isolation, late
 responses and drafts. Activation requires final local E2E, CI/image publication,
 exact-SHA staging verification and recorded rollback behavior.
+
+### Compatibility matrix verification
+
+Where each row of the client/API compatibility matrix is proven. "CI" means the
+unit job or the local E2E shards with an isolated PostgreSQL (the same commands
+run locally); "staging gate" means `@staging` cases of `pnpm test:e2e:staging`
+against the deployed floor.
+
+- **R1, new client / new API** (server-issued ID everywhere):
+  `apps/runtime-web/src/index.test.ts` (boot refuses admission when `/health` is
+  not OK instead of falling back to the legacy body; floor 2 sends the v2 body
+  without `participantId`), CI. `tests/e2e/identity-boundary.spec.ts`, "real
+  protocol activation stops a legacy client while a fresh tab joins…": the
+  planted local ID never appears in any request URL, header, body, WebSocket URL
+  or frame of the fresh tab, and room-state and presence carry only the issued
+  ID across a reload, CI. `tests/e2e/media-source-grants.spec.ts`: the LiveKit
+  media binding names the issued participant ID, CI.
+  `tests/e2e/normal-product.spec.ts` `@staging`: seat occupancy relayed under the
+  admitted ID on the deployed floor, staging gate.
+- **R2, new client / old API** (no v2 or plugin claims): `index.test.ts` (no
+  `identityProtocolVersion` in `/health` keeps the legacy body),
+  `apps/runtime-web/src/plugins/http.test.ts`, `plugins/controller.test.ts` and
+  `plugins/author-http.test.ts` (an old API or inactive identity becomes
+  `unsupported`; a legacy session creates no plugin traffic), CI.
+  `tests/e2e/room-plugin-runtime.spec.ts`, "room without plugin bindings never
+  downloads Worker or VM; floor one skips discovery": floor-1 fixture in CI, its
+  `@staging` twin reads the deployed floor. `apps/api/src/plugins/rollback-compat.postgres.test.ts`:
+  the pinned pre-plugin API serves ordinary legacy rooms on the new schema, CI.
+- **R3, old identity-v1 client / new API** (refusal before issuance):
+  `apps/api/src/identity-boundary.postgres.test.ts`, CI.
+  `identity-boundary.spec.ts`: the obsolete development-key case, CI and staging
+  gate; on a floor-2 host it also sends a real identity-v1 body and expects 426
+  `identity_upgrade_required` without a token. The live raise case sends the same
+  body after activation, CI.
+- **R4, tab open before update**: the live raise case keeps the open legacy tab's
+  note draft in the "Update required" dialog, leaves the server note and a
+  document uploaded before the raise intact, and recovers the legacy Host with an
+  administrator code, CI. `tests/e2e/session-upgrade.spec.ts` (transport-injected
+  denials: reload-loop guard, drafts, recovery close), CI only.
+- **R5, identity-v2 client without plugin support**:
+  `tests/e2e/room-plugin-auto-seat.spec.ts`, "isolated v2 member whose browser
+  cannot host plugins…": without `Worker` the member is admitted through v2,
+  connects to room-state, reports the host failure, creates no Worker, stays
+  standing past the arrival window and seats manually, CI.
+  `tests/e2e/room-plugin-seating.spec.ts`: a tab-stored opt-out keeps the person
+  standing and a manual stand-up is final, CI.
+- **Update and recovery UI**: `apps/runtime-web/src/session-upgrade.test.ts`,
+  `session-upgrade-ui.test.ts` and `identity-recovery.test.ts`, CI.
+  `identity-boundary.spec.ts`, "legacy private owner recovers through an
+  administrator-issued single-use code" and the live raise case, CI.

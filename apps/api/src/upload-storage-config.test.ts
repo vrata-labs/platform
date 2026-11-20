@@ -46,13 +46,12 @@ const create = () => createUploadStorageConfig(publicRoot, () => "https://exampl
 test("factory construction does not resolve URLs or validate the environment", () => {
   withEnv({ NODE_ENV: "production" }, () => {
     const config = createUploadStorageConfig(publicRoot, () => { throw new Error("must not be called"); });
-    assert.deepEqual(Object.keys(config), ["getSceneBundleUploadStorage", "getDocumentUploadStorage"]);
+    assert.deepEqual(Object.keys(config), ["getSceneBundleUploadStorage"]);
   });
 });
 
 for (const [method, rootKey, directory, prefix] of [
-  ["getSceneBundleUploadStorage", "SCENE_BUNDLE_LOCAL_UPLOAD_ROOT", "uploaded-scene-bundles", "scene_bundle"],
-  ["getDocumentUploadStorage", "DOCUMENT_LOCAL_UPLOAD_ROOT", "uploaded-documents", "document"]
+  ["getSceneBundleUploadStorage", "SCENE_BUNDLE_LOCAL_UPLOAD_ROOT", "uploaded-scene-bundles", "scene_bundle"]
 ] as const) {
   test(`${method}: unconfigured development uses its original local directory and URL`, () => {
     withEnv({}, () => {
@@ -214,46 +213,3 @@ for (const [method, rootKey, directory, prefix] of [
     }
   });
 }
-
-test("document provider overrides scene provider, including an explicit empty value", () => {
-  for (const documentProvider of [undefined, "minio-default", "s3-compatible", ""]) {
-    withEnv({ ...minio, ...s3, SCENE_BUNDLE_PROVIDER: "s3-compatible", DOCUMENT_PROVIDER: documentProvider }, () => {
-      const config = create();
-      assert.equal(config.getSceneBundleUploadStorage(request).provider, "s3-compatible");
-      const result = config.getDocumentUploadStorage(request);
-      assert.equal(result.type, documentProvider === "" ? "local" : "s3");
-      assert.equal(result.provider, documentProvider === "" ? "minio-default" : documentProvider ?? "s3-compatible");
-    });
-  }
-});
-
-test("document provider selects S3 even when scene provider is unset", () => {
-  withEnv({ ...minio, ...s3, DOCUMENT_PROVIDER: "s3-compatible" }, () => {
-    const config = create();
-    assert.equal(config.getSceneBundleUploadStorage(request).provider, "minio-default");
-    assert.equal(config.getDocumentUploadStorage(request).provider, "s3-compatible");
-  });
-});
-
-test("scene and document roots remain independent", () => {
-  withEnv({ SCENE_BUNDLE_LOCAL_UPLOAD_ROOT: "scene-files", DOCUMENT_LOCAL_UPLOAD_ROOT: "document-files" }, () => {
-    const config = create();
-    const scene = config.getSceneBundleUploadStorage(request);
-    const document = config.getDocumentUploadStorage(request);
-    assert.ok(scene.type === "local" && document.type === "local");
-    assert.equal(scene.root, resolve("scene-files"));
-    assert.equal(document.root, resolve("document-files"));
-  });
-});
-
-test("factory instances retain their own injected root and URL resolver", () => {
-  withEnv({}, () => {
-    for (const name of ["one", "two"]) {
-      const config = createUploadStorageConfig(name, () => `https://${name}.example.test`);
-      const result = config.getDocumentUploadStorage(request);
-      assert.ok(result.type === "local");
-      assert.equal(result.root, resolve(join(name, "assets", "uploaded-documents")));
-      assert.equal(result.publicBaseUrl, `https://${name}.example.test/assets/uploaded-documents/`);
-    }
-  });
-});

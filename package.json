@@ -23,6 +23,7 @@
     "validate:avatars": "pnpm --filter @vrata/asset-pipeline build && pnpm --filter @vrata/asset-pipeline validate:avatars",
     "validate:reference-template-assets": "node tools/validate-reference-template-assets.mjs",
     "test:e2e": "playwright test --grep-invert \"@staging|@private-assets\"",
+    "test:e2e:gpu": "playwright test --config playwright.gpu.config.ts --grep-invert \"@staging|@private-assets\"",
     "test:e2e:private-assets": "playwright test --grep @private-assets --grep-invert @staging",
     "test:e2e:staging": "node tools/run-staging-e2e.mjs",
     "test:e2e:staging-extended": "node tools/run-staging-e2e.mjs --suite staging-extended --workers=1",

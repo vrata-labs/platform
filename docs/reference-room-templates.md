@@ -22,7 +22,11 @@ preview URL and defaults. After activation it contains exactly the three entries
 above. The control plane applies defaults on selection and confirms replacement
 of edited defaults. Personal requires an owner and stays private with guest access
 disabled; its notes start private. Presentation starts with join-muted selected.
-Explicit audio/notes preferences persist per room.
+Explicit audio/notes preferences persist per room. The guest screen learns these
+defaults before entry from the manifest at identity floor 1 and from
+`GET /api/rooms/:id/prejoin-settings` at floor 2. When they are unavailable
+(private or portal-managed room, refusal, network failure), the guest joins muted
+unless they already chose otherwise in that room.
 
 `POST /api/rooms` resolves the active version on the server and stores its complete
 snapshot and absolute scene URL. Omit `templateVersion` to use the current version,

@@ -9,8 +9,7 @@ import {
   sha256Hex,
   writeDocumentObject,
   deleteDocumentObject,
-  resolveUploadedDocumentPublicUrl,
-  readDocumentObject,
+  readPrivateUploadedObject,
   publishSceneBundleFiles,
   resolveUploadedSceneBundlePublicUrl
 } from "./uploaded-object-storage.js";
@@ -87,11 +86,11 @@ test("local document storage creates parents, preserves bytes and overwrites fil
   const key = "tenant/room/файл #1.bin";
   assert.equal(await writeDocumentObject(storage, key, payload, "application/octet-stream"), undefined);
   assert.deepEqual(await readFile(join(storage.root, key)), payload);
-  const read = await readDocumentObject(storage, key);
+  const read = await readPrivateUploadedObject(storage, key, 1024);
   assert.equal(Buffer.isBuffer(read), true);
   assert.deepEqual(read, payload);
   await writeDocumentObject(storage, key, Buffer.alloc(0), "text/plain");
-  assert.deepEqual(await readDocumentObject(storage, key), Buffer.alloc(0));
+  assert.deepEqual(await readPrivateUploadedObject(storage, key, 1024), Buffer.alloc(0));
 });
 
 test("local deletion removes only the file and tolerates missing files", async (t) => {
@@ -101,7 +100,7 @@ test("local deletion removes only the file and tolerates missing files", async (
   assert.equal(await deleteDocumentObject(storage, "nested/file.bin"), undefined);
   assert.deepEqual(await readdir(join(storage.root, "nested")), []);
   assert.equal(await deleteDocumentObject(storage, "nested/file.bin"), undefined);
-  await assert.rejects(readDocumentObject(storage, "nested/file.bin"), { code: "ENOENT" });
+  await assert.rejects(readPrivateUploadedObject(storage, "nested/file.bin", 1024), { code: "ENOENT" });
 });
 
 test("local filesystem errors propagate without being converted to upload errors", async (t) => {
@@ -109,7 +108,7 @@ test("local filesystem errors propagate without being converted to upload errors
   await mkdir(join(storage.root, "directory"), { recursive: true });
   await assert.rejects(writeDocumentObject(storage, "directory", payload, "text/plain"), { code: "EISDIR" });
   await assert.rejects(deleteDocumentObject(storage, "directory"), { code: "ERR_FS_EISDIR" });
-  await assert.rejects(readDocumentObject(storage, "missing.bin"), { code: "ENOENT" });
+  await assert.rejects(readPrivateUploadedObject(storage, "missing.bin", 1024), { code: "ENOENT" });
 });
 
 for (const operation of ["write", "read", "delete"] as const) {
@@ -118,7 +117,7 @@ for (const operation of ["write", "read", "delete"] as const) {
     const storage = await localStorage(t);
     for (const key of ["", ".", "..", "../outside.bin", "../objects-other/file.bin", "nested/../../outside.bin"]) {
       const result = operation === "write" ? writeDocumentObject(storage, key, payload, "text/plain")
-        : operation === "read" ? readDocumentObject(storage, key) : deleteDocumentObject(storage, key);
+        : operation === "read" ? readPrivateUploadedObject(storage, key, 1024) : deleteDocumentObject(storage, key);
       await assert.rejects(result, { message: "unsafe_document_storage_key" });
     }
   });
@@ -126,7 +125,7 @@ for (const operation of ["write", "read", "delete"] as const) {
 
 test("local public URLs encode path segments and preserve endpoint slash behavior", async (t) => {
   const storage = await localStorage(t);
-  for (const resolveUrl of [resolveUploadedDocumentPublicUrl, resolveUploadedSceneBundlePublicUrl]) {
+  for (const resolveUrl of [resolveUploadedSceneBundlePublicUrl]) {
     for (const publicBaseUrl of [storage.publicBaseUrl, `${storage.publicBaseUrl}/`]) {
       assert.equal(resolveUrl({ ...storage, publicBaseUrl }, "folder/a b#%.bin"), "https://assets.example.invalid/uploaded/folder/a%20b%23%25.bin");
       assert.equal(resolveUrl({ ...storage, publicBaseUrl }, ""), "https://assets.example.invalid/uploaded/");
@@ -140,13 +139,13 @@ test("remote public URLs use provider configuration and read the environment on 
     SCENE_BUNDLE_S3_PUBLIC_BASE_URL: "https://cdn.example.invalid/base/", SCENE_BUNDLE_S3_BUCKET: "configured-bucket",
     SCENE_BUNDLE_S3_ENDPOINT: "https://internal.example.invalid", SCENE_BUNDLE_S3_REGION: "region"
   });
-  for (const resolveUrl of [resolveUploadedDocumentPublicUrl, resolveUploadedSceneBundlePublicUrl]) {
+  for (const resolveUrl of [resolveUploadedSceneBundlePublicUrl]) {
     assert.equal(resolveUrl({ ...s3, provider: "minio-default" }, "/folder/a b.bin"), "https://minio-public.example.invalid/public-bucket/folder/a b.bin");
     assert.equal(resolveUrl(s3, "/folder/a b.bin"), "https://cdn.example.invalid/base/folder/a b.bin");
     assert.throws(() => resolveUrl(s3, " "), { message: "invalid_scene_bundle_storage_key" });
   }
   process.env.SCENE_BUNDLE_S3_PUBLIC_BASE_URL = "https://changed.example.invalid";
-  assert.equal(resolveUploadedDocumentPublicUrl(s3, "file"), "https://changed.example.invalid/file");
+  assert.equal(resolveUploadedSceneBundlePublicUrl(s3, "file"), "https://changed.example.invalid/file");
   delete process.env.SCENE_BUNDLE_S3_REGION;
   assert.throws(() => resolveUploadedSceneBundlePublicUrl(s3, "file"), { message: "misconfigured_storage_provider:s3-compatible" });
 });
@@ -219,30 +218,6 @@ test("S3 transport rejections retain their original identity", async (t) => {
       await operation().then(() => assert.fail("expected rejection"), (error: unknown) => assert.equal(error, failure));
     }
   }
-});
-
-test("remote document reads use the public URL without write credentials and return a Buffer", async (t) => {
-  setPublicStorageEnv(t, { MINIO_PUBLIC_BASE_URL: "https://public.example.invalid", MINIO_BUCKET: "documents" });
-  const calls: unknown[][] = [];
-  t.mock.method(globalThis, "fetch", async (...args: unknown[]) => { calls.push(args); return new Response(new Uint8Array(payload)); });
-  const result = await readDocumentObject({ ...s3, provider: "minio-default" }, "room/file.bin");
-  assert.equal(Buffer.isBuffer(result), true);
-  assert.deepEqual(result, payload);
-  assert.deepEqual(calls, [["https://public.example.invalid/documents/room/file.bin"]]);
-});
-
-test("remote read status, network and response-body errors propagate", async (t) => {
-  setPublicStorageEnv(t, { MINIO_PUBLIC_BASE_URL: "https://public.example.invalid", MINIO_BUCKET: "documents" });
-  const storage = { ...s3, provider: "minio-default" as const };
-  for (const status of [403, 404, 500]) {
-    captureFetch(t, status);
-    await assert.rejects(readDocumentObject(storage, "file"), { message: `document_object_download_failed:${status}` });
-  }
-  const failure = new Error("read failed");
-  t.mock.method(globalThis, "fetch", async () => { throw failure; });
-  await assert.rejects(readDocumentObject(storage, "file"), (error) => error === failure);
-  t.mock.method(globalThis, "fetch", async () => ({ ok: true, arrayBuffer: async () => { throw failure; } }));
-  await assert.rejects(readDocumentObject(storage, "file"), (error) => error === failure);
 });
 
 test("scene publication recursively copies files, skips symlinks and overwrites destinations", async (t) => {

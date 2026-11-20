@@ -377,14 +377,14 @@ test("internal room-state verifier trusts v2 possession and current authority, n
     const executorMedia = await fetch(`${baseUrl}/api/tokens/remote-browser-media`, { method: "POST", headers: {
       "content-type": "application/json", "x-vrata-internal-token": internalToken
     }, body: JSON.stringify({ roomId: publicRoom.roomId, objectId: "browser-1", executorSessionId: "remote-browser:browser-1",
-      executorInstanceId: "remote-browser:browser-1:instance:generation-1", mediaParticipantId: "remote-browser:browser-1" }) });
+      executorInstanceId: "remote-browser:browser-1:instance:generation-1", mediaParticipantId: "remote-browser:browser-1:instance:generation-1" }) });
     assert.equal(executorMedia.status, 200, "a verified executor may publish in the v2 media namespace");
     const executorJwt = (await executorMedia.json() as { token: string }).token;
     assert.equal((JSON.parse(Buffer.from(executorJwt.split(".")[1]!, "base64url").toString("utf8")) as { video: { room: string } }).video.room, v2MediaRoom);
     const executorRequest = (roomId: string) => fetch(`${baseUrl}/api/tokens/remote-browser-media`, { method: "POST", headers: {
       "content-type": "application/json", "x-vrata-internal-token": internalToken
     }, body: JSON.stringify({ roomId, objectId: "browser-1", executorSessionId: "remote-browser:browser-1",
-      executorInstanceId: "remote-browser:browser-1:instance:generation-1", mediaParticipantId: "remote-browser:browser-1" }) });
+      executorInstanceId: "remote-browser:browser-1:instance:generation-1", mediaParticipantId: "remote-browser:browser-1:instance:generation-1" }) });
     // Past the codec-3 boundary the user and the executor share the native room of the current generation.
     await storage.identityProtocol.raiseMediaCodec(3);
     const incarnation = await storage.roomIdentities.mediaIncarnation(publicScope);
@@ -400,7 +400,7 @@ test("internal room-state verifier trusts v2 possession and current authority, n
     assert.equal((await fetch(`${baseUrl}/api/tokens/remote-browser-media`, { method: "POST", headers: {
       "content-type": "application/json", "x-vrata-internal-token": internalToken
     }, body: JSON.stringify({ roomId: endedExecutorRoom.roomId, objectId: "browser-1", executorSessionId: "remote-browser:browser-1",
-      executorInstanceId: "remote-browser:browser-1:instance:generation-1", mediaParticipantId: "remote-browser:browser-1" }) })).status, 409,
+      executorInstanceId: "remote-browser:browser-1:instance:generation-1", mediaParticipantId: "remote-browser:browser-1:instance:generation-1" }) })).status, 409,
     "an ended v2 room cannot issue new remote-browser publication grants");
     const spaces = await fetch(`${baseUrl}/api/rooms/${publicRoom.roomId}/spaces`, { headers: { authorization: `Bearer ${created.token}` } });
     assert.equal(spaces.status, 200, "the authenticated selector continues to work after activation");

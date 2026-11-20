@@ -29,6 +29,12 @@ const BACKUP_SCHEMA_VERSION = 2;
 const PLUGIN_ROOT = "room-plugins";
 const PLUGIN_OBJECT_KIND = "room-plugin-object";
 const PLUGIN_TABLES = ["room_plugin_bindings", "room_plugin_packages", "room_plugin_state"];
+// The private plugin bucket also holds room documents (under the API's document prefix); the whole bucket is mirrored,
+// so they are backed up and restored with the plugin objects. Earlier releases wrote documents to the public bucket.
+function legacyDocumentObjects(compose) {
+  const prefix = String(compose.model?.services?.api?.environment?.MINIO_DOCUMENT_PREFIX ?? "documents").replace(/^\/+|\/+$/g, "");
+  return `minio/objects/${prefix || "documents"}/`;
+}
 const DEFAULT_ENV_FILE = "infra/docker/.env.selfhost";
 const DEFAULT_COMPOSE_FILE = "infra/docker/compose.selfhost.yml";
 const DEFAULT_OUTPUT_DIR = "backups";
@@ -1153,9 +1159,17 @@ async function runRestore(options, operations = {}) {
     "-lc",
     "mc alias set vrata \"${MINIO_ENDPOINT:-http://minio:9000}\" \"$MINIO_ROOT_USER\" \"$MINIO_ROOT_PASSWORD\" >/dev/null && mc mb --ignore-existing \"vrata/$MINIO_BUCKET\" >/dev/null && mc anonymous set download \"vrata/$MINIO_BUCKET\" >/dev/null && mc mirror --overwrite --remove /backup/objects \"vrata/$MINIO_BUCKET\" >/dev/null"
   ]);
+  // A backup taken before room documents moved to the private bucket brings their objects back into the public one.
+  // Move them before the restore is reported complete; the restored snapshot has no writer in flight, so objects
+  // without a row are deleted at once. The privacy probe is left to --verify: the public address may not answer yet.
+  const documentObjects = legacyDocumentObjects(compose);
+  if (manifest.artifacts.some(artifact => artifact.kind === "minio-object" && artifact.path.startsWith(documentObjects))) {
+    runCompose(compose, ["exec", "-T", "-w", "/app", "api", "node", "apps/api/dist/document-storage-move.js", "--restore"]);
+  }
 
   await (operations.smoke || runSmokeChecks)({
     baseUrl: smokeBaseUrl,
+    adminToken: smokeAdminToken(compose, captureCompose),
     roomId: options["smoke-room-id"] || manifest.smoke?.roomId || DEFAULT_SMOKE_ROOM_ID
   });
   process.stdout.write(`[backup] restore_ok backupDir=${backupDir}\n`);
@@ -1216,6 +1230,7 @@ async function runRollback(options) {
 
   await runSmokeChecks({
     baseUrl: smokeBaseUrl,
+    adminToken: smokeAdminToken(compose),
     roomId: options["smoke-room-id"] || DEFAULT_SMOKE_ROOM_ID
   });
   process.stdout.write(`[backup] rollback_ok imageTag=${imageTag} envBackup=${envBackupPath}\n`);
@@ -1225,19 +1240,30 @@ function absoluteUrl(baseUrl, path) {
   return new URL(path, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
 }
 
-async function fetchOk(url, label, attempts = 10) {
+function smokeAdminToken(compose, captureCompose = captureDockerCompose) {
+  // Use the effective API environment, not merely the env-file: shell overrides and
+  // Compose defaults may differ, and an unforwarded value is not an API credential.
+  compose.model ??= JSON.parse(captureCompose(compose, ["config", "--format", "json"]));
+  return compose.model.services?.api?.environment?.CONTROL_PLANE_ADMIN_TOKEN || undefined;
+}
+
+async function fetchOk(url, label, attempts = 10, request = {}) {
   let lastError = "unknown";
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
     try {
-      const response = await fetch(url, { signal: controller.signal });
+      const response = await fetch(url, { ...request, signal: controller.signal });
       if (response.ok) {
         return response;
       }
       lastError = `http_${response.status}`;
+      if ([401, 403, 409].includes(response.status) || (response.status >= 300 && response.status < 400)) break;
     } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
+      // Header validation/transport errors can embed their inputs. Do not echo an
+      // operator credential in a failed authenticated request's diagnostic.
+      lastError = request.headers?.["x-vrata-admin-token"] ? "request_failed"
+        : error instanceof Error ? error.message : String(error);
     } finally {
       clearTimeout(timeout);
     }
@@ -1248,8 +1274,8 @@ async function fetchOk(url, label, attempts = 10) {
   throw new Error(`smoke_failed:${label}:${lastError}`);
 }
 
-async function fetchJson(url, label) {
-  const response = await fetchOk(url, label);
+async function fetchJson(url, label, request) {
+  const response = await fetchOk(url, label, 10, request);
   try {
     return await response.json();
   } catch {
@@ -1257,9 +1283,12 @@ async function fetchJson(url, label) {
   }
 }
 
-export async function runSmokeChecks({ baseUrl, roomId = DEFAULT_SMOKE_ROOM_ID }) {
+export async function runSmokeChecks({ baseUrl, roomId = DEFAULT_SMOKE_ROOM_ID, adminToken }) {
   if (!baseUrl) {
     throw new Error("missing_smoke_base_url");
+  }
+  if (adminToken !== undefined && (typeof adminToken !== "string" || /[\r\n\0]/.test(adminToken))) {
+    throw new Error("invalid_smoke_admin_token");
   }
   const healthUrl = absoluteUrl(baseUrl, "/health");
   const roomUrl = absoluteUrl(baseUrl, `/rooms/${encodeURIComponent(roomId)}`);
@@ -1267,7 +1296,13 @@ export async function runSmokeChecks({ baseUrl, roomId = DEFAULT_SMOKE_ROOM_ID }
 
   await fetchOk(healthUrl, "health");
   await fetchOk(roomUrl, "room");
-  const manifest = await fetchJson(manifestUrl, "room_manifest");
+  // Only this same-origin API request needs operator authorization on identity floor 2.
+  // Never follow a redirect with the credential (even to the same origin), nor attach it
+  // to HTML, health or scene assets. It must not enter URLs, output or backup metadata.
+  const manifest = await fetchJson(manifestUrl, "room_manifest", {
+    redirect: "manual",
+    headers: adminToken ? { "x-vrata-admin-token": adminToken } : {}
+  });
   const sceneBundleUrl = manifest?.sceneBundle?.url || manifest?.sceneBundleUrl || manifest?.manifest?.sceneBundle?.url;
   if (sceneBundleUrl) {
     await fetchOk(new URL(sceneBundleUrl, baseUrl).toString(), "scene_bundle");
@@ -1277,8 +1312,10 @@ export async function runSmokeChecks({ baseUrl, roomId = DEFAULT_SMOKE_ROOM_ID }
 }
 
 function runSmoke(options) {
+  const explicitCompose = options["env-file"] || options["compose-file"] || options["compose-files"];
   return runSmokeChecks({
     baseUrl: options["smoke-base-url"],
+    adminToken: explicitCompose ? smokeAdminToken(resolveComposeOptions(options)) : process.env.CONTROL_PLANE_ADMIN_TOKEN,
     roomId: options["smoke-room-id"] || DEFAULT_SMOKE_ROOM_ID
   });
 }

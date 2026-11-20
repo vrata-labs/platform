@@ -209,6 +209,51 @@ test("backup smoke check opens restored room and scene bundle", async () => {
   }
 });
 
+test("floor 2 smoke authorizes only the manifest, rejects missing/wrong auth and never forwards on redirect", async () => {
+  const token = "smoke-operator-private-marker";
+  const seen = [];
+  let redirect;
+  const sceneServer = createServer((req, res) => {
+    seen.push({ origin: "scene", path: req.url, token: req.headers["x-vrata-admin-token"] });
+    res.writeHead(200); res.end("scene");
+  });
+  await new Promise(resolve => sceneServer.listen(0, "127.0.0.1", resolve));
+  const sceneOrigin = `http://127.0.0.1:${sceneServer.address().port}`;
+  const server = createServer((req, res) => {
+    seen.push({ origin: "api", path: req.url, token: req.headers["x-vrata-admin-token"] });
+    if (req.url === "/api/rooms/demo-room/manifest") {
+      if (redirect) { res.writeHead(302, { location: redirect }); res.end(); return; }
+      if (req.headers["x-vrata-admin-token"] !== token) {
+        res.writeHead(req.headers["x-vrata-admin-token"] ? 401 : 409);
+        res.end(JSON.stringify({ error: "identity_required", reason: "identity_upgrade_required" })); return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ sceneBundle: { url: `${sceneOrigin}/scene.json` } })); return;
+    }
+    res.writeHead(200); res.end("ok");
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  try {
+    assert.equal((await runSmokeChecks({ baseUrl, adminToken: token })).ok, true);
+    assert.deepEqual(seen.filter(req => req.token), [{ origin: "api", path: "/api/rooms/demo-room/manifest", token }]);
+    await assert.rejects(runSmokeChecks({ baseUrl }), /smoke_failed:room_manifest:http_409/);
+    await assert.rejects(runSmokeChecks({ baseUrl, adminToken: "wrong" }), /smoke_failed:room_manifest:http_401/);
+    await assert.rejects(runSmokeChecks({ baseUrl, adminToken: `${token}\n` }), error => {
+      assert.equal(error.message, "invalid_smoke_admin_token");
+      assert.equal(error.message.includes(token), false); return true;
+    });
+    for (const destination of [`${sceneOrigin}/redirect-sink`, `${baseUrl}/redirect-sink`]) {
+      redirect = destination;
+      await assert.rejects(runSmokeChecks({ baseUrl, adminToken: token }), /smoke_failed:room_manifest:http_302/);
+    }
+    assert.equal(seen.some(req => req.path.includes(token) || req.path === "/redirect-sink"), false);
+    assert.equal(seen.some(req => req.origin === "scene" && req.token), false);
+  } finally {
+    await Promise.all([new Promise(resolve => server.close(resolve)), new Promise(resolve => sceneServer.close(resolve))]);
+  }
+});
+
 test("backup prune selects only old backup directories", () => {
   const outputDir = createTempBackupDir();
   try {
@@ -357,6 +402,13 @@ function fakeDeployment(t, { privateConfigured = true, rows, provider = "minio-d
     runCompose(_compose, args, io = {}) {
       calls.push(args);
       if (args[0] === "images") { writeFileSync(io.stdoutFile, "fixture-images\n"); return; }
+      if (args[0] === "exec" && args.includes("apps/api/dist/document-storage-move.js")) {
+        assert.deepEqual(args, ["exec", "-T", "-w", "/app", "api", "node", "apps/api/dist/document-storage-move.js", "--restore"]);
+        for (const [key, bytes] of [...publicObjects].filter(([key]) => key.startsWith("documents/"))) {
+          privateObjects.set(key, bytes); publicObjects.delete(key);
+        }
+        return;
+      }
       if (args[0] === "exec") {
         if (io.stdoutFile) writeFileSync(io.stdoutFile, fixture.dump);
         else {
@@ -408,7 +460,7 @@ function fakeDeployment(t, { privateConfigured = true, rows, provider = "minio-d
         writeBucketExport(verifyRoot, objects, fixture.privatePolicy);
       }
     },
-    async smoke() { fixture.smokeRan = true; return { ok: true }; }
+    async smoke(options) { fixture.smokeRan = true; fixture.smokeOptions = options; return { ok: true }; }
   };
   fixture.backup = () => main(["backup", "--env-file", envFile, "--compose-file", composeFile, "--backup-dir", backupDir], fixture.operations);
   fixture.restore = () => main(["restore", "--env-file", envFile, "--compose-file", composeFile, "--backup-dir", backupDir, "--confirm-restore"], fixture.operations);
@@ -424,6 +476,16 @@ function fakeDeployment(t, { privateConfigured = true, rows, provider = "minio-d
   };
   return fixture;
 }
+
+test("restore smoke uses effective Compose operator auth without storing it in the backup", async t => {
+  const fixture = fakeDeployment(t);
+  fixture.api.CONTROL_PLANE_ADMIN_TOKEN = "effective-compose-operator-marker";
+  await fixture.backup();
+  assert.equal(JSON.stringify(fixture.manifest()).includes(fixture.api.CONTROL_PLANE_ADMIN_TOKEN), false);
+  assert.equal(fixture.calls.some(args => args.some(arg => arg.includes(fixture.api.CONTROL_PLANE_ADMIN_TOKEN))), false);
+  await fixture.restore();
+  assert.equal(fixture.smokeOptions.adminToken, fixture.api.CONTROL_PLANE_ADMIN_TOKEN);
+});
 
 test("compose backup and restore preserve private plugin namespace, checksums, SQL references and public policy", async t => {
   for (const profile of ["selfhost", "production"]) {
@@ -452,6 +514,31 @@ test("compose backup and restore preserve private plugin namespace, checksums, S
       assert.equal(fixture.smokeRan, true);
     });
   }
+});
+
+test("private room documents are backed up with the private bucket; restored public documents are moved again", async t => {
+  const fixture = fakeDeployment(t, { profile: "selfhost" });
+  const privateDocument = "documents/demo-tenant/room/0d6c/agenda.pdf", legacyDocument = "documents/demo-tenant/room/7a1e/notes.pdf";
+  fixture.privateObjects.set(privateDocument, Buffer.from("private document"));
+  await fixture.backup();
+  const artifact = fixture.manifest().artifacts.find(entry => entry.path === `room-plugins/objects/${privateDocument}`);
+  assert.equal(artifact?.kind, "room-plugin-object");
+  assert.equal(artifact.sha256, hash(Buffer.from("private document")));
+  await fixture.restore();
+  assert.equal(fixture.calls.some(args => args.includes("apps/api/dist/document-storage-move.js")), false, "nothing to move");
+  assert.deepEqual(fixture.privateObjects.get(privateDocument), Buffer.from("private document"));
+
+  // A backup from an earlier release: the document object sits in the public bucket.
+  fixture.publicObjects.set(legacyDocument, Buffer.from("legacy document"));
+  rmSync(fixture.backupDir, { recursive: true, force: true });
+  await fixture.backup();
+  fixture.calls.length = 0;
+  await fixture.restore();
+  const move = fixture.calls.findIndex(args => args.includes("apps/api/dist/document-storage-move.js"));
+  const publicMirror = fixture.calls.findIndex(args => args[0] === "run" && args.at(-1).includes("anonymous set download"));
+  assert.ok(publicMirror >= 0 && move > publicMirror, "the move runs after the public objects are restored");
+  assert.equal(fixture.publicObjects.has(legacyDocument), false);
+  assert.deepEqual(fixture.privateObjects.get(legacyDocument), Buffer.from("legacy document"));
 });
 
 test("legacy schema-1 backup/restore needs no private configuration and does not touch the new private bucket", async t => {

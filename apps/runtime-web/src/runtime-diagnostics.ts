@@ -23,7 +23,8 @@ export interface RuntimeDiagnosticsContext {
   debugPanel: Pick<HTMLElement, "textContent">;
   xrDebugPanelEl: Pick<HTMLElement, "textContent">;
   refreshWebRtcDiagnostics(): Promise<void>;
-  captureCanvasDiagnostics: typeof captureCanvasDiagnostics;
+  captureCanvasDiagnostics(input: Parameters<typeof captureCanvasDiagnostics>[0]):
+    Awaited<ReturnType<typeof captureCanvasDiagnostics>> | Promise<Awaited<ReturnType<typeof captureCanvasDiagnostics>>>;
   inspectSceneObject: typeof inspectSceneObject;
   setStatus(message: string): void;
 }
@@ -41,6 +42,26 @@ export function createRuntimeDiagnostics(context: RuntimeDiagnosticsContext) {
     captureCanvasDiagnostics, inspectSceneObject, setStatus, fetch
   } = context;
   // Read mutable runtime state only at the original use sites, including after awaits.
+  type Screenshot = Awaited<ReturnType<typeof captureCanvasDiagnostics>>;
+  let pendingCapture: { root: THREE.Object3D | null; promise: Promise<Screenshot> } | null = null;
+
+  async function captureSceneScreenshot(): Promise<Screenshot> {
+    const root = context.activeSceneBundleRoot;
+    // Share GPU work, not reports. A new scene must wait for the old readback,
+    // then capture its own frame rather than label the old pixels as its image.
+    while (pendingCapture && pendingCapture.root !== root) {
+      await pendingCapture.promise.catch(() => undefined);
+      if (context.sessionGate.reason || !context.roomStateAccessToken || context.activeSceneBundleRoot !== root) return null;
+    }
+    if (!pendingCapture) {
+      const capture = { root, promise: Promise.resolve().then(() => captureCanvasDiagnostics({ canvas: renderer.domElement, includeImage: false })) };
+      pendingCapture = capture;
+      const clear = () => { if (pendingCapture === capture) pendingCapture = null; };
+      void capture.promise.then(clear, clear);
+    }
+    const screenshot = await pendingCapture.promise;
+    return context.activeSceneBundleRoot === root ? screenshot : null;
+  }
 
   function createClientReportId(): string {
     return `rpt_${crypto.randomUUID()}`;
@@ -89,7 +110,6 @@ export function createRuntimeDiagnostics(context: RuntimeDiagnosticsContext) {
     // The endpoint is room-scoped: with no admitted session (before entry or after a failed boot) there is no subject.
     // An empty Bearer would hit the identity boundary and replace the actual failure with an upgrade prompt.
     if (context.sessionGate.reason || !context.roomStateAccessToken) return;
-    const participantId = context.participantId;
     if (context.activeSceneBundleRoot) {
       context.debugState.sceneDebug = inspectSceneObject({
         root: context.activeSceneBundleRoot,
@@ -97,11 +117,9 @@ export function createRuntimeDiagnostics(context: RuntimeDiagnosticsContext) {
         previous: context.debugState.sceneDebug
       });
     }
-    const includeImage = false;
-    const screenshot = captureCanvasDiagnostics({
-      canvas: renderer.domElement,
-      includeImage
-    });
+    const screenshot = await captureSceneScreenshot();
+    if (context.sessionGate.reason || !context.roomStateAccessToken) return;
+    const participantId = context.participantId;
     context.debugState.sceneDebug.screenshot = screenshot;
     const response = await fetch(new URL(`/api/rooms/${roomId}/diagnostics`, apiBaseUrl), {
       method: "POST",

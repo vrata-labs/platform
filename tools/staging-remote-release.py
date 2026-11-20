@@ -236,6 +236,48 @@ class ReleaseHost:
         return {"mediaCodec": {"before": result["before"], "after": 3, "raised": result["raised"]},
                 "rollbackTarget": previous["imageSha"] if previous else None}
 
+    def rotate_media_namespace(self, image_sha):
+        """Irreversible: replace the stand's media namespace and retire the previous one.
+
+        Grants are issued in a fresh namespace and the reconciler deletes every native room of the retired one. Both
+        the candidate and the accepted release an automatic rollback would restore must issue in the rotated namespace."""
+        checked_sha(image_sha)
+        self.running_images(image_sha)
+        if self.catalog.minimum_identity_protocol() != 2:
+            raise ValueError("staging_media_rotation_requires_identity_v2")
+        media_codec = self.catalog.media_codec()
+        with self.state.locked(create=False, shared=True):
+            previous = self.state.manifest()
+        try:
+            catalog.assert_target_allowed(None, None, self.catalog.contract(image_sha), image_sha, 2, True, True,
+                                          media_codec=media_codec, namespace_rotated=True)
+        except ValueError as error:
+            raise ValueError("staging_media_rotation_candidate_incompatible:" + str(error)) from None
+        if previous is not None:
+            try:
+                catalog.assert_target_allowed(None, None, self.catalog.contract(previous["imageSha"]), previous["imageSha"], 2, True, True,
+                                              media_codec=media_codec, namespace_rotated=True)
+            except ValueError as error:
+                raise ValueError("staging_media_rotation_rollback_target_incompatible:" + str(error)) from None
+        try:
+            self.catalog.validate_identity_database()
+            self.catalog.validate_identity_configuration()
+        except ValueError as error:
+            raise ValueError("staging_media_rotation_configuration:" + str(error)) from None
+        output = self.run(self.catalog.compose + ["exec", "-T", "-w", "/app", "api", "node", "apps/api/dist/identity/rotate-media-namespace.js",
+                                                  "--previous=retire", "--confirm-irreversible"], quiet=True)
+        try:
+            result = json.loads(output.splitlines()[-1])
+        except (IndexError, ValueError):
+            raise RuntimeError("staging_media_rotation_unconfirmed") from None
+        if (result.get("ok") is not True or result.get("rotated") is not True or result.get("previous") != "retire"
+                or type(result.get("retired")) is not int or result["retired"] < 1 or result.get("before") == result.get("after")):
+            raise RuntimeError("staging_media_rotation_unconfirmed")
+        if self.catalog.media_namespace_rotated() is not True:
+            raise RuntimeError("staging_media_rotation_unconfirmed")
+        return {"mediaNamespace": {"before": result["before"], "after": result["after"], "retired": result["retired"]},
+                "rollbackTarget": previous["imageSha"] if previous else None}
+
     def rollback(self, image_sha, run_id, run_attempt):
         result = self.state.committed(image_sha, run_id, run_attempt)
         if result["published"]:
@@ -267,7 +309,7 @@ class ReleaseHost:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=["preflight", "rollout", "publish", "rollback", "prune", "committed", "activate-identity-v2",
-                                            "activate-media-codec3"])
+                                            "activate-media-codec3", "rotate-media-namespace"])
     parser.add_argument("--root", required=True)
     parser.add_argument("--image-sha", required=True)
     parser.add_argument("--asset-sha")
@@ -281,12 +323,14 @@ def main():
     checked_sha(args.image_sha)
     if args.command == "preflight":
         result = host.preflight(args.image_sha, args.bootstrap)
-    elif args.command in ("rollout", "publish", "rollback", "prune", "activate-identity-v2", "activate-media-codec3"):
+    elif args.command in ("rollout", "publish", "rollback", "prune", "activate-identity-v2", "activate-media-codec3", "rotate-media-namespace"):
         with host.operation_lock():
             if args.command == "activate-identity-v2":
                 result = host.activate_identity_v2(args.image_sha)
             elif args.command == "activate-media-codec3":
                 result = host.activate_media_codec3(args.image_sha)
+            elif args.command == "rotate-media-namespace":
+                result = host.rotate_media_namespace(args.image_sha)
             elif args.command == "rollout":
                 result = host.rollout(args.image_sha, checked_sha(args.asset_sha), args.source, args.run_id, args.run_attempt, args.bootstrap)
             elif args.command == "publish":

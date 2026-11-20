@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { getBakedEnvironmentMode, type BakedEnvironmentMode } from "./scene-lightmaps.js";
+import { readCanvasPixels } from "./canvas-readback.js";
 
 export interface SceneDiagnosticsSnapshot {
   bundleUrl: string | null;
@@ -269,22 +270,13 @@ export function inspectSceneObject(input: {
   };
 }
 
-export function captureCanvasDiagnostics(input: {
+export async function captureCanvasDiagnostics(input: {
   canvas: HTMLCanvasElement;
   includeImage: boolean;
-}): SceneDiagnosticsSnapshot["screenshot"] {
-  const width = Math.max(1, Math.min(320, input.canvas.width || 1));
-  const height = Math.max(1, Math.min(180, input.canvas.height || 1));
-  const scratch = document.createElement("canvas");
-  scratch.width = width;
-  scratch.height = height;
-  const context = scratch.getContext("2d", { willReadFrequently: true });
-  if (!context) {
-    return null;
-  }
-  context.drawImage(input.canvas, 0, 0, width, height);
-  const imageData = context.getImageData(0, 0, width, height);
-  const { data } = imageData;
+}): Promise<SceneDiagnosticsSnapshot["screenshot"]> {
+  const pixels = await readCanvasPixels(input.canvas);
+  if (!pixels) return null;
+  const { width, height, data } = pixels;
   let sumR = 0;
   let sumG = 0;
   let sumB = 0;
@@ -339,10 +331,14 @@ export function captureCanvasDiagnostics(input: {
   };
 
   if (input.includeImage) {
-    return {
-      ...screenshot,
-      dataUrl: scratch.toDataURL("image/jpeg", 0.72)
-    };
+    const scratch = document.createElement("canvas");
+    scratch.width = width; scratch.height = height;
+    try {
+      const context = scratch.getContext("2d", { willReadFrequently: true });
+      if (!context) return null;
+      context.putImageData(new ImageData(data, width, height), 0, 0);
+      return { ...screenshot, dataUrl: scratch.toDataURL("image/jpeg", 0.72) };
+    } finally { scratch.width = 0; scratch.height = 0; }
   }
   return screenshot;
 }

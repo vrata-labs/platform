@@ -6,10 +6,12 @@ Vrata self-host and production compose profiles use named Docker volumes for per
 
 - Postgres: a `pg_dump --clean --if-exists --no-owner --no-privileges` SQL dump.
 - Compose public object storage (service `minio`, SeaweedFS): mirrored MINIO_BUCKET objects, inventory and download policy metadata when available.
-- Private room-plugin storage: a separate ROOM_PLUGIN_BUCKET export, inventory and mandatory anonymous-none policy capture. Every private file, including inventory and policy, participates in the manifest's size/SHA-256 checks.
+- Private room-plugin storage: a separate ROOM_PLUGIN_BUCKET export, inventory and mandatory anonymous-none policy capture. Every private file, including inventory and policy, participates in the manifest's size/SHA-256 checks. The bucket also holds room documents (`documents/`), which are exported and restored with it.
+- A backup from a release that kept documents in the public bucket restores them there; restore then runs `document-storage-move.js --restore` in the API container, so they are moved to the private bucket before the restore is reported complete. Objects without a document row are deleted at once, and the anonymous-access check is left to `document-storage-move.js --verify` once the public address answers. Restore recognises these objects by the API's document prefix and lists only that prefix. If `MINIO_DOCUMENT_PREFIX` changed since the backup was taken, run the move by hand once per earlier prefix, with that prefix in the command's environment: `docker compose ... exec -T -w /app -e MINIO_DOCUMENT_PREFIX=<earlier prefix> api node apps/api/dist/document-storage-move.js --restore`. `--verify` checks a fixture object, not an inventory of the remaining public objects.
 - Platform metadata: manifest schema version, created timestamp, Vrata package version, `IMAGE_TAG`, git commit, compose profile, compose/env file names, artifact sizes, and SHA-256 checksums.
 - Compose image snapshot: `docker compose images` output for operator diagnostics.
 - Staging exports can include the checksum-bound accepted release record and all Compose override filenames. See `docs/deployment-staging.md` for the staging-specific wrapper.
+- Stage-specific `tools/backup-staging.py` дополнительно сохраняет полные приватные scene snapshots и recovery inventory. Обычный Compose backup или один accepted JSON не являются полным backup внешних сцен.
 
 Backups are written under `backups/` by default. That directory is ignored by git because backup artifacts can contain private room metadata and scene assets.
 
@@ -48,6 +50,59 @@ Validation checks:
 - the captured private policy has no statements granting anonymous access.
 
 Corrupt or incomplete manifests fail non-zero before restore starts.
+
+## Реестр восстановления приватных staging-сцен
+
+Это дополнение stage-specific wrapper, не смена общего формата backup и не backup
+внешнего S3 как сервиса. GitVerse хранит восстановленный source отдельно; S3 хранит
+готовые pinned releases. Ни Git сцен, ни S3 credentials на хосте для включённых
+snapshots не требуются.
+
+| Артефакт / identity | Что сохраняется и как проверяется |
+| --- | --- |
+| `accepted-release.json` | Обязательный checksum artifact принятого image/asset SHA; свидетельство исходного хоста, не designation нового |
+| `private-scenes/recovery.json` | Format 1, `included-snapshots`: current/previous records, Wave 2, точные bindings, derived descriptor keys, SQL room URLs и файловый inventory |
+| `private-scenes/snapshots/<imageSha>-<assetSha>/snapshot.json` и `public/` | Полные verified snapshots current/previous/Wave 2 с размерами и SHA-256 файлов |
+| Сохранённые versioned room URLs | Читаются из точного `postgres.sql`, включая template snapshot; вложенные версии в текущем public tree проверяются по immutable binding и marker даже после prune их отдельных snapshots |
+| `private-scenes/releases/<assetSha>/release.json` в S3 | Locator для повторного fetch точной identity; запись key в backup не подтверждает существование S3 объекта |
+
+Scene artifacts добавляются в существующий manifest как `kind: private-scene-recovery`.
+Companion требует точного совпадения artifacts, payload inventory, accepted metadata
+и SQL URLs. Symlinks, лишние/пропавшие файлы, неизвестная история и подмена identity
+не допускаются. Backup держит host operation lock, затем shared state lock на весь
+экспорт; смена acceptance/active/working image отклоняет recovery point.
+Только завершённый проверенный экспорт получает имя `vrata-*`; `.incomplete-vrata-*`
+не участвует в штатном retention.
+
+После off-host копирования выполнить обе проверки:
+
+```bash
+node tools/backup-restore.mjs validate --backup-dir "$OFF_HOST_BACKUP"
+python3 -B tools/private-scene-recovery.py validate --backup-dir "$OFF_HOST_BACKUP"
+python3 -B tools/private-scene-recovery.py restore \
+  --backup-dir "$OFF_HOST_BACKUP" --output "$RECOVERED_SCENES"
+```
+
+Для companion нужны tools платформы, Node и Python. Output должен отсутствовать
+или быть пустым, иметь существующего родителя и находиться вне backup. Проверка
+копии и повторная проверка source предшествуют atomic rename; публикации
+сериализуются parent-directory lock. Непустой каталог и действующий host state
+не заменяются. Ошибки `private_scene_recovery_*` возвращают ненулевой статус;
+metadata-only архив без snapshots не дополняется догадками или более новым release.
+
+Restore выдаёт только `recovery.json` и `snapshots/`, **не** accepted-release,
+designation, gate proof или active pointer. Восстановление bytes не является
+принятием нового хоста. Его запуск требует штатного designation/gate/acceptance;
+старый accepted record нельзя устанавливать вместо новой приёмки. Обычный
+Compose restore ниже восстанавливает SQL/объекты и не устанавливает scene snapshots.
+
+Для каждой фактически нужной current/previous/Wave 2/room URL identity вести
+приватную запись `imageSha -> assetSha -> descriptor key -> archive/inventory
+SHA-256 -> результат восстановления`. Обновлять её после bootstrap по реальным
+данным хоста, не выводить полноту из одного найденного source-пакета.
+Точный S3 fetch допускается по сохранённому binding, без Git-сцен и без fallback
+на новый lock; отдельно нужны все исторические URL bytes.
+См. [доставка сцен](scene-assets-repository.md) и [операции staging](deployment-staging.md).
 
 ## Restore
 
@@ -114,6 +169,21 @@ Keep the fixture JSON/env files private (mode 0600). The test does not print the
 The real legacy regression accepts VRATA_TEST_BACKUP_LEGACY_FIXTURE_JSON with fixtureOnly, fixtureRoot, target and legacyBackupDir. It uses the same disposable/loopback/Compose ownership contract, requires an actual schema-1 archive from baseline 81c14b6ac8dbc537892f7b1f342ca8f718fdf0a6 and an initially empty T04 plugin schema. The disposable source additionally supplies public."заметки_lexer" (id integer primary key, body text), with id=1 and body="Привет 👋 ぃ\\ Unicode notes and backslashes\\", to verify a real UTF8/backslash pg_dump roundtrip. Native PostgreSQL/psql probes establish literal/COPY interpretation and demonstrate file-COPY/WHERE, UTF8/NBSP identifiers, SJIS bytes, backslash COMMIT and shell payloads using session-local temporary objects and fixed harmless commands. For encoding changes the native oracle sends SET before the next query, matching psql's statement dispatch rather than parsing the entire script upfront in one pg query. Checksum-valid archives containing those payloads must be rejected before DDL. Valid literal SQL is also exercised with off/SJIS connection defaults and an injected failure; all public data and schema/index OIDs/definitions must roll back exactly.
 
 The same regression inserts a real unsettled package reservation after the read-only empty preflight but before restore locks. The locked DO recheck must reject it with the row and private policy unchanged. Only the fixture creator settles/deletes that owned reservation, knowing it never started PUT. The test then restores successfully, verifies current API create/read and private package storage, and proves a nonempty target is rejected without metadata/policy changes. Proof booleans are retained in sql-parser-proof.json. Only the test's own temporary failure archive is removed; the fixture owner tears down the disposable projects.
+
+## Media Namespace After Restore Or Clone
+
+Every LiveKit room name carries the database's media namespace. A restore does not touch LiveKit, so rooms and connections created after the backup stay on the server while the restored database judges them by older state. A copy of the database started next to the original on the same LiveKit server would reconcile the original's rooms as its own. Both cases need the irreversible namespace rotation of identity floor 2 (see `docs/arch/2026-09-28-room-identity-activation.md`, T13a-S3b-4):
+
+```bash
+docker compose ... run --rm api node apps/api/dist/identity/rotate-media-namespace.js --previous=retire --dry-run
+docker compose ... run --rm api node apps/api/dist/identity/rotate-media-namespace.js --previous=retire --confirm-irreversible [--retire=<namespace>]
+```
+
+- Restore onto the same LiveKit server: stop the API, restore, run the rotation with `--previous=retire`, then start the API. The command applies this image's schema migrations itself, so a backup taken by an older image works without starting the API first. If this deployment rotated its namespace after the backup was taken, the restored database does not know that namespace: pass it with `--retire`. Every rotation prints the new namespace (`after`); keep it with the backup records. The dry run lists namespaces it finds on LiveKit under the deployment's room prefix that the database does not know, but only those with a live room: a media JWT of an unknown namespace that has not been used yet is not visible anywhere and stays valid until it expires (at most the session lifetime). Rotating the LiveKit API key voids every media JWT at once. Never pass a namespace of another deployment that shares the server.
+- Clone onto a LiveKit server the original still uses: run the rotation with `--previous=disown` before the clone's API starts for the first time.
+- The rotation ends every media connection once: open tabs join audio again and remote browsers must be reopened. It does not revoke media JWTs: new grants go to a fresh namespace and the API keeps deleting the rooms of retired ones, so an old JWT that rejoins is removed again by a later reconciliation pass, until it expires. Rotating the LiveKit API key revokes every media JWT at once. Room sessions and identity credentials issued after the backup, and revocations the backup does not contain, are not undone by any of this; rotating the state-token secret voids all of them, after which owners and hosts use administrator recovery.
+- The command prints the namespace before and after (namespaces are not secret: every media grant names its room). If its reply is lost, compare a dry run's `before` with the recorded one before running it again.
+- After a rotation only API images labelled `io.vrata.media-namespace-rotation` are valid rollback targets; the rollback guard refuses older ones.
 
 ## Rollback Image Tag
 

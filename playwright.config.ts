@@ -14,6 +14,11 @@ const roomStateUrl = process.env.E2E_ROOM_STATE_PUBLIC_URL ?? `ws://127.0.0.1:${
 const remoteBrowserUrl = `ws://127.0.0.1:${remoteBrowserPort}`;
 const allowedOrigins = `${baseUrlOrigin},http://localhost:${apiPort},http://127.0.0.1:${apiPort}`;
 const useWebServer = process.env.PLAYWRIGHT_NO_WEB_SERVER !== "1";
+// Local CI must exercise the PostgreSQL fixtures, including specs with local-only
+// optional skips. Published suites use their deployed database, not this DSN.
+if (process.env.CI && useWebServer && !process.env.VRATA_TEST_POSTGRES_URL) {
+  throw new Error("local_ci_requires_VRATA_TEST_POSTGRES_URL");
+}
 const reportName = process.env.PLAYWRIGHT_REPORT_NAME ?? "e2e";
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const serverNode = shellQuote(process.execPath);

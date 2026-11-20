@@ -5,6 +5,7 @@ type InlineSceneBundleInput = {
   spawn?: { x: number; y: number; z: number };
   spawnYaw?: number;
   renderProfile?: "neutral-pbr";
+  seatAnchors?: Array<{ id: string; position: { x: number; y: number; z: number }; seatHeight: number; yaw: number; radius: number }>;
 };
 
 function dataUrl(contentType: string, value: unknown): string {
@@ -77,7 +78,15 @@ export function inlineSceneBundleUrl(input: InlineSceneBundleInput): string {
       position: input.spawn ?? { x: 0, y: 0, z: 4 },
       yaw: input.spawnYaw
     }],
+    ...(input.seatAnchors ? { anchors: { teleportFloorY: 0, seatAnchors: input.seatAnchors } } : {}),
     bounds: { width: 20, height: 8, depth: 20 },
     notes: "Inline e2e fixture; public releases do not bundle scene asset files."
   });
+}
+
+/** Eight seats in runtime coordinates, the seat identifiers the auto-seat scenarios use. */
+export function lightSeatSceneBundleUrl(): string {
+  return inlineSceneBundleUrl({ sceneId: "t16-light-seats", label: "Light seats regression", seatAnchors:
+    Array.from({ length: 8 }, (_, index) => ({ id: `seat-${String(index + 1).padStart(2, "0")}`,
+      position: { x: index - 3.5, y: 0, z: 0 }, seatHeight: .48, yaw: 0, radius: .35 })) });
 }

@@ -32,6 +32,9 @@ Node 26 становится LTS 28.10.2026. Переход меняет обр�
 1. После 28.10 одним PR перевести закрепления на 26: Dockerfile (с digest), setup-node во всех workflow,
    `@types/node`, добавить `engines` и `.nvmrc` (как в портале), обновить `packageManager`.
 2. Полный локальный набор (unit, integration, e2e) и CI; проверить нативные зависимости и Playwright на Node 26.
+   Известное расхождение (2026-10-29, 2c1c71f): API-тест `legacy-effect-boundary` «Postgres facade … idle-fence
+   backend exit» с лимитом 60 с идёт около 57 с на Node 26.5.1 и около 12 с на Node 22.23.3 при одном и том же
+   Postgres 16; через проброс порта Docker Desktop на Node 26 превышает лимит. Разобрать до смены закрепления.
 3. Staging gate под арендой `vrata-stage acquire platform`. Портал встраивает образы платформы (профиль `platform`):
    переход портала — после принятия платформы или вместе с ним.
 

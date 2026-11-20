@@ -20,6 +20,8 @@ interface RemoteBrowserSession {
   frameStreamId?: string;
   mediaParticipantId: string;
   roomId: string;
+  /** The surface the room-state object lives on; every executor callback names it. */
+  surfaceId: string;
   objectId: string;
   url: string;
   context: BrowserContext;
@@ -51,7 +53,32 @@ interface RemoteBrowserViewportPublishResult {
   audioTrackSid: string;
 }
 
-type RemoteBrowserSessionRef = Pick<RemoteBrowserSession, "sessionId" | "executorInstanceId" | "frameStreamId" | "roomId" | "objectId" | "mediaParticipantId">;
+type RemoteBrowserSessionRef = Pick<RemoteBrowserSession, "sessionId" | "executorInstanceId" | "frameStreamId" | "roomId" | "surfaceId" | "objectId" | "mediaParticipantId">;
+
+const remoteBrowserLegacySurfaceId = "debug-main";
+const remoteBrowserSurfaceIdPattern = /^[A-Za-z0-9._:-]{1,128}$/;
+
+/**
+ * Surface of the object a session serves. A room-state that predates the field omits it and only ever ran
+ * remote-browser on debug-main; anything present must be a plain surface id, otherwise the start is rejected.
+ */
+export function resolveRemoteBrowserSessionSurfaceId(value: unknown): string | null {
+  if (value === undefined) return remoteBrowserLegacySurfaceId;
+  if (typeof value !== "string") return null;
+  const surfaceId = value.trim();
+  return remoteBrowserSurfaceIdPattern.test(surfaceId) ? surfaceId : null;
+}
+
+export function remoteBrowserExecutorCallbackBody(session: RemoteBrowserSessionRef, patch: RemoteBrowserPatch): Record<string, unknown> {
+  return {
+    roomId: session.roomId,
+    surfaceId: session.surfaceId,
+    objectId: session.objectId,
+    executorInstanceId: session.executorInstanceId,
+    frameStreamId: session.frameStreamId,
+    patch
+  };
+}
 
 interface RemoteBrowserFrameCaptureDecisionInput {
   frameCaptureInFlight: boolean;
@@ -726,14 +753,7 @@ async function patchRemoteBrowserExecutorState(session: RemoteBrowserSessionRef,
     method: "POST",
     headers: getInternalHeaders(),
     signal: AbortSignal.timeout(5000),
-    body: JSON.stringify({
-      roomId: session.roomId,
-      surfaceId: "debug-main",
-      objectId: session.objectId,
-      executorInstanceId: session.executorInstanceId,
-      frameStreamId: session.frameStreamId,
-      patch
-    })
+    body: JSON.stringify(remoteBrowserExecutorCallbackBody(session, patch))
   });
   if (!response.ok) {
     throw new Error(`room_state_callback_failed:${response.status}`);
@@ -1344,7 +1364,7 @@ async function stopSession(sessionId: string, reason: RemoteBrowserStopReason = 
   }
 }
 
-async function createSession(input: { sessionId: string; executorInstanceId: string; frameStreamId?: string; mediaParticipantId: string; roomId: string; objectId: string; url: string }, policy = resolveRemoteBrowserServicePolicy()): Promise<RemoteBrowserSession> {
+async function createSession(input: { sessionId: string; executorInstanceId: string; frameStreamId?: string; mediaParticipantId: string; roomId: string; surfaceId: string; objectId: string; url: string }, policy = resolveRemoteBrowserServicePolicy()): Promise<RemoteBrowserSession> {
   if (!policy.enabled) {
     throw new Error("remote_browser_disabled");
   }
@@ -1665,8 +1685,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
       json(response, 503, { error: "remote_browser_disabled" });
       return;
     }
-    const payload = await parseBody<{ sessionId?: string; executorInstanceId?: string; frameStreamId?: string; mediaParticipantId?: string; roomId?: string; objectId?: string; url?: string }>(request);
-    if (!payload?.sessionId || !payload.executorInstanceId || !payload.mediaParticipantId || !payload.roomId || !payload.objectId || !payload.url) {
+    const payload = await parseBody<{ sessionId?: string; executorInstanceId?: string; frameStreamId?: string; mediaParticipantId?: string; roomId?: string; surfaceId?: unknown; objectId?: string; url?: string }>(request);
+    const surfaceId = resolveRemoteBrowserSessionSurfaceId(payload?.surfaceId);
+    if (!payload?.sessionId || !payload.executorInstanceId || !payload.mediaParticipantId || !payload.roomId || !surfaceId || !payload.objectId || !payload.url) {
       json(response, 400, { error: "invalid_session_payload" });
       return;
     }
@@ -1677,14 +1698,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
     }
     let session: RemoteBrowserSession;
     try {
-      session = await createSession({ sessionId: payload.sessionId, executorInstanceId: payload.executorInstanceId, frameStreamId: payload.frameStreamId, mediaParticipantId: payload.mediaParticipantId, roomId: payload.roomId, objectId: payload.objectId, url: payload.url }, policy);
+      session = await createSession({ sessionId: payload.sessionId, executorInstanceId: payload.executorInstanceId, frameStreamId: payload.frameStreamId, mediaParticipantId: payload.mediaParticipantId, roomId: payload.roomId, surfaceId, objectId: payload.objectId, url: payload.url }, policy);
     } catch (error) {
       incrementCounter(metrics.sessionsStartedTotal, "failed");
       const errorCode = remoteBrowserSessionErrorCode(error);
       if (errorCode === "session_limit_exceeded") incrementCounter(metrics.deniedTotal, "session_limit");
       if (errorCode === "session_start_in_progress") incrementCounter(metrics.deniedTotal, "start_in_progress");
       if (errorCode === "url_not_allowed" || errorCode === "redirect_not_allowed") incrementCounter(metrics.deniedTotal, "url_policy");
-      await patchRemoteBrowserExecutorState({ sessionId: payload.sessionId, executorInstanceId: payload.executorInstanceId, frameStreamId: payload.frameStreamId, mediaParticipantId: payload.mediaParticipantId, roomId: payload.roomId, objectId: payload.objectId }, {
+      await patchRemoteBrowserExecutorState({ sessionId: payload.sessionId, executorInstanceId: payload.executorInstanceId, frameStreamId: payload.frameStreamId, mediaParticipantId: payload.mediaParticipantId, roomId: payload.roomId, surfaceId, objectId: payload.objectId }, {
         type: "mark-failed",
         errorCode,
         inputEventId: `${payload.sessionId}:failed:${Date.now()}`

@@ -3,6 +3,7 @@ import { PDFDocument, rgb } from "pdf-lib";
 import { installFunctionalFrameBudget } from "./functional-frame-budget";
 import { chooseMeetingPanel, meetingRequest } from "./meeting-tools-acceptance";
 import { createDocumentMeeting } from "./document-meeting-scenarios";
+import { finalizeFunctionalDiagnostics, observeFunctionalClient, writeFunctionalDiagnostics, type FunctionalObservation } from "./functional-diagnostics";
 
 type Input = { browser: Browser; request: APIRequestContext; origin: string; adminToken: string; expectedProtocol?: 1 | 2 };
 
@@ -26,8 +27,9 @@ async function installCaptureSource(page: Page) {
   });
 }
 
-export async function toolOrchestrationScenario(input: Input) {
+export async function toolOrchestrationScenario(input: Input, options: { consentOnly?: boolean } = {}) {
   const contexts: BrowserContext[] = [], headers = { "x-vrata-admin-token": input.adminToken };
+  const diagnostics: FunctionalObservation[] = [];
   const created = await meetingRequest(() => input.request.post(`${input.origin}/api/rooms`, { headers, data: {
     tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Owned tool orchestration", visibility: "private"
   } }));
@@ -39,6 +41,7 @@ export async function toolOrchestrationScenario(input: Input) {
     const context = await input.browser.newContext({ viewport: role === "guest" ? { width: 390, height: 844 } : { width: 800, height: 500 },
       deviceScaleFactor: .4, isMobile: role === "guest", hasTouch: role === "guest" });
     contexts.push(context); const page = await context.newPage(); await installFunctionalFrameBudget(page);
+    diagnostics.push(await observeFunctionalClient(page));
     if (role !== "guest") await installCaptureSource(page);
     else await page.addInitScript(() => Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", { configurable: true, value: undefined }));
     const admission = page.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state" && response.status() === 200);
@@ -62,19 +65,22 @@ export async function toolOrchestrationScenario(input: Input) {
   let phase = "onboarding";
   try {
     const host = await enter("host"), member = await enter("member"), guest = await enter("guest");
-    phase = "own-pdf";
-    await chooseMeetingPanel(host.page, "present", false);
-    const pdf = await PDFDocument.create();
-    for (const color of [rgb(.8, .1, .1), rgb(.1, .2, .8)]) {
-      const page = pdf.addPage([640, 360]); page.drawRectangle({ x: 0, y: 0, width: 640, height: 360, color });
-      page.drawText("Own orchestration slides", { x: 30, y: 180, color: rgb(1, 1, 1), size: 24 });
+    let originalPdf: string | undefined, documentId: string | undefined;
+    if (!options.consentOnly) {
+      phase = "own-pdf";
+      await chooseMeetingPanel(host.page, "present", false);
+      const pdf = await PDFDocument.create();
+      for (const color of [rgb(.8, .1, .1), rgb(.1, .2, .8)]) {
+        const page = pdf.addPage([640, 360]); page.drawRectangle({ x: 0, y: 0, width: 640, height: 360, color });
+        page.drawText("Own orchestration slides", { x: 30, y: 180, color: rgb(1, 1, 1), size: 24 });
+      }
+      await host.page.locator("#document-upload-input").setInputFiles({ name: "orchestration.pdf", mimeType: "application/pdf", buffer: Buffer.from(await pdf.save()) });
+      const uploaded = host.page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === `${path}/documents`);
+      void uploaded.catch(() => undefined); await host.page.locator("#document-upload-button").click();
+      const upload = await uploaded; expect(upload.status()).toBe(201); documentId = (await upload.json()).document.documentId as string;
+      await host.page.locator("#document-surface-button").click(); await pdfPage(guest.page, 1);
+      originalPdf = (await active(host.page)).objectId;
     }
-    await host.page.locator("#document-upload-input").setInputFiles({ name: "orchestration.pdf", mimeType: "application/pdf", buffer: Buffer.from(await pdf.save()) });
-    const uploaded = host.page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === `${path}/documents`);
-    void uploaded.catch(() => undefined); await host.page.locator("#document-upload-button").click();
-    const upload = await uploaded; expect(upload.status()).toBe(201); const documentId = (await upload.json()).document.documentId as string;
-    await host.page.locator("#document-surface-button").click(); await pdfPage(guest.page, 1);
-    const originalPdf = (await active(host.page)).objectId;
     phase = "sticky-consent";
     await chooseMeetingPanel(host.page, "board", false); await host.page.locator("#meeting-use-board-surface").click();
     await host.page.locator("#start-markdown-board").click();
@@ -87,18 +93,26 @@ export async function toolOrchestrationScenario(input: Input) {
     await expect(host.page.locator("#meeting-replace-cancel")).toBeFocused();
     await expect(host.page.locator("#meeting-replace-explanation")).toContainText("notes or strokes will be removed");
     await host.page.keyboard.press("Escape"); await expect(host.page.locator("#meeting-replace-dialog")).toBeHidden();
-    expect((await active(host.page, "whiteboard-wall")).objectId).toBe(stickyId); expect((await active(host.page)).objectId).toBe(originalPdf);
+    expect((await active(host.page, "whiteboard-wall")).objectId).toBe(stickyId);
+    if (!options.consentOnly) expect((await active(host.page)).objectId).toBe(originalPdf);
+    else expect(await active(host.page)).toBeNull();
     await host.page.locator("#start-whiteboard").click();
     // A colleague edits this exact sticky object while consent is open.
     await chooseMeetingPanel(member.page, "board", false); await member.page.locator("#meeting-use-board-surface").click();
+    for (const observation of diagnostics) observation.mark("consent-open-concurrent-note");
     await member.page.locator("#markdown-board-note-text").fill("Concurrent colleague decision"); await member.page.locator("#add-sticky-note").click();
     await expect.poll(async () => (await active(host.page, "whiteboard-wall"))?.state?.notes?.length).toBe(2);
+    for (const observation of diagnostics) observation.mark("concurrent-note-observed");
     await host.page.locator("#meeting-replace-confirm").click();
     await expect(host.page.locator("#meeting-transition-status")).toContainText("surface content changed");
     expect((await active(guest.page, "whiteboard-wall")).objectId).toBe(stickyId);
     await host.page.locator("#start-whiteboard").click(); await host.page.locator("#meeting-replace-confirm").click();
     await expect.poll(async () => (await active(guest.page, "whiteboard-wall"))?.type).toBe("whiteboard");
     await expect(host.page.locator("#media-surface-select")).toHaveValue("whiteboard-wall");
+    if (options.consentOnly) {
+      await writeFunctionalDiagnostics("F6-minimal-consent", await Promise.all(diagnostics.map(value => value.snapshot())));
+      return;
+    }
     phase = "independent-strokes";
     for (const page of [host.page, member.page]) {
       // Coordinate injection exercises real input authorization, WS and canvas;
@@ -172,8 +186,10 @@ export async function toolOrchestrationScenario(input: Input) {
     await chooseMeetingPanel(guest.page, "present", true); await expect(guest.page.locator("#start-share")).toBeDisabled();
     await expect(guest.page.locator("#meeting-present-status")).toContainText("Host or Presenter");
   } catch (error) {
+    await writeFunctionalDiagnostics(`F6-${phase}`, await Promise.all(diagnostics.map(value => value.snapshot())));
     console.warn("tool_orchestration_failed", JSON.stringify({ phase })); throw error;
   } finally {
+    await Promise.allSettled(diagnostics.map(value => value.close()));
     await Promise.all(contexts.map(context => context.close()));
     expect((await meetingRequest(() => input.request.delete(`${input.origin}${path}`, { headers }))).ok()).toBe(true);
   }
@@ -182,17 +198,40 @@ export async function toolOrchestrationScenario(input: Input) {
 /** Calls the original browser getDisplayMedia, with Chromium selecting its test
  * monitor. No replacement API/canvas source, but no claim of a human OS picker. */
 export async function nativeToolCaptureScenario(input: Input) {
-  const meeting = await createDocumentMeeting({ ...input, mobile: false });
+  const diagnostics: FunctionalObservation[] = [];
+  const meeting = await createDocumentMeeting({ ...input, mobile: false,
+    async preparePage(page) { diagnostics.push(await observeFunctionalClient(page, { transportAtFirstIceConnected: true })); } });
   const pages: Page[] = [];
+  let failed = false;
   try {
     const host = await meeting.enter("host"), guest = await meeting.enter("guest");
     pages.push(host.page, guest.page);
+    // Native capture tests a mounted room, not capture racing 3D scene boot.
+    for (const page of pages) {
+      await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.sceneBundleState), { timeout: 90_000 }).toBe("loaded");
+      await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    }
     await host.page.evaluate(() => {
       const original = navigator.mediaDevices.getDisplayMedia.bind(navigator.mediaDevices);
-      (window as any).__nativeToolCapture = { calls: 0, active: false, stream: null };
+      (window as any).__nativeToolCapture = { calls: 0, active: false, stream: null, requestedAt: null, resolvedAt: null, failedAt: null, error: null, originalErrors: [] };
+      const sanitize = (error: Error) => ({ name: error.name,
+        message: error.message.replace(/(?:https?|wss?):\/\/\S+|(?:rs2\.|eyJ)[A-Za-z0-9_.-]+/g, "[redacted]").slice(0, 240) });
+      const logError = console.error;
+      console.error = (...args: unknown[]) => {
+        const errors = (window as any).__nativeToolCapture.originalErrors;
+        for (const value of args) if (value instanceof Error && errors.length < 16) errors.push({ atMs: performance.now(), ...sanitize(value) });
+        Reflect.apply(logError, console, args);
+      };
       navigator.mediaDevices.getDisplayMedia = async options => {
         const state = (window as any).__nativeToolCapture; state.calls++; state.active = navigator.userActivation.isActive;
-        state.stream = await original(options); return state.stream;
+        state.requestedAt = performance.now();
+        try { state.stream = await original(options); state.resolvedAt = performance.now(); return state.stream; }
+        catch (error) {
+          state.failedAt = performance.now();
+          // Preserve the native error, not the later broad media_network_blocked classification.
+          state.error = error instanceof Error ? sanitize(error) : { name: "unknown", message: null };
+          throw error;
+        }
       };
     });
     await chooseMeetingPanel(host.page, "present", false); await host.page.locator("#start-share").click();
@@ -208,15 +247,24 @@ export async function nativeToolCaptureScenario(input: Input) {
     await expect.poll(() => host.page.evaluate(() => (window as any).__nativeToolCapture.stream.getTracks().every((track: MediaStreamTrack) => track.readyState === "ended")), { timeout: 20_000 }).toBe(true);
     await expect.poll(() => guest.page.evaluate(() => (window as any).__VRATA_DEBUG__?.screenShare?.remoteSubscribedTrackCount), { timeout: 20_000 }).toBe(0);
   } catch (error) {
-    const facts = await Promise.all(pages.map(page => page.evaluate(() => {
-      const debug = (window as any).__VRATA_DEBUG__;
-      return { scene: debug?.sceneBundleState, connected: debug?.roomStateConnected, state: debug?.screenShareState,
-        share: debug?.screenShare, issue: debug?.issueCode,
-        videos: [...document.querySelectorAll("video")].map(video => ({ width: video.videoWidth, height: video.videoHeight, ready: video.readyState,
-          paused: video.paused, frames: video.getVideoPlaybackQuality().totalVideoFrames })) };
-    }).catch(() => ({ unavailable: true }))));
-    console.warn("native_tool_capture_failed", JSON.stringify(facts)); throw error;
-  } finally { await meeting.close(); }
+    failed = true;
+    console.warn("native_tool_capture_failed"); throw error;
+  } finally {
+    await finalizeFunctionalDiagnostics(failed, async () => {
+      await writeFunctionalDiagnostics("F7-before-cleanup", {
+        outcome: failed ? "failed" : "passed",
+        clients: await Promise.all(diagnostics.map(value => failed ? value.snapshot() : value.collectedTransportSnapshot())),
+        // Success needs no extra capture/evaluate: its original assertions stand.
+        ...(failed ? { capture: await Promise.all(pages.map(page => page.evaluate(() => {
+          const c = (window as any).__nativeToolCapture;
+          const errorName = (value: any) => ["NotAllowedError", "NotFoundError", "NotReadableError", "AbortError", "NotSupportedError", "Error", "TypeError"].includes(value?.name) ? value.name : null;
+          return c ? { calls: c.calls, active: c.active, requestedAt: c.requestedAt, resolvedAt: c.resolvedAt, failedAt: c.failedAt,
+            errorName: errorName(c.error), originalErrors: c.originalErrors.slice(0, 16).map((value: any) => ({ atMs: value.atMs, name: errorName(value) })),
+            tracks: c.stream?.getTracks().slice(0, 4).map((track: MediaStreamTrack) => ({ kind: track.kind, ready: track.readyState })) } : null;
+        }).catch(() => ({ unavailable: true })))) } : {})
+      });
+    }, async () => { await Promise.allSettled(diagnostics.map(value => value.close())); await meeting.close(); });
+  }
 }
 
 export async function unsupportedCaptureAttemptScenario(input: Input) {

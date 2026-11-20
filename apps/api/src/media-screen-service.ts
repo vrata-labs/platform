@@ -1,7 +1,27 @@
 import { RoomServiceClient } from "livekit-server-sdk";
 import type { RoomRecord, RoomSessionControlState, Storage } from "./storage-contracts.js";
 import { getLivekitCredentials, getMediaTokenConfigError } from "./livekit-config.js";
-import { createMediaScreenReconciler, MEDIA_RECONCILIATION_VERSION, type MediaScreenAuthority, type MediaScreenReconciliationStatus } from "./media-screen-reconciler.js";
+import { createMediaScreenReconciler, MEDIA_RECONCILIATION_VERSION, type ExecutorAuthorityAnswer, type MediaScreenAuthority, type MediaScreenReconciliationStatus } from "./media-screen-reconciler.js";
+
+/** Room-state's classified binding for one executor instance. Any transport or format problem is unknown (null),
+ * never a denial: only room-state's own 409 reason can retire an instance. */
+export async function readExecutorAuthority(env: NodeJS.ProcessEnv, headers: Record<string, string>, roomId: string,
+  executor: { objectId: string; instanceId: string }, fetchImpl: typeof fetch = fetch): Promise<ExecutorAuthorityAnswer | null> {
+  const baseUrl = env.ROOM_STATE_INTERNAL_URL?.trim();
+  if (!baseUrl) return null;
+  const sessionId = `remote-browser:${executor.objectId}`;
+  try {
+    const response = await fetchImpl(new URL("/api/internal/remote-browser/bindings/verify", baseUrl), {
+      method: "POST", headers, signal: AbortSignal.timeout(2000),
+      body: JSON.stringify({ roomId, objectId: executor.objectId, executorSessionId: sessionId,
+        executorInstanceId: executor.instanceId, mediaParticipantId: executor.instanceId })
+    });
+    if (response.status !== 200 && response.status !== 409) return null;
+    const body = await response.json() as { reason?: unknown };
+    if (typeof body.reason !== "string" || (response.status === 200) !== (body.reason === "authorized")) return null;
+    return { reason: body.reason };
+  } catch { return null; }
+}
 
 /** Both room lifecycle and its publisher identities come from one read-only storage snapshot. */
 export async function readMediaScreenAuthority(storage: Storage, roomId: string, participantIds?: readonly string[]): Promise<MediaScreenAuthority> {
@@ -16,6 +36,8 @@ export async function readMediaScreenAuthority(storage: Storage, roomId: string,
 export function createMediaScreenService(storagePromise: Promise<Storage>, options: {
   env?: NodeJS.ProcessEnv;
   event?: Parameters<typeof createMediaScreenReconciler>[0]["event"];
+  /** Internal service headers for room-state; without them executor instances are never retired. */
+  internalHeaders?: () => Record<string, string>;
 } = {}) {
   const env = options.env ?? process.env;
   let native: RoomServiceClient | null = null;
@@ -38,6 +60,8 @@ export function createMediaScreenService(storagePromise: Promise<Storage>, optio
       return { ...boundary, prefix: env.LIVEKIT_ROOM_PREFIX ?? "vrata-", native };
     },
     authority: async (roomId, participantIds) => readMediaScreenAuthority(await storagePromise, roomId, participantIds),
+    ...(options.internalHeaders ? { executorAuthority: (roomId: string, executor: { objectId: string; instanceId: string }) =>
+      readExecutorAuthority(env, options.internalHeaders!(), roomId, executor) } : {}),
     event: options.event
   });
   return {

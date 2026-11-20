@@ -1,7 +1,7 @@
 import { validateRoomPluginConfig, type RoomPluginArtifact, type RoomPluginCapability, type RoomPluginConfig, type RoomPluginEvent,
   type RoomPluginRoomSnapshot } from "@vrata/room-plugin-sdk";
 import type { IdentityRequirementReason } from "@vrata/shared-types";
-import { createRoomPluginHttp, RoomPluginHttpError } from "./http.js";
+import { createRoomPluginHttp, RoomPluginHttpError, ROOM_PLUGIN_SNAPSHOT_TIMEOUT_MS } from "./http.js";
 import { verifyRoomPluginArtifact } from "./artifact-verify.js";
 import { RoomPluginBindingLease } from "./lease.js";
 import { createRoomPluginBroker, type RoomPluginSeatingPort } from "./broker.js";
@@ -34,16 +34,23 @@ export interface RoomPluginCoreContext {
   connection: "connected" | "reconnecting" | "disconnected";
 }
 interface Entry {
-  binding: RoomPluginRuntimeBinding; key: string; generation: number;
+  binding: RoomPluginRuntimeBinding; key: string; generation: number; ordinal: number;
   state: RoomPluginStatusRow["state"]; name: string | null; text: string;
   abort: AbortController; instance?: RoomPluginInstance; starting: boolean; starts: number[];
   connection?: RoomPluginCoreContext["connection"];
   readySent?: boolean;
+  sentSeating?: string;
+  /** This preparation outlived its lease while a renewal was in flight, so its guest may have seen a lease denial. */
+  leaseGap?: boolean;
 }
 const seatingCapable = (binding: RoomPluginRuntimeBinding) => binding.approvedCapabilities.some(capability => capability.startsWith("seating."));
 const ownerOf = (entry: Entry) => `${entry.binding.bindingId}:${entry.generation}`;
 const key = (binding: RoomPluginRuntimeBinding) => JSON.stringify([binding.bindingId, binding.generation, binding.bindingRevision, binding.artifactSha256]);
 type Failure = RoomPluginRuntimeFailure | SandboxFailure;
+type StopReason = "session-stop" | "controller-restart" | "inactive-context" | "unsupported-protocol" | "framework-failure";
+type PauseReason = "availability-changed" | "lease-expired" | "refresh-unavailable" | "snapshot-rejected" | "refresh-failed";
+type RetirementReason = StopReason | PauseReason | "binding-removed" | "binding-replaced" | "instance-closed"
+  | "start-budget" | "start-failed" | "connection-event-failed" | "seating-event-failed";
 
 /** Native room owner. No await from this controller belongs in room boot, a
  * frame, or a room-state callback. Only its bounded status broker commits effects. */
@@ -58,7 +65,7 @@ export class RoomPluginController {
   private active = false;
   private timer: unknown;
   private expiryTimer: unknown;
-  private request?: { epoch: number; abort: AbortController };
+  private request?: { epoch: number; abort: AbortController; startedAtMs: number };
   private nextRefreshAtMs = 0;
   private hintNotBeforeMs = -Infinity;
   private deniedToken: string | null = null;
@@ -72,6 +79,12 @@ export class RoomPluginController {
   private frameworkFailed = false;
   private failedEntries = new Map<string, { key: string; code: Failure }>();
   private seatingTimer: unknown;
+  private seatingForced = false;
+  private nextEntryOrdinal = 0;
+  private readonly retirements: Array<{ atMs: number; reason: RetirementReason; ordinal: number; generation: number;
+    bindingGeneration: number; bindingRevision: number; state: Entry["state"]; instanceState: string | null; busy: boolean;
+    starting: boolean; fetchPending: boolean; leaseValid: boolean; remainingLeaseMs: number; failure: Failure | null }> = [];
+  private readonly readyDeliveries: Array<{ sentAtMs: number; completedAtMs: number | null; failedAtMs: number | null; seating: boolean; arrivalAllowed: boolean }> = [];
   // The trusted QuickJS module can miss its load deadline on a busy device; it gets one more
   // attempt (reusing the running compile) before plugins are stopped for this page.
   private wasmLoadRetries = 0;
@@ -95,26 +108,26 @@ export class RoomPluginController {
   }
 
   start(protocol: 2 | null): void {
-    this.stop();
+    this.stop("controller-restart");
     if (protocol !== 2) { this.state = "unsupported"; return; }
     if (this.frameworkFailed || this.renderFailed) { this.state = "failed"; return; }
     this.active = true; this.state = "empty"; this.kick();
   }
-  stop(): void {
+  stop(reason: StopReason = "session-stop"): void {
     this.active = false; this.epoch++; this.request?.abort.abort(); this.request = undefined;
     if (this.timer !== undefined) this.timers.cancel(this.timer);
     if (this.expiryTimer !== undefined) this.timers.cancel(this.expiryTimer);
     if (this.seatingTimer !== undefined) this.timers.cancel(this.seatingTimer);
-    this.timer = this.expiryTimer = this.seatingTimer = undefined; this.lease.resetSession();
-    for (const entry of this.entries.values()) this.retire(entry);
+    this.timer = this.expiryTimer = this.seatingTimer = undefined; this.seatingForced = false; this.lease.resetSession();
+    for (const entry of this.entries.values()) this.retire(entry, reason);
     this.entries.clear(); this.cache.clear(); this.deniedToken = null; this.state = "off"; this.render();
   }
   availabilityChanged(): void {
     if (!this.active) return;
     try {
       const context = this.input.context();
-      if (!context.active) { this.stop(); return; }
-      this.epoch++; this.request?.abort.abort(); this.request = undefined; this.lease.invalidate(); this.pauseEntries();
+      if (!context.active) { this.stop("inactive-context"); return; }
+      this.epoch++; this.request?.abort.abort(); this.request = undefined; this.lease.invalidate(); this.pauseEntries("availability-changed");
       this.state = "suspended"; this.render(); this.kick();
     } catch { this.failFramework("host-unavailable"); }
   }
@@ -128,12 +141,16 @@ export class RoomPluginController {
     if (this.active) void this.refresh().catch(() => this.failFramework("host-unavailable"));
   }
   /** Occupancy, anchors or readiness changed. room.ready is sent once per instance; later
-   * changes reach seating-capable instances as coalesced snapshots. */
-  seatingChanged(): void {
-    if (!this.active || this.seatingTimer !== undefined) return;
+   * changes reach seating-capable instances as coalesced snapshots. A correlated
+   * claim rejection forces delivery even when occupancy did not change. */
+  seatingChanged(force = false): void {
+    if (!this.active) return;
+    this.seatingForced ||= force;
+    if (this.seatingTimer !== undefined) return;
     this.seatingTimer = this.timers.schedule(() => {
       this.seatingTimer = undefined;
-      try { for (const entry of this.entries.values()) this.notifySeating(entry, true); }
+      const forced = this.seatingForced; this.seatingForced = false;
+      try { for (const entry of this.entries.values()) this.notifySeating(entry, true, forced); }
       catch { this.failFramework("host-unavailable"); }
     }, 100);
   }
@@ -150,7 +167,8 @@ export class RoomPluginController {
       instances: this.entries.size, running: [...this.entries.values()].filter(entry => entry.state === "running").length,
       failed: [...this.entries.values()].filter(entry => entry.state === "failed").length,
       remainingLeaseMs: this.lease.diagnostics().remainingMs, lastFailure: this.lastFailure, lastInstanceFailure: this.lastInstanceFailure,
-      lastHostPhase: this.lastHostPhase, hostFailed: this.hostFailed, startupTiming: this.startupTiming };
+      lastHostPhase: this.lastHostPhase, hostFailed: this.hostFailed, startupTiming: this.startupTiming,
+      readyDeliveries: this.readyDeliveries.map(row => ({ ...row })), retirements: this.retirements.map(row => ({ ...row })) };
   }
 
   private available(): boolean {
@@ -169,7 +187,10 @@ export class RoomPluginController {
       this.expiryTimer = undefined;
       if (!this.active) return;
       if (this.lease.diagnostics().remainingMs > 0) { this.scheduleExpiry(); return; }
-      this.pauseEntries(); this.state = "suspended"; this.render();
+      // The answer of a renewal inside its own timeout may already be on its way through a busy main
+      // thread. Its end decides the preparations kept here; every effect stays fenced by the lease.
+      const renewing = Boolean(this.request && this.clock() - this.request.startedAtMs < ROOM_PLUGIN_SNAPSHOT_TIMEOUT_MS);
+      this.pauseEntries("lease-expired", renewing); this.state = "suspended"; this.render();
     }, remaining);
   }
 
@@ -178,20 +199,20 @@ export class RoomPluginController {
     this.nextRefreshAtMs = this.clock() + 2000;
     try {
       const context = this.input.context();
-      if (!context.active) { this.stop(); return; }
+      if (!context.active) { this.stop("inactive-context"); return; }
       const proof = this.input.proof();
       if (!context.online || !context.visible || !proof || proof.token === this.deniedToken) {
-        this.lease.invalidate(); this.pauseEntries(); this.state = "suspended"; this.render(); return;
+        this.lease.invalidate(); this.pauseEntries("refresh-unavailable"); this.state = "suspended"; this.render(); return;
       }
       const ticket = this.lease.beginRequest(proof); if (!ticket) return;
-      const request = { epoch: this.epoch, abort: new AbortController() }; this.request = request;
+      const request = { epoch: this.epoch, abort: new AbortController(), startedAtMs: ticket.startedAtMs }; this.request = request;
       try {
         const snapshot = await this.http.snapshot(proof, request.abort.signal);
         if (!this.active || request.epoch !== this.epoch || request.abort.signal.aborted) return;
         const before = this.lease.diagnostics().epoch;
         if (!this.lease.accept(ticket, snapshot)) {
           if (this.lease.diagnostics().epoch !== before) this.failFramework("invalid-runtime-config");
-          else { this.pauseEntries(); this.state = "suspended"; this.render(); }
+          else { this.pauseEntries("snapshot-rejected"); this.state = "suspended"; this.render(); }
           return;
         }
         this.deniedToken = null;
@@ -199,13 +220,13 @@ export class RoomPluginController {
         for (const id of this.failedEntries.keys()) if (!next.has(id)) this.failedEntries.delete(id);
         for (const [id, entry] of this.entries) {
           const binding = next.get(id);
-          if (!binding || key(binding) !== entry.key) { this.entries.delete(id); this.retire(entry); }
+          if (!binding || key(binding) !== entry.key) { this.entries.delete(id); this.retire(entry, binding ? "binding-replaced" : "binding-removed"); }
         }
         for (const binding of snapshot.bindings) {
           let entry = this.entries.get(binding.bindingId);
           if (!entry) {
             const failed = this.failedEntries.get(binding.bindingId);
-            entry = { binding, key: key(binding), generation: 0, state: failed?.key === key(binding) || this.hostFailed ? "failed" : "loading",
+            entry = { binding, key: key(binding), generation: 0, ordinal: ++this.nextEntryOrdinal, state: failed?.key === key(binding) || this.hostFailed ? "failed" : "loading",
               name: null, text: "", abort: new AbortController(), starting: false, starts: [] };
             if (failed && failed.key !== entry.key) this.failedEntries.delete(binding.bindingId);
             this.entries.set(binding.bindingId, entry);
@@ -214,23 +235,23 @@ export class RoomPluginController {
           if (!this.available()) continue;
           if (entry.state === "failed") continue;
           if (entry.instance && (entry.instance.state === "failed" || entry.instance.state === "disposed")) {
-            this.failEntry(entry, entry.instance.failure ?? "instance_closed"); continue;
+            this.failEntry(entry, entry.instance.failure ?? "instance_closed", "instance-closed"); continue;
           }
           if (entry.instance && entry.instance.state === "ready") { entry.state = "running"; this.notifyConnection(entry); }
-          else if (!entry.starting && !this.hostFailed) void this.startEntry(entry).catch(() => this.failEntry(entry!, "host-unavailable"));
+          else if (!entry.starting && !this.hostFailed) void this.startEntry(entry).catch(() => this.failEntry(entry!, "host-unavailable", "start-failed"));
         }
         if (!this.hostFailed && [...this.entries.values()].every(entry => entry.state !== "failed")) this.lastFailure = null;
         this.state = this.entries.size ? "running" : "empty"; this.scheduleExpiry(); this.render();
       } catch (error) {
         if (!this.active || request.epoch !== this.epoch || request.abort.signal.aborted) return;
-        if (error instanceof RoomPluginHttpError && error.disposition === "unsupported") { this.stop(); this.state = "unsupported"; return; }
+        if (error instanceof RoomPluginHttpError && error.disposition === "unsupported") { this.stop("unsupported-protocol"); this.state = "unsupported"; return; }
         if (error instanceof RoomPluginRuntimeError && error.code === "invalid-runtime-config") { this.failFramework(error.code); return; }
         if (error instanceof RoomPluginHttpError && error.disposition === "unavailable" && this.lease.diagnostics().remainingMs > 0) {
           // A missed refresh never renews authority, but it also is not proof of
           // revocation. Existing permits still expire at their original deadline.
           this.lastFailure = "network-unavailable"; return;
         }
-        this.lease.invalidate(); this.pauseEntries(); this.state = "suspended"; this.lastFailure = "network-unavailable"; this.render();
+        this.lease.invalidate(); this.pauseEntries("refresh-failed"); this.state = "suspended"; this.lastFailure = "network-unavailable"; this.render();
         if (error instanceof RoomPluginHttpError && error.disposition === "denied" && this.input.proof()?.token === proof.token) {
           this.deniedToken = proof.token;
           if (error.identityReason) { try { this.input.identityRequired?.(error.identityReason); } catch { /* Core gate owns its own failure recovery. */ } }
@@ -243,10 +264,10 @@ export class RoomPluginController {
 
   private async startEntry(entry: Entry): Promise<void> {
     const now = this.clock(); entry.starts = entry.starts.filter(time => now - time < 600_000);
-    if (entry.starts.length >= 3) { this.failEntry(entry, "host-unavailable"); return; }
+    if (entry.starts.length >= 3) { this.failEntry(entry, "host-unavailable", "start-budget"); return; }
     entry.starts.push(now); entry.starting = true; entry.state = "loading"; entry.abort = new AbortController();
     const generation = ++entry.generation, signal = entry.abort.signal;
-    entry.readySent = false;
+    entry.readySent = false; entry.leaseGap = false;
     const current = () => this.active && this.entries.get(entry.binding.bindingId) === entry && entry.generation === generation && !signal.aborted;
     try {
       let artifact = this.cache.get(entry.binding.artifactSha256), config: RoomPluginConfig;
@@ -276,7 +297,12 @@ export class RoomPluginController {
       entry.instance = instance; entry.state = "running"; this.notifyConnection(entry); this.notifySeating(entry, false); this.render();
     } catch (error) {
       if (!current()) return;
-      if (error instanceof RoomPluginHttpError || error instanceof RoomPluginRuntimeError && error.code === "lease-expired") {
+      if (entry.leaseGap && !entry.instance) {
+        // As with a preparation interrupted at expiry, the failure may come from the denial itself and is not sticky.
+        // An installed instance is past that denial: its host fault takes the ordinary failure path below.
+        this.retireSeating(entry, "lease-expired", error instanceof SandboxError ? error.code : error instanceof RoomPluginRuntimeError ? error.code : "host-unavailable");
+        entry.state = "suspended"; entry.abort.abort(); this.render();
+      } else if (error instanceof RoomPluginHttpError || error instanceof RoomPluginRuntimeError && error.code === "lease-expired") {
         entry.state = "suspended"; entry.abort.abort(); this.render();
       } else {
         const code: Failure = error instanceof SandboxError ? error.code : error instanceof RoomPluginRuntimeError ? error.code : "host-unavailable";
@@ -288,7 +314,7 @@ export class RoomPluginController {
           entry.state = "loading"; entry.abort.abort(); this.render(); return;
         }
         if (["wasm_load_failed", "worker_boot_timeout", "host-unavailable", "kernel-transport-timeout", "kernel-unsupported", "kernel-protocol"].includes(code)) this.hostFailed = true;
-        this.failEntry(entry, code);
+        this.failEntry(entry, code, "start-failed");
       }
     } finally { if (entry.generation === generation) entry.starting = false; }
   }
@@ -301,10 +327,10 @@ export class RoomPluginController {
     const generation = entry.generation;
     void entry.instance.event({ sdkApiVersion: 1, type: "room.connection", state }).catch(error => {
       if (this.entries.get(entry.binding.bindingId) !== entry || generation !== entry.generation || entry.state === "suspended") return;
-      this.failEntry(entry, error instanceof SandboxError ? error.code : "host-unavailable");
+      this.failEntry(entry, error instanceof SandboxError ? error.code : "host-unavailable", "connection-event-failed");
     });
   }
-  private notifySeating(entry: Entry, changed: boolean): void {
+  private notifySeating(entry: Entry, changed: boolean, forced = false): void {
     const seating = this.input.seating;
     if (!seating || !this.available() || entry.state !== "running" || !entry.instance) return;
     let event: RoomPluginEvent;
@@ -316,24 +342,40 @@ export class RoomPluginController {
     } else if (changed && seatingCapable(entry.binding)) {
       event = { sdkApiVersion: 1, type: "seating.snapshot", snapshot: seating.snapshot(ownerOf(entry), true) };
     } else return;
+    const sent = JSON.stringify(event.snapshot);
+    if (event.type === "seating.snapshot" && sent === entry.sentSeating && !forced) return;
+    entry.sentSeating = sent;
+    const delivery = event.type === "room.ready" && this.readyDeliveries.length < 8
+      ? { sentAtMs: this.clock(), completedAtMs: null as number | null, failedAtMs: null as number | null,
+        seating: seatingCapable(entry.binding), arrivalAllowed: event.snapshot.arrivalAllowed } : null;
+    if (delivery) this.readyDeliveries.push(delivery);
     const generation = entry.generation;
-    void entry.instance.event(event).catch(error => {
+    void entry.instance.event(event).then(() => {
+      if (delivery) delivery.completedAtMs = this.clock();
+    }, error => {
+      if (delivery) delivery.failedAtMs = this.clock();
       if (this.entries.get(entry.binding.bindingId) !== entry || generation !== entry.generation || entry.state === "suspended") return;
-      this.failEntry(entry, error instanceof SandboxError ? error.code : "host-unavailable");
+      this.failEntry(entry, error instanceof SandboxError ? error.code : "host-unavailable", "seating-event-failed");
     });
   }
-  private pauseEntries(): void {
+  private pauseEntries(reason: PauseReason, renewing = false): void {
     for (const entry of this.entries.values()) {
       if (entry.state === "failed") continue;
+      if (renewing && entry.starting && !entry.instance) {
+        // The preparation and its spent attempt wait for the renewal; a pending claim does not.
+        entry.leaseGap = true;
+        try { this.input.seating?.retire(ownerOf(entry)); } catch { /* The core seat barrier owns recovery. */ }
+        continue;
+      }
       if (!entry.instance || entry.instance.busy || entry.instance.state !== "ready") {
-        this.retireSeating(entry);
+        this.retireSeating(entry, reason);
         entry.generation++; entry.abort.abort(); entry.instance?.terminate(); entry.instance = undefined; entry.starting = false;
       }
       entry.state = "suspended";
     }
   }
-  private retire(entry: Entry): void {
-    this.retireSeating(entry);
+  private retire(entry: Entry, reason: RetirementReason): void {
+    this.retireSeating(entry, reason);
     entry.generation++; entry.abort.abort(); const instance = entry.instance; entry.instance = undefined;
     if (!instance) return;
     // Native effects are fenced before guest disposal; busy lifecycles cannot
@@ -342,11 +384,18 @@ export class RoomPluginController {
     else instance.terminate();
   }
   /** A pending automatic claim of a retired instance is cancelled; a confirmed seat stays the user's. */
-  private retireSeating(entry: Entry): void {
+  private retireSeating(entry: Entry, reason: RetirementReason, failure: Failure | null = null): void {
+    // Preserve the first bounded branch facts across later healthy instances. No
+    // binding IDs, source, tokens, command IDs or URLs belong in this history.
+    if (this.retirements.length < 32) this.retirements.push({ atMs: this.clock(), reason, ordinal: entry.ordinal,
+      generation: entry.generation, bindingGeneration: entry.binding.generation, bindingRevision: entry.binding.bindingRevision,
+      state: entry.state, instanceState: entry.instance?.state ?? null, busy: entry.instance?.busy ?? false,
+      starting: entry.starting, fetchPending: Boolean(this.request), leaseValid: Boolean(this.lease.permit(entry.binding)),
+      remainingLeaseMs: this.lease.diagnostics().remainingMs, failure });
     try { this.input.seating?.retire(ownerOf(entry)); } catch { /* The core seat barrier owns recovery. */ }
   }
-  private failEntry(entry: Entry, code: Failure): void {
-    this.retireSeating(entry);
+  private failEntry(entry: Entry, code: Failure, reason: RetirementReason): void {
+    this.retireSeating(entry, reason, code);
     entry.state = "failed"; entry.abort.abort(); entry.instance?.terminate(); entry.instance = undefined; entry.starting = false;
     if (this.entries.get(entry.binding.bindingId) === entry) this.failedEntries.set(entry.binding.bindingId, { key: entry.key, code });
     this.lastFailure = code; this.lastInstanceFailure = code; this.render();
@@ -355,7 +404,7 @@ export class RoomPluginController {
     try { return this.input.seating?.supported() === true; } catch { return false; }
   }
   private failFramework(code: Failure): void {
-    this.frameworkFailed = true; this.stop(); this.state = "failed"; this.lastFailure = code;
+    this.frameworkFailed = true; this.stop("framework-failure"); this.state = "failed"; this.lastFailure = code;
     if (!this.renderFailed) this.render();
   }
   private render(): boolean {

@@ -16,11 +16,13 @@ const { RoomServiceClient, AccessToken } = requireApi("livekit-server-sdk");
 async function faultBridge(upstream: string) {
   let failUpdates = false, loseNextAck = false, deniedUpdates = 0, lostAcks = 0;
   let failRemovals = false, loseNextRemovalAck = false, deniedRemovals = 0, lostRemovalAcks = 0;
+  let failDeletions = false, deniedDeletions = 0;
   const server = createServer((incoming, outgoing) => {
     const update = incoming.url === "/twirp/livekit.RoomService/UpdateParticipant";
     const removal = incoming.url === "/twirp/livekit.RoomService/RemoveParticipant";
-    if (update && failUpdates || removal && failRemovals) {
-      if (removal) deniedRemovals++; else deniedUpdates++;
+    const deletion = incoming.url === "/twirp/livekit.RoomService/DeleteRoom";
+    if (update && failUpdates || removal && failRemovals || deletion && failDeletions) {
+      if (deletion) deniedDeletions++; else if (removal) deniedRemovals++; else deniedUpdates++;
       incoming.resume(); outgoing.writeHead(503, { "content-type": "application/json" });
       outgoing.end(JSON.stringify({ code: "unavailable", msg: "owned_fixture_update_unavailable" })); return;
     }
@@ -42,11 +44,13 @@ async function faultBridge(upstream: string) {
   return { url: `ws://127.0.0.1:${(server.address() as { port: number }).port}`,
     failUpdates: (value: boolean) => { failUpdates = value; }, loseNextAck: () => { loseNextAck = true; },
     failRemovals: (value: boolean) => { failRemovals = value; }, loseNextRemovalAck: () => { loseNextRemovalAck = true; },
-    counts: () => ({ deniedUpdates, lostAcks, deniedRemovals, lostRemovalAcks }),
+    failDeletions: (value: boolean) => { failDeletions = value; },
+    counts: () => ({ deniedUpdates, lostAcks, deniedRemovals, lostRemovalAcks, deniedDeletions }),
     close: async () => { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); } };
 }
 
-async function activateOwnedFixture(fixture: Awaited<ReturnType<typeof startReferenceTemplateFixture>>, mediaCodec: 2 | 3 = 2) {
+async function activateOwnedFixture(fixture: Awaited<ReturnType<typeof startReferenceTemplateFixture>>, mediaCodec: 2 | 3 = 2,
+  rotate?: "retire" | "disown") {
   expect(fixture.schema).toMatch(/^template_e2e_[0-9a-f]{32}$/);
   const { Pool } = requireApi("pg"), pool = new Pool({ connectionString: process.env.VRATA_TEST_POSTGRES_URL, options: `-c search_path=${fixture.schema},public` });
   try {
@@ -56,6 +60,7 @@ async function activateOwnedFixture(fixture: Awaited<ReturnType<typeof startRefe
     const storage = new PostgresStorage(pool);
     await storage.identityProtocol.raise(2);
     if (mediaCodec === 3) expect(await storage.identityProtocol.raiseMediaCodec(3)).toBe(3);
+    if (rotate) expect((await storage.identityProtocol.rotateMediaNamespace(rotate)).previous).toBe(rotate);
   } finally { await pool.end(); }
 }
 
@@ -162,7 +167,7 @@ for (const version of ["1.13.9"] as const) test(`server media reconciliation ${v
     bridge.failUpdates(true);
     const revoke = await request.post(`${origin}/api/rooms/${roomId}/presenters/${former.participantId}/revoke`, { headers }); expect(revoke.status()).toBe(200);
     const committed = await revoke.json(); expect(committed.mediaScreenReconciliation.state).toBe("pending");
-    expect(committed.mediaScreenReconciliation.enforcementVersion).toBe(4);
+    expect(committed.mediaScreenReconciliation.enforcementVersion).toBe(6);
     await expect.poll(() => bridge.counts().deniedUpdates, { timeout: 10_000 }).toBeGreaterThan(0);
     const status = async () => { const response = await request.get(`${origin}/api/rooms/${roomId}/session-control`, { headers }); expect(response.status()).toBe(200); return (await response.json()).mediaScreenReconciliation; };
     expect((await status()).state).not.toBe("observed");
@@ -201,7 +206,7 @@ for (const version of ["1.13.9"] as const) test(`server media reconciliation ${v
     const hostMicSid = (await service.getParticipant(hostMedia.room, hostMedia.identity)).tracks.find((track: any) => track.source === 2).sid;
     bridge.failRemovals(true);
     const remove = await request.post(`${origin}/api/rooms/${roomId}/participants/${former.participantId}/remove`, { headers }); expect(remove.status()).toBe(200);
-    const removed = await remove.json(); expect(removed.mediaScreenReconciliation.state).toBe("pending"); expect(removed.mediaScreenReconciliation.enforcementVersion).toBe(4);
+    const removed = await remove.json(); expect(removed.mediaScreenReconciliation.state).toBe("pending"); expect(removed.mediaScreenReconciliation.enforcementVersion).toBe(6);
     await expect.poll(() => bridge.counts().deniedRemovals, { timeout: 10_000 }).toBeGreaterThan(0);
     expect(await remainingTargets()).toBe(3); expect((await status()).state).not.toBe("observed");
     await expect.poll(() => signal(receiver, microphoneSid), { timeout: 10_000 }).toBe(true);
@@ -248,34 +253,81 @@ for (const version of ["1.13.9"] as const) test(`server media reconciliation ${v
   }
 });
 
+/** Opens a remote-browser object through the real room-state socket and returns its current executor instance,
+ * the media identity the remote-browser service is granted. The socket stays open until close. */
+async function openRemoteBrowserInstance(stateOrigin: string, roomId: string, actor: { token: string; participantId: string }) {
+  const { connectRoomState, sendSurfaceCreateObjectCommand, sendSurfacePatchObjectStateCommand } = await import(pathToFileURL(resolve("apps/runtime-web/dist/room-state-client.js")).href);
+  let client: any, timer: ReturnType<typeof setTimeout> | undefined;
+  const instance = await new Promise<string>((done, reject) => {
+    timer = setTimeout(() => reject(new Error("fixture_remote_browser_timeout")), 10_000);
+    let objectId: string | null = null, snapshot: any = null, opened = false;
+    const step = () => {
+      const object = objectId ? snapshot?.mediaObjects.objects[objectId] : undefined;
+      if (!object) return;
+      if (typeof object.state?.executorInstanceId === "string") return done(object.state.executorInstanceId);
+      if (opened) return;
+      opened = true;
+      sendSurfacePatchObjectStateCommand(client, { commandId: randomUUID(), surfaceId: "debug-main", objectId: objectId!, expectedRevision: object.revision,
+        patch: { type: "open-url", url: "https://example.com/", inputEventId: randomUUID() } });
+    };
+    client = connectRoomState(stateOrigin.replace("http:", "ws:"), roomId, actor.participantId, {
+      onOpen: () => sendSurfaceCreateObjectCommand(client, { commandId: randomUUID(), surfaceId: "debug-main", objectType: "remote-browser", probeOnly: false }),
+      onSurfaceCommandResult: (result: any) => {
+        if (!result.accepted) return reject(new Error(`fixture_remote_browser_denied:${result.blockedReason}`));
+        objectId ??= result.objectId ?? null; step();
+      },
+      onRoomState: (value: any) => { snapshot = value; step(); },
+      onAccessDenied: (result: any) => reject(new Error(`fixture_remote_browser_denied:${result.permission}:${result.blockedReason}`)),
+      onClose: () => reject(new Error("fixture_remote_browser_socket_closed")),
+      onError: () => reject(new Error("fixture_remote_browser_socket_failed"))
+    }, actor.token);
+  }).finally(() => clearTimeout(timer));
+  return { instance, close: () => client?.close() };
+}
+
 for (const version of ["1.13.9"] as const) {
   for (const action of ["disable", "delete"] as const) test(`server media lifecycle ${version}: ${action} retires live microphone and listening connections`, async ({ browser, request }) => {
     test.setTimeout(180_000);
     const native = await startLocalLiveKitFixture(version);
     let fixture: Awaited<ReturnType<typeof startReferenceTemplateFixture>> | undefined;
-    const pages: Page[] = [];
+    const pages: Page[] = [], closers: Array<() => void> = [];
     try {
       expect(!!process.env.VRATA_TEST_POSTGRES_URL).toBe(true);
+      // The object stays with room-state alone: no remote-browser service of the shared stack starts a session for it.
       fixture = await startReferenceTemplateFixture(process.env.VRATA_TEST_POSTGRES_URL!, { livekitUrl: native.url, devRoleQuery: false,
-        stateTokenSecret: "owned-terminal-media-state-secret-32-bytes" });
+        stateTokenSecret: "owned-terminal-media-state-secret-32-bytes", extraEnv: () => ({ REMOTE_BROWSER_INTERNAL_URL: "" }) });
       const origin = fixture.origin, headers = { "x-vrata-admin-token": fixture.adminToken };
       const created = await request.post(`${origin}/api/rooms`, { headers, data: { tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Owned metadata lifecycle" } });
       expect(created.status()).toBe(201); const roomId = (await created.json()).roomId;
-      await activateOwnedFixture(fixture);
+      async function admit(role: "member" | "host") {
+        const invitation = await request.post(`${origin}/api/rooms/${roomId}/invites`, { headers, data: { role, expiresInSeconds: 600 } }); expect(invitation.status()).toBe(201);
+        const admitted = await request.post(`${origin}/api/tokens/state`, { data: { roomId, identityProtocolVersion: 2, inviteToken: (await invitation.json()).inviteToken, displayName: `Owned ${role}` } });
+        expect(admitted.status()).toBe(200); return await admitted.json() as { token: string; participantId: string };
+      }
       async function admittedMicrophone() {
-        const invitation = await request.post(`${origin}/api/rooms/${roomId}/invites`, { headers, data: { role: "member", expiresInSeconds: 600 } }); expect(invitation.status()).toBe(201);
-        const admitted = await request.post(`${origin}/api/tokens/state`, { data: { roomId, identityProtocolVersion: 2, inviteToken: (await invitation.json()).inviteToken, displayName: "Owned microphone" } });
-        expect(admitted.status()).toBe(200); const actor = await admitted.json();
+        const actor = await admit("member");
         const response = await request.post(`${origin}/api/tokens/media`, { headers: { authorization: `Bearer ${actor.token}` },
           data: { roomId, participantId: actor.participantId, canPublishAudio: true, canPublishVideo: false } });
         expect(response.status()).toBe(200); const credential = await response.json();
         const claims = JSON.parse(Buffer.from(credential.token.split(".")[1], "base64url").toString("utf8"));
         return { token: credential.token as string, identity: claims.sub as string, room: claims.video.room as string };
       }
+      await activateOwnedFixture(fixture);
+      // The Host opens a remote-browser object over the real room-state socket; its current instance is the
+      // executor identity, which the reconciler asks room-state about before keeping it.
+      const host = await admit("host");
+      expect((await request.put(`${origin}/api/rooms/${roomId}/presence/${host.participantId}`, { headers: { authorization: `Bearer ${host.token}` },
+        data: { participantId: host.participantId, displayName: "Owned host", mode: "desktop", activeMedia: { audio: false, screenShare: false } } })).status()).toBe(200);
+      const control = await request.get(`${origin}/api/rooms/${roomId}/session-control`, { headers }); expect(control.status()).toBe(200);
+      if ((await control.json()).state.hostParticipantId !== host.participantId) {
+        expect((await request.post(`${origin}/api/rooms/${roomId}/host/transfer`, { headers, data: { participantId: host.participantId } })).status()).toBe(200);
+      }
+      const remoteBrowser = await openRemoteBrowserInstance(fixture.stateOrigin, roomId, host);
+      closers.push(remoteBrowser.close);
       const publisher = await admittedMicrophone(), listener = await admittedMicrophone(), page = await browser.newPage(), receiver = await browser.newPage(); pages.push(page, receiver);
       const service = new RoomServiceClient(native.httpUrl, "devkey", "secret");
       // A remote-browser executor publishing into the same native room, as the API grants it.
-      const executorGrant = new AccessToken("devkey", "secret", { identity: "remote-browser:lifecycle-object", ttl: "600s" });
+      const executorGrant = new AccessToken("devkey", "secret", { identity: remoteBrowser.instance, ttl: "600s" });
       executorGrant.addGrant({ room: publisher.room, roomJoin: true, canPublish: true, canSubscribe: false });
       const executor = await browser.newPage(); pages.push(executor);
       await connect(receiver, native, listener.token); await connect(page, native, publisher.token); await connect(executor, native, await executorGrant.toJwt());
@@ -284,15 +336,21 @@ for (const version of ["1.13.9"] as const) {
       await expect.poll(async () => (await service.getParticipant(publisher.room, publisher.identity)).tracks.some((track: any) => track.source === 2), { timeout: 10_000 }).toBe(true);
       const microphoneSid = (await service.getParticipant(publisher.room, publisher.identity)).tracks.find((track: any) => track.source === 2).sid;
       await expect.poll(() => signal(receiver, microphoneSid), { timeout: 10_000 }).toBe(true);
+      const reconciliation = async () => {
+        const status = await request.get(`${origin}/api/rooms/${roomId}/session-control`, { headers }); expect(status.status()).toBe(200);
+        return (await status.json()).mediaScreenReconciliation.state;
+      };
+      // The current instance is confirmed by room-state and kept: the active room is observed with it.
+      await expect.poll(reconciliation, { timeout: 15_000 }).toBe("observed");
+      expect((await service.listParticipants(publisher.room)).map((peer: any) => peer.identity)).toContain(remoteBrowser.instance);
       for (const client of [page, receiver]) await client.evaluate(() => { (window as any).__s2.room.localParticipant.setPermissions = () => false; });
       const response = action === "disable" ? await request.post(`${origin}/api/rooms/${roomId}/disable`, { headers })
         : await request.delete(`${origin}/api/rooms/${roomId}`, { headers });
       expect(response.status()).toBe(200);
-      // Delete is terminal: the executor goes too. Disable is reversible: the executor, which never reconnects, stays.
-      const remaining = action === "delete" ? [] : ["remote-browser:lifecycle-object"];
-      await expect.poll(async () => (await service.listParticipants(publisher.room)).map((peer: any) => peer.identity), { timeout: 15_000 }).toEqual(remaining);
-      for (const client of [page, receiver]) await expect.poll(() => client.evaluate(() => (window as any).__s2.room.state), { timeout: 10_000 }).toBe("disconnected");
-      await expect.poll(() => executor.evaluate(() => (window as any).__s2.room.state), { timeout: 10_000 }).toBe(action === "delete" ? "disconnected" : "connected");
+      // Delete is terminal. Disable disconnects the object's owner, so room-state drops the object and its
+      // instance can never be current again: the executor goes in both cases.
+      await expect.poll(async () => (await service.listParticipants(publisher.room)).map((peer: any) => peer.identity), { timeout: 15_000 }).toEqual([]);
+      for (const client of [page, receiver, executor]) await expect.poll(() => client.evaluate(() => (window as any).__s2.room.state), { timeout: 10_000 }).toBe("disconnected");
       if (action === "disable") {
         expect((await request.post(`${origin}/api/rooms/${roomId}/enable`, { headers })).status()).toBe(200);
         const enabledPublisher = await browser.newPage(), enabledListener = await browser.newPage(); pages.push(enabledPublisher, enabledListener);
@@ -301,13 +359,11 @@ for (const version of ["1.13.9"] as const) {
         await expect.poll(async () => (await service.getParticipant(publisher.room, publisher.identity)).tracks.some((track: any) => track.source === 2), { timeout: 10_000 }).toBe(true);
         const sid = (await service.getParticipant(publisher.room, publisher.identity)).tracks.find((track: any) => track.source === 2).sid;
         await expect.poll(() => signal(enabledListener, sid), { timeout: 10_000 }).toBe(true);
-        await expect.poll(async () => {
-          const control = await request.get(`${origin}/api/rooms/${roomId}/session-control`, { headers }); expect(control.status()).toBe(200);
-          return (await control.json()).mediaScreenReconciliation.state;
-        }, { timeout: 15_000 }).toBe("observed");
-        expect((await service.listParticipants(publisher.room)).length).toBe(3);
+        await expect.poll(reconciliation, { timeout: 15_000 }).toBe("observed");
+        expect((await service.listParticipants(publisher.room)).length).toBe(2);
       }
     } finally {
+      for (const close of closers) close();
       await Promise.allSettled(pages.map(page => page.close()));
       try { await fixture?.close(); } finally { await native.close(); }
     }
@@ -406,7 +462,7 @@ for (const version of ["1.13.9"] as const) test(`server media lineage ${version}
       const status = await request.get(`${origin}/api/rooms/${roomId}/session-control`, { headers }); expect(status.status()).toBe(200);
       const reconciliation = (await status.json()).mediaScreenReconciliation;
       return `${reconciliation.enforcementVersion}:${reconciliation.state}`;
-    }, { timeout: 15_000 }).toBe("4:observed");
+    }, { timeout: 15_000 }).toBe("6:observed");
     expect((await service.listParticipants(original.room)).map((peer: any) => peer.identity).sort()).toEqual([listening.identity, recovered.identity].sort());
 
     // Delete and recreate the same room ID: the old JWT names the previous generation and is retired there.
@@ -428,6 +484,78 @@ for (const version of ["1.13.9"] as const) test(`server media lineage ${version}
     await expect.poll(() => stateOf(old), { timeout: 15_000 }).toBe("disconnected");
     expect((await service.listParticipants(newcomer.room)).map((peer: any) => peer.identity)).toEqual([newcomer.identity]);
     expect(await stateOf(fresh)).toBe("connected");
+  } finally {
+    await Promise.allSettled(pages.map(page => page.close()));
+    try { await fixture?.close(); } finally { await bridge.close(); await native.close(); }
+  }
+});
+
+for (const version of ["1.13.9"] as const) test(`server media namespace ${version}: a retired namespace loses its native rooms and old JWTs cannot stay`, async ({ browser, request }) => {
+  test.setTimeout(180_000);
+  const native = await startLocalLiveKitFixture(version), bridge = await faultBridge(native.httpUrl);
+  let fixture: Awaited<ReturnType<typeof startReferenceTemplateFixture>> | undefined;
+  const pages: Page[] = [];
+  try {
+    expect(!!process.env.VRATA_TEST_POSTGRES_URL).toBe(true);
+    fixture = await startReferenceTemplateFixture(process.env.VRATA_TEST_POSTGRES_URL!, { livekitUrl: bridge.url, devRoleQuery: false,
+      stateTokenSecret: "owned-media-namespace-state-secret-32-bytes" });
+    const origin = fixture.origin, headers = { "x-vrata-admin-token": fixture.adminToken }, roomId = `namespace-${randomUUID()}`;
+    expect((await request.post(`${origin}/api/rooms`, { headers, data: { roomId, tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Owned media namespace" } })).status()).toBe(201);
+    await activateOwnedFixture(fixture, 3);
+    async function admit() {
+      const invitation = await request.post(`${origin}/api/rooms/${roomId}/invites`, { headers, data: { role: "member", expiresInSeconds: 600 } }); expect(invitation.status()).toBe(201);
+      const response = await request.post(`${origin}/api/tokens/state`, { data: { roomId, identityProtocolVersion: 2, inviteToken: (await invitation.json()).inviteToken, displayName: "Owned namespace participant" } });
+      expect(response.status()).toBe(200); return response.json();
+    }
+    async function media(actor: { token: string; participantId: string }) {
+      const response = await request.post(`${origin}/api/tokens/media`, { headers: { authorization: `Bearer ${actor.token}` },
+        data: { roomId, participantId: actor.participantId, canPublishAudio: true, canPublishVideo: false } });
+      expect(response.status()).toBe(200); const reply = await response.json();
+      const claims = JSON.parse(Buffer.from(reply.token.split(".")[1], "base64url").toString("utf8"));
+      return { token: reply.token as string, identity: claims.sub as string, room: claims.video.room as string };
+    }
+    const stateOf = (page: Page) => page.evaluate(() => (window as any).__s2.room.state);
+    const reconciliation = async () => {
+      const status = await request.get(`${origin}/api/rooms/${roomId}/session-control`, { headers }); expect(status.status()).toBe(200);
+      const value = (await status.json()).mediaScreenReconciliation; return `${value.enforcementVersion}:${value.state}`;
+    };
+    const speakerActor = await admit(), listenerActor = await admit();
+    const speaker = await media(speakerActor), listener = await media(listenerActor);
+    const previousNamespace = /^vrata-v3:([a-f0-9]{32}):/.exec(speaker.room)![1];
+    const service = new RoomServiceClient(native.httpUrl, "devkey", "secret");
+    const speaking = await browser.newPage(), listening = await browser.newPage(); pages.push(speaking, listening);
+    await connect(listening, native, listener.token); await connect(speaking, native, speaker.token);
+    expect(await publish(speaking, "microphone")).toBe(true);
+    const sid = async () => (await service.getParticipant(speaker.room, speaker.identity)).tracks.find((track: any) => track.source === 2)?.sid;
+    await expect.poll(sid, { timeout: 10_000 }).toBeTruthy();
+    await expect.poll(async () => signal(listening, (await sid())!), { timeout: 15_000 }).toBe(true);
+    await expect.poll(reconciliation, { timeout: 15_000 }).toBe("6:observed");
+
+    // Hold native deletions: while the retired room still holds connections the room is not observed.
+    bridge.failDeletions(true);
+    await activateOwnedFixture(fixture, 3, "retire");
+    await expect.poll(() => bridge.counts().deniedDeletions, { timeout: 10_000 }).toBeGreaterThan(0);
+    expect(await reconciliation()).toBe("6:pending");
+    const rotated = await media(speakerActor);
+    expect(rotated.room).toMatch(/^vrata-v3:[a-f0-9]{32}:[a-f0-9]{32}:namespace-/);
+    expect(rotated.room.startsWith(`vrata-v3:${previousNamespace}:`)).toBe(false);
+    bridge.failDeletions(false);
+    for (const page of [speaking, listening]) await expect.poll(() => stateOf(page), { timeout: 15_000 }).toBe("disconnected");
+    await expect.poll(async () => (await service.listRooms()).some((room: any) => room.name === speaker.room), { timeout: 15_000 }).toBe(false);
+    await expect.poll(reconciliation, { timeout: 15_000 }).toBe("6:observed");
+
+    // The old JWT recreates its room on rejoin (auto-create); the next pass deletes it again. The new grant is untouched.
+    const fresh = await browser.newPage(), replay = await browser.newPage(); pages.push(fresh, replay);
+    await connect(fresh, native, rotated.token);
+    bridge.failDeletions(true);
+    const deniedBefore = bridge.counts().deniedDeletions;
+    await connect(replay, native, speaker.token);
+    expect((await service.getParticipant(speaker.room, speaker.identity)).identity).toBe(speaker.identity);
+    await expect.poll(() => bridge.counts().deniedDeletions, { timeout: 10_000 }).toBeGreaterThan(deniedBefore);
+    bridge.failDeletions(false);
+    await expect.poll(() => stateOf(replay), { timeout: 15_000 }).toBe("disconnected");
+    expect(await stateOf(fresh)).toBe("connected");
+    expect((await service.listParticipants(rotated.room)).map((peer: any) => peer.identity)).toEqual([rotated.identity]);
   } finally {
     await Promise.allSettled(pages.map(page => page.close()));
     try { await fixture?.close(); } finally { await bridge.close(); await native.close(); }

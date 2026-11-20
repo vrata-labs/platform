@@ -106,14 +106,14 @@ export async function presenterMeetingScenario(input: Input, hooks: Hooks = {}) 
   const mark = (next: string) => { phase = next; phases.push({ phase, seconds: Math.round((Date.now() - startedAt) / 1000) }); };
   try {
     const host = await enter("host", 0), first = await enter("member", 1), second = await enter("member", 2), guest = await enter("guest", 3);
-    await chooseMeetingPanel(host.page, "people", false);
+    await chooseMeetingPanel(host.page, "people", false, "host");
     await expect(host.page.locator("#meeting-people-list li")).toHaveCount(4);
     await expect(host.page.locator("#meeting-people-list")).toContainText("Host — Meeting Host");
     await expect(host.page.locator("#meeting-people-list")).toContainText("Member — Alpha <b>literal</b>");
     await expect(host.page.locator("#meeting-people-list b")).toHaveCount(0);
     await expect(host.page.locator("#remote-mic-status")).toContainText(names[1]);
     for (const actor of [first, second, guest]) {
-      await chooseMeetingPanel(actor.page, "present", actor === guest);
+      await chooseMeetingPanel(actor.page, "present", actor === guest, actor === first ? "member-1" : actor === second ? "member-2" : "guest");
       await expect(actor.page.locator("#document-upload-button")).toBeDisabled();
       await expect(actor.page.locator("#start-share")).toBeDisabled();
     }

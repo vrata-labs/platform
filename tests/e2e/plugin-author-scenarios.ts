@@ -288,29 +288,35 @@ export async function runFloorOneAuthorDenial(origin: string, admin: Record<stri
   }
 }
 
-export async function downloadPublicSdk(request: APIRequestContext): Promise<Buffer> {
-  const manifestResponse = await request.get("/assets/plugin-sdk/releases.json", { maxRedirects: 0 });
+export async function downloadPublicSdk(request: APIRequestContext | string, version: "0.1.0" | "0.2.0" = "0.1.0"): Promise<Buffer> {
+  const hash = version === "0.1.0" ? publicSdkSha256 : "22789546969b069aa48b690558609c85ddd17107ed7f25c0359452c466995d89";
+  const get = async (path: string) => {
+    if (typeof request !== "string") return request.get(path, { maxRedirects: 0 });
+    const response = await privateHttp(request, path);
+    return { status: () => response.status, headers: () => response.headers, json: async () => response.json<any>(), body: async () => response.bytes };
+  };
+  const manifestResponse = await get("/assets/plugin-sdk/releases.json");
   expect(manifestResponse.status()).toBe(200);
   const manifest = await manifestResponse.json();
   expect(manifest.schemaVersion).toBe(1);
-  const release = manifest.releases.find((row: { sha256: string }) => row.sha256 === publicSdkSha256);
+  const release = manifest.releases.find((row: { sha256: string }) => row.sha256 === hash);
   expect(Boolean(release)).toBe(true);
-  expect(release.package === "@vrata/room-plugin-sdk" && release.version === "0.1.0").toBe(true);
-  const url = `/assets/plugin-sdk/0.1.0/${publicSdkSha256}/vrata-room-plugin-sdk-0.1.0.tgz`;
+  expect(release.package === "@vrata/room-plugin-sdk" && release.version === version).toBe(true);
+  const url = `/assets/plugin-sdk/${version}/${hash}/vrata-room-plugin-sdk-${version}.tgz`;
   expect(release.url === url).toBe(true);
-  const response = await request.get(url, { maxRedirects: 0 });
+  const response = await get(url);
   expect(response.status()).toBe(200);
   expect(response.headers()["x-content-type-options"] === "nosniff").toBe(true);
   const bytes = await response.body();
   expect(bytes.byteLength > 0 && bytes.byteLength <= 1024 * 1024).toBe(true);
-  expect(sha256(bytes)).toBe(publicSdkSha256);
+  expect(sha256(bytes)).toBe(hash);
   return bytes;
 }
 
 type CliSummary = { ok: boolean; command: string; artifactSha256?: string; entrySha256: string; bytes: number };
 export type ExternalArtifact = { bytes: Buffer; artifactSha256: string; entrySha256: string; pluginId: string; version: string; capabilities: string[] };
 
-export async function createExternalAuthorProject(sdk: Buffer) {
+export async function createExternalAuthorProject(sdk: Buffer, sdkVersion = "0.1.0") {
   const root = await mkdtemp(join(tmpdir(), "vrata-plugin-author-external-"));
   const close = () => rm(root, { recursive: true, force: true });
   const markerPath = join(root, "native-execution-marker");
@@ -351,11 +357,12 @@ export async function createExternalAuthorProject(sdk: Buffer) {
       return name === "" || !pkg.link && (pkg.resolved === "file:sdk.tgz" || pkg.resolved?.startsWith("https://registry.npmjs.org/") === true);
     })).toBe(true);
     const installed = JSON.parse(await readFile(join(root, "node_modules/@vrata/room-plugin-sdk/package.json"), "utf8"));
-    expect(installed.name === "@vrata/room-plugin-sdk" && installed.version === "0.1.0").toBe(true);
+    expect(installed.name === "@vrata/room-plugin-sdk" && installed.version === sdkVersion).toBe(true);
     expect(JSON.stringify(installed.dependencies) === JSON.stringify({ acorn: "8.18.0", esbuild: "0.25.12" })).toBe(true);
     const cli = join(root, "node_modules/.bin/vrata-room-plugin");
 
-    async function build(pluginId: string, version = "1.0.0", capabilities = ["status.set"], body?: string): Promise<ExternalArtifact> {
+    async function build(pluginId: string, version = "1.0.0", capabilities = ["status.set"], body?: string,
+      configSchema: Record<string, unknown> = { greeting: { type: "string", required: true, minLength: 1, maxLength: 256 } }): Promise<ExternalArtifact> {
       // A native API evaluation would write an owned marker; a browser evaluation
       // would set the global marker. Building/parsing/downloading must do neither.
       const source = `import type { RoomPluginContext, RoomPluginEvent } from "@vrata/room-plugin-sdk";
@@ -370,7 +377,7 @@ export function dispose() {}`}
       await writeFile(join(root, "entry.ts"), source);
       await writeFile(join(root, "manifest.json"), JSON.stringify({ schemaVersion: 1, sdkApiVersion: 1, id: pluginId, version,
         displayName: "External author example", requestedCapabilities: capabilities,
-        configSchema: { greeting: { type: "string", required: true, minLength: 1, maxLength: 256 } } }));
+        configSchema }));
       const bundle = (await run(cli, ["bundle", "--entry", "entry.ts", "--out", "entry.bundle.mjs"], true))!;
       expect(bundle.ok && bundle.command === "bundle").toBe(true);
       const entry = await readFile(join(root, "entry.bundle.mjs"));
@@ -396,7 +403,14 @@ export function dispose() {}`}
       }
       expect(exists).toBe(false);
     }
-    return { build, close, assertNotExecuted };
+    async function buildAutoSeat(): Promise<ExternalArtifact> {
+      const directory = "packages/room-plugin-sdk/examples/auto-seat";
+      const stripImports = (source: string) => source.replace(/^import .*;\r?\n/gm, "");
+      const body = stripImports(await readFile(`${directory}/candidates.ts`, "utf8")).replace("export function nextCandidate", "function nextCandidate")
+        + "\n" + stripImports(await readFile(`${directory}/entry.ts`, "utf8"));
+      return build("auto-seat-scaffold", "1.0.0", ["seating.claimSelfOnEntry", "seating.cancelPendingOwnClaim", "status.set"], body, {});
+    }
+    return { build, buildAutoSeat, close, assertNotExecuted };
   } catch {
     await close();
     throw new Error("plugin_author_external_project_setup_failed");

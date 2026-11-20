@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import type { IncomingMessage } from "node:http";
 import test from "node:test";
 import { createUploadStorageConfig } from "../upload-storage-config.js";
+import { documentObjectStores } from "../document-storage.js";
 import { requireRoomPluginBucket, roomPluginUploadStorage } from "./blob-config.js";
 import { createRoomPluginBlobStorage } from "./blob-storage.js";
 import { RoomPluginBlobConfigurationError } from "./blob-errors.js";
@@ -36,14 +37,16 @@ test("custom S3 plugins require an operator-provisioned private bucket independe
   assert.throws(() => roomPluginUploadStorage("/runtime/public", { ...env, ROOM_PLUGIN_BUCKET: undefined }), RoomPluginBlobConfigurationError);
   assert.throws(() => roomPluginUploadStorage("/runtime/public", { ...env, SCENE_BUNDLE_S3_BUCKET: "private-plugins" }), RoomPluginBlobConfigurationError);
 });
-test("private bucket selection leaves existing public scene/document storage configuration unchanged", t => {
+test("private bucket selection leaves the public scene storage and documents in the private bucket", t => {
   const old = { ...process.env }; t.after(() => { process.env = old; });
   Object.assign(process.env, minio); delete process.env.DOCUMENT_PROVIDER; delete process.env.SCENE_BUNDLE_PROVIDER;
   const config = createUploadStorageConfig("/runtime/public", () => "https://app.example.test");
-  const request = {} as IncomingMessage;
-  for (const storage of [config.getDocumentUploadStorage(request), config.getSceneBundleUploadStorage(request)]) {
-    assert.equal(storage.type, "s3"); if (storage.type !== "s3") assert.fail();
-    assert.equal(storage.bucket, "public-assets");
-  }
-  assert.equal(roomPluginUploadStorage("/runtime/public").type, "s3");
+  const scene = config.getSceneBundleUploadStorage({} as IncomingMessage);
+  assert.equal(scene.type, "s3"); if (scene.type !== "s3") assert.fail();
+  assert.equal(scene.bucket, "public-assets");
+  const plugins = roomPluginUploadStorage("/runtime/public");
+  const documents = documentObjectStores("/runtime/public");
+  assert.ok(plugins.type === "s3" && documents.current.type === "s3" && documents.legacy?.type === "s3");
+  assert.equal(documents.current.bucket, plugins.bucket);
+  assert.equal(documents.legacy.bucket, "public-assets");
 });

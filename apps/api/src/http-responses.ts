@@ -35,7 +35,10 @@ export async function serveStatic(response: ServerResponse, filePath: string): P
       "cross-origin-resource-policy": "same-origin",
       "x-content-type-options": "nosniff"
     } : {}),
-    ...(extname(normalized).toLowerCase() === ".html" ? { "cache-control": "no-cache" } : {})
+    ...(/[/\\]assets[/\\](?:room-plugin-(?:worker|kernel)-[A-Za-z0-9_-]{8,}\.js|emscripten-module[^/\\]*-[A-Za-z0-9_-]{8,}\.wasm|plugin-sdk[/\\]\d+\.\d+\.\d+[/\\][a-f0-9]{64}[/\\]vrata-room-plugin-sdk-\d+\.\d+\.\d+\.tgz)$/.test(normalized)
+      ? { "cache-control": "public, max-age=31536000, immutable", "x-content-type-options": "nosniff" }
+      : extname(normalized).toLowerCase() === ".html" || /[/\\](?:plugin-sdk|plugin-runtime)[/\\]releases\.json$/.test(normalized)
+        ? { "cache-control": "no-cache" } : {})
   });
   response.end(data);
   return true;

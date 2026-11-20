@@ -54,15 +54,18 @@
 }
 
 {$VRATA_STORAGE_DOMAIN} {
-  # Public scene and document objects only: GET/HEAD (and CORS preflight) of a non-empty key in the public
+  # Public scene objects only: GET/HEAD (and CORS preflight) of a non-empty key in the public
   # bucket, without a query string. Writes, listings, the private plugin bucket and S3 subresources stay on
   # the internal network; everything else is refused with 403, which the private storage probe expects.
   # Caddy path matchers see a cleaned, case-insensitive path while the proxy forwards the original, so one
   # expression checks the raw request: exact bucket prefix, a key, no query, no dot or empty segments and no
-  # encoded separators. Separate expression lines in one matcher are not combined with AND.
+  # encoded separators. Separate expression lines in one matcher are not combined with AND. Room documents
+  # live in the private bucket and are released only by the API; their key prefix is refused here as well, so
+  # that a copy left in the public bucket by an earlier release is not served before it is moved.
   @public_object {
     method GET HEAD OPTIONS
     expression `{path}.startsWith("/{$MINIO_BUCKET}/") && {path} != "/{$MINIO_BUCKET}/" && {query} == ""
+      && !{path}.startsWith("/{$MINIO_BUCKET}/documents/")
       && !{uri}.matches("(?i)%2f|%5c|%00|%2e") && !{path}.matches("(^|/)\\.{1,2}(/|$)") && !{path}.contains("//")`
   }
   handle @public_object {

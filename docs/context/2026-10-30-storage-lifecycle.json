@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "goal": "T15: автономная поставка sandbox assets и повторяемая очистка demo/self-host комнаты с материалами и плагинами",
+  "scope": "Runtime build, API room deletion, public-demo CLI, существующий backup/restore v2; без ручной встречи и полного расширения сценариев T16–T17",
+  "sources": [
+    {"id":"S1","system":"plan","locator":"2026-09-25-working-meeting-and-room-plugins.md:§0,T15–T17","version":"2026-10-30","checked_at":"2026-10-30T14:39:45+03:00","status":"available","summary":"T15 требует локальные worker/WASM/SDK, точные версии после restart/restore, cleanup до redacted record; долговечная доска вне scope."},
+    {"id":"S2","system":"git","locator":"apps/api/src/plugins/{storage,package-service}.ts; tools/backup-restore.mjs","version":"7b73414","checked_at":"2026-10-30T14:39:45+03:00","status":"available","summary":"Private room-scoped immutable packages, CAS bindings, durable deletion intent и settled-upload recovery уже реализованы. Backup v2 включает весь private bucket, inventory и checksums; restore проверяет policy и байты."},
+    {"id":"S3","system":"git","locator":"apps/runtime-web/src/plugins/{host,quickjs-module}.ts; vite.config.ts; apps/api/Dockerfile; pnpm-lock.yaml","version":"7b73414","checked_at":"2026-10-30T14:39:45+03:00","status":"available","summary":"WASM импортируется локально через Vite URL, glue и FFI статические, два worker собраны в самостоятельные chunks. Docker копирует dist/public, QuickJS 0.32.0 закреплён lockfile. Отдельного проверяемого манифеста собранных assets и политики immutable cache нет."},
+    {"id":"S4","system":"git","locator":"tools/public-demo.mjs:cleanupPublicDemo; apps/api/src/index.ts:DELETE room","version":"7b73414","checked_at":"2026-10-30T14:39:45+03:00","status":"available","summary":"CLI очищает invites/documents/room/tenant, но не перечисляет и не отключает bindings/packages. DELETE комнаты удаляет строки до best-effort document blob cleanup, поэтому ошибка не оставляет retry key в комнате."},
+    {"id":"S5","system":"git","locator":"docs/backlog/2026-10-26-room-state-recreated-room-isolation.md; docs/reviews/2026-09-26-working-meeting-implementation.md:D-039,D-040","version":"7b73414","checked_at":"2026-10-30T14:39:45+03:00","status":"available","summary":"Пересоздание room-state с прежним roomId — отдельный отложенный протокольный вопрос. T15 не обещает durable whiteboard и не закрывает реальные устройства T17."}
+  ],
+  "claims": [
+    {"id":"F1","status":"confirmed","text":"Повторно реализовывать private package storage и backup v2 не требуется; нужен общий lifecycle с документами, доступом и двумя версиями плагина.","sources":["S1","S2","S4"]},
+    {"id":"F2","status":"confirmed","text":"Sandbox runtime не требует CDN уже на baseline; T15 закрепляет и проверяет этот контракт при сборке, в Docker и через HTTP.","sources":["S3"]},
+    {"id":"F3","status":"confirmed","text":"Удаление документов должно подтверждаться до parent DELETE с сохранением строк и ключей после partial failure.","sources":["S1","S4"]},
+    {"id":"F4","status":"confirmed","text":"T15 не заменяет fresh clone/manual/physical-device и расширенную regression приёмку T16–T17.","sources":["S1","S5"]}
+  ],
+  "gaps": []
+}

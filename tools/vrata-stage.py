@@ -32,6 +32,10 @@ AGENT_COMMANDS = {"claude", "opencode"}
 BUSY_STATUSES = {"requested", "pending", "waiting", "queued", "in_progress"}
 # How gh reports a broken link to api.github.com or a GitHub-side failure. Refusals (authentication, validation,
 # not found) do not match and are never repeated.
+# Nova build faults that the next build usually does not repeat: the network port was not bound in time or no
+# host was free at that moment. Quota, image or flavor errors are not among them and fail the creation at once.
+BUILD_TRANSIENT = re.compile(r"failed to allocate the network|no valid host was found|exceeded maximum number of retries",
+                             re.I)
 GH_TRANSIENT = re.compile(r"error connecting to|connection (?:reset|refused)|timed? ?out|tls handshake|unexpected eof"
                           r"|http 5\d\d|\b50[0234]\b|bad gateway|service unavailable|temporary failure|no such host"
                           r"|network is unreachable|stream error", re.I)
@@ -47,6 +51,14 @@ class StageError(Exception):
 
 class GitHubUnreachable(StageError):
     """A gh call failed on the network or on GitHub's side; repeating it may succeed."""
+
+
+class ServerBuildFailed(StageError):
+    """The new server ended in ERROR; `fault` is the provider's message."""
+
+    def __init__(self, fault):
+        super().__init__("server_error:" + json.dumps(fault)[:200])
+        self.fault = str((fault or {}).get("message", ""))
 
 
 def utcnow():
@@ -225,7 +237,7 @@ class Selectel:
         self.region = config.selectel.get("region", "ru-2")
         self.workdir = Path(workdir)
 
-    def call(self, method, service, path, body=None, expect=(200, 201, 202, 204), retry=None):
+    def call(self, method, service, path, body=None, expect=(200, 201, 202, 204), retry=None, headers=None):
         # The API link drops connections now and then; only requests safe to repeat are retried.
         attempts = 4 if (retry if retry is not None else method in ("GET", "PUT", "DELETE")) else 1
         for attempt in range(attempts):
@@ -235,7 +247,8 @@ class Selectel:
                     fd, body_file = tempfile.mkstemp(dir=self.workdir, suffix=".json")
                     with os.fdopen(fd, "w") as stream:
                         json.dump(body, stream)
-                result = self.module.call(method, service, self.region, path, body_file)
+                extra = {"headers": headers} if headers else {}
+                result = self.module.call(method, service, self.region, path, body_file, **extra)
                 break
             except Exception as error:  # the CLI raises plain RuntimeError/KeyError on transport faults
                 if attempt + 1 == attempts:
@@ -258,7 +271,9 @@ class Selectel:
         return [server for server in data["servers"] if server["name"] == name]
 
     def create_server(self, body):
-        _, data = self.call("POST", "compute", "servers", {"server": body})
+        # volume_type inside block_device_mapping_v2 is accepted only from compute microversion 2.67.
+        headers = {"OpenStack-API-Version": "compute 2.67"} if "block_device_mapping_v2" in body else None
+        _, data = self.call("POST", "compute", "servers", {"server": body}, headers=headers)
         return data["server"]["id"]
 
     def delete_server(self, server_id):
@@ -812,12 +827,7 @@ class Stands:
                 hook = self.checkout_hook(name, Path(workdir))
                 env = self.hook_env(name, sha)
                 user_data = self.run_hook(hook, "user-data", env, capture=True)
-                server_id = self.cloud.create_server(self.server_body(name, user_data))
-                with self.registry.locked(name) as state:
-                    state["server"] = {"id": server_id, "created": iso(utcnow()), "sha": sha}
-                    record(state, "server_created", server=server_id, sha=sha)
-                self.log(f"server {server_id} created for {sha}")
-                self.wait_active(server_id)
+                server_id = self.create_active_server(name, user_data, sha)
                 ports = self.cloud.server_ports(server_id)
                 if len(ports) != 1:
                     raise StageError(f"expected_one_port:{len(ports)}")
@@ -881,6 +891,29 @@ class Stands:
             body["imageRef"] = stage["image"]
         return body
 
+    def create_active_server(self, name, user_data, sha, attempts=3):
+        """Create the server and wait until it is ACTIVE. A build that ends in ERROR with a transient provider
+        fault is deleted and created again, `attempts` builds in all; the floating IP is attached only later."""
+        for attempt in range(1, attempts + 1):
+            server_id = self.cloud.create_server(self.server_body(name, user_data))
+            with self.registry.locked(name) as state:
+                state["server"] = {"id": server_id, "created": iso(utcnow()), "sha": sha}
+                record(state, "server_created", server=server_id, sha=sha, attempt=attempt)
+            self.log(f"server {server_id} created for {sha}")
+            try:
+                self.wait_active(server_id)
+                return server_id
+            except ServerBuildFailed as error:
+                if attempt == attempts or not BUILD_TRANSIENT.search(error.fault):
+                    raise
+                self.log(f"server {server_id} failed to build: {error.fault[:160]}; building it again")
+                self.request_delete(name, server_id)
+                self.wait_deleted(server_id)
+                with self.registry.locked(name) as state:
+                    state["server"] = None
+                    record(state, "build_retried", server=server_id, fault=error.fault[:160])
+                self.sleep(30 * attempt)
+
     def wait_active(self, server_id, timeout=900):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -888,7 +921,7 @@ class Stands:
             if server and server["status"] == "ACTIVE":
                 return
             if server and server["status"] == "ERROR":
-                raise StageError("server_error:" + json.dumps(server.get("fault", {}))[:200])
+                raise ServerBuildFailed(server.get("fault", {}))
             time.sleep(10)
         raise StageError("server_active_timeout:" + server_id)
 

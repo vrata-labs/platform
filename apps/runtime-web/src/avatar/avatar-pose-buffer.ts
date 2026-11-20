@@ -74,9 +74,21 @@ export function pushAvatarPoseFrame(buffer: AvatarPoseBuffer, frame: CompactPose
   buffer.recommendedPlaybackDelayMs = Math.round(Math.min(140, Math.max(100, 100 + jitterMs * 2)));
   buffer.lastSeq = frame.seq;
   buffer.lastReceivedAtMs = nowMs;
-  const normalizedTimelineMs = lastFrame
+  // Sender spacing defines the receiver-local timeline, but that timeline may never run
+  // ahead of arrival. A late anchor (first frame, or the first frame after a main-thread
+  // stall emptied the buffer by TTL) would otherwise delay playback of every later frame
+  // by the stall for the rest of the session. Shift the buffered frames back together so
+  // their relative spacing stays intact and playback only skips forward, never backward.
+  const predictedTimelineMs = lastFrame
     ? lastFrame.sentAtMs + Math.max(1, frame.sentAtMs - lastFrame.sourceSentAtMs)
     : nowMs;
+  const timelineLeadMs = predictedTimelineMs - nowMs;
+  if (timelineLeadMs > 0) {
+    for (const buffered of buffer.frames) {
+      buffered.sentAtMs -= timelineLeadMs;
+    }
+  }
+  const normalizedTimelineMs = predictedTimelineMs - Math.max(0, timelineLeadMs);
   buffer.frames.push({
     ...frame,
     sentAtMs: normalizedTimelineMs,

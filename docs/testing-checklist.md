@@ -26,6 +26,7 @@ This document is the source of truth for where Vrata tests live, where they run,
 - `pnpm build`
 - `pnpm test`
 - `pnpm test:e2e`
+- `pnpm test:e2e:gpu` on a host with a GPU: the same local suite in full Chromium with hardware WebGL (`playwright.gpu.config.ts`). The visual scenarios of `tests/e2e/seat-marker-visual.spec.ts` are skipped on a software renderer, as in CI, and fail under this config; run at least that spec here before publishing changes to seating, avatars, seat markers or scene rendering. Details: `CONTRIBUTING.md`, Hardware Rendering.
 - `pnpm test:e2e:private-assets` only when private scene assets are available locally; staging private asset coverage runs through `pnpm test:e2e:staging`.
 - `pnpm test:e2e:staging` only after the target commit is deployed to staging.
 - Full local staging e2e uses a gitignored `.env.staging.local` for staging-only secrets. Generate it with `pnpm staging:e2e:pull-env -- --ssh <user>@158.160.10.234` when you have SSH access to the staging VM, or create it manually from `.env.staging.local.example`.

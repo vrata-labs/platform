@@ -23,7 +23,7 @@ test.describe("public demo local functional scenario", () => {
     const postgresUrl = process.env.VRATA_TEST_POSTGRES_URL;
     if (!postgresUrl) throw new Error("VRATA_TEST_POSTGRES_URL is required; public demo local setup cannot run without PostgreSQL");
     try {
-      fixture = await startReferenceTemplateFixture(postgresUrl, { devRoleQuery: false });
+      fixture = await startReferenceTemplateFixture(postgresUrl, { devRoleQuery: false, identityProtocol: 2 });
     } catch {
       throw new Error("public_demo_local_postgres_fixture_setup_failed");
     }

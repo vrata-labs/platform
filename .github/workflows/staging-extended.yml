@@ -28,7 +28,7 @@ concurrency:
 jobs:
   extended:
     if: github.event_name == 'workflow_dispatch' || vars.STAGING_AUTO_DEPLOY_ENABLED != 'false'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
       BASE_URL: ${{ secrets.STAGING_BASE_URL }}

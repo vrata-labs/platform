@@ -77,6 +77,11 @@ export function createMemoryRoomPlugins(getRoom: (roomId: string) => { tenantId:
   return {
     storage: createRoomPluginStorage(repository),
     access: createRoomPluginAccess(repository, access?.now),
+    assertDeletionIntent(scope: RoomPluginScope, deletionId: string) {
+      const data = rooms.get(key(scope));
+      if (getRoom(scope.roomId)?.tenantId !== scope.tenantId) throw new RoomPluginStorageError("room_not_found");
+      if (!data?.deleting || data.deletionId !== deletionId) throw new RoomPluginStorageError("room_plugin_cleanup_pending");
+    },
     /** Synchronous room-delete guard; never yields between inspection and the caller's map deletion. */
     assertRoomDeletable(scope: RoomPluginScope, deletionId?: string) {
       const id = key(scope);

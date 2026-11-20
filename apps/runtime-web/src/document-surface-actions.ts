@@ -10,6 +10,7 @@ import {
   type ImageViewerPatch,
   type VideoPlayerPatch
 } from "@vrata/shared-types";
+import type { DocumentMediaPendingPatch } from "./document-media-pending.js";
 import type * as RuntimeApi from "./index.js";
 import type { createMediaObjectQueries } from "./media/media-object-queries.js";
 import type { MediaSurfaceCommandClient } from "./media/media-surface-commands.js";
@@ -42,6 +43,7 @@ export interface DocumentSurfaceActionsContext extends DocumentObjectQueries {
   renderDocumentsUi: (message?: string) => void;
   renderPresentationControls: () => void;
   renderDocumentMediaControls: () => void;
+  documentMediaPending: Pick<DocumentMediaPendingPatch, "begin" | "accept" | "discard">;
   documentStatusEl: Pick<HTMLElement, "textContent">;
   presentationStatusEl: Pick<HTMLElement, "textContent">;
   documentMediaStatusEl: Pick<HTMLElement, "textContent">;
@@ -85,6 +87,7 @@ export function createDocumentSurfaceActions(context: DocumentSurfaceActionsCont
     presentationStatusEl,
     debugState,
     renderDocumentMediaControls,
+    documentMediaPending,
     documentMediaStatusEl
   } = context;
 
@@ -285,13 +288,17 @@ export function createDocumentSurfaceActions(context: DocumentSurfaceActionsCont
     const object = video ?? image;
     if (!object || !canPresentDocuments() || context.presentationActionInFlight) return;
     context.presentationActionInFlight = true;
+    // Controls show the requested value until room-state confirms or the command fails.
+    documentMediaPending.begin(object, patch);
     renderDocumentMediaControls();
     try {
       const result = video
         ? await mediaSurfaceCommands.patchVideoPlayerObject(video.objectId, video.surfaceId, video.revision, patch as VideoPlayerPatch)
         : await mediaSurfaceCommands.patchImageViewerObject(image!.objectId, image!.surfaceId, image!.revision, patch as ImageViewerPatch);
       if (!result.accepted) throw new Error(result.blockedReason ?? "document_media_patch_rejected");
+      documentMediaPending.accept();
     } catch (error) {
+      documentMediaPending.discard();
       documentMediaStatusEl.textContent = `Media control failed: ${documentErrorCode(error)}`;
     } finally {
       context.presentationActionInFlight = false;

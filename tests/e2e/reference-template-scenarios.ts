@@ -5,6 +5,7 @@ import { PDFDocument, rgb } from "pdf-lib";
 import { startReferenceTemplateFixture } from "./reference-template-fixture.js";
 import { createLegacyStagingRoom, releaseLegacyStagingRoom } from "./staging-legacy-room";
 import { identityProtocolAt } from "./staging-identity";
+import { observeReferenceTest } from "./reference-test-observation";
 
 export function referenceTemplateScenarios(staging: boolean) {
 let fixture: Pick<Awaited<ReturnType<typeof startReferenceTemplateFixture>>, "origin" | "close" | "corruptAsset">;
@@ -12,6 +13,19 @@ const token = staging ? process.env.STAGING_ADMIN_TOKEN! : "test-admin-token";
 const headers = { "x-vrata-admin-token": token };
 const rooms = new Set<string>();
 const postgres = process.env.VRATA_TEST_POSTGRES_URL;
+const observations = new Map<Page, ReturnType<typeof observeReferenceTest>>();
+const buffers = new Map<Page, unknown>();
+function observation(page: Page) {
+  let value = observations.get(page);
+  if (!value) { value = observeReferenceTest(page); observations.set(page, value); }
+  return value;
+}
+async function attachPhaseDiagnostics(testInfo: TestInfo, name: string) {
+  const samples = [...observations].map(([page, value], pageIndex) => ({
+    pageIndex, ...value.snapshot(), renderBuffer: buffers.get(page) ?? null
+  }));
+  await testInfo.attach(name, { body: JSON.stringify(samples), contentType: "application/json" });
+}
 test.use({ viewport: { width: 960, height: 600 } });
 test.beforeAll(async () => {
   test.setTimeout(120000);
@@ -38,7 +52,12 @@ test.beforeAll(async () => {
   } else if (postgres) fixture = await startReferenceTemplateFixture(postgres);
 });
 test.afterAll(async () => { test.setTimeout(120000); if (fixture) await fixture.close(); });
-test.beforeEach(() => { test.skip(!staging && !postgres, "Reference-template browser tests require VRATA_TEST_POSTGRES_URL"); test.setTimeout(300000); });
+test.beforeEach(() => { observations.clear(); buffers.clear(); test.skip(!staging && !postgres, "Reference-template browser tests require VRATA_TEST_POSTGRES_URL"); test.setTimeout(300000); });
+test.afterEach(async ({}, testInfo) => {
+  for (const value of observations.values()) value.stop();
+  // No additional page.evaluate during a timeout/cleanup: retain pending latency as-is.
+  await attachPhaseDiagnostics(testInfo, "reference-phase-diagnostics");
+});
 
 async function create(request: APIRequestContext, templateId: string) {
   const response = await request.post(`${fixture.origin}/api/rooms`, { headers, data: { tenantId: "demo-tenant", templateId, name: `Reference ${randomUUID().slice(0, 8)}` } });
@@ -55,11 +74,17 @@ async function openRoom(page: Page, url: string) {
   // Bound software rendering work in multi-client functional checks. Scene
   // sources, materials and device quality profiles keep their product settings.
   await page.setViewportSize({ width: 640, height: 400 });
+  observation(page);
   try { await page.goto(url); }
   catch { throw new Error("reference_room_navigation_failed"); }
 }
-async function join(page: Page, url: string) {
+async function join(page: Page, url: string, guestJoinMuted?: boolean) {
   await openRoom(page, url);
+  if (guestJoinMuted !== undefined) {
+    // The pre-join screen applies the room's template, also at identity floor 2 where the manifest is refused.
+    await expect(page.locator("#guest-onboarding")).toBeVisible({ timeout: 120000 });
+    await expect(page.locator("#guest-join-muted")).toBeChecked({ checked: guestJoinMuted });
+  }
   await expect.poll(async () => await page.locator("#guest-onboarding").isVisible()
     || await page.evaluate(() => (window as any).__VRATA_DEBUG__?.sceneBundleState === "loaded"), { timeout: 120000 }).toBe(true);
   if (await page.locator("#guest-onboarding").isVisible()) {
@@ -67,7 +92,7 @@ async function join(page: Page, url: string) {
     await page.locator("#guest-enter-without-audio").click({ noWaitAfter: true });
   }
   await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.sceneBundleState), { timeout: 90000 }).toBe("loaded");
-  await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected), { timeout: 30000 }).toBe(true);
+  await expect.poll(() => observation(page).measure("room-state", () => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected)), { timeout: 30000 }).toBe(true);
   expect(await page.evaluate(() => {
     const d = (window as any).__VRATA_DEBUG__;
     return { failure: d.sceneDebug.failureReason, missing: d.sceneDebug.missingAssets, integrity: d.template.integrityRequired };
@@ -95,37 +120,32 @@ async function verifySeat(page: Page, seatId: string, observer = page, whileSeat
 async function captureReferenceView(page: Page, name: string) {
   const hud = page.locator("details.hud");
   const wasOpen = await hud.evaluate(element => (element as HTMLDetailsElement).open);
-  if (wasOpen) await page.locator(".hud-summary").click();
+  // This is capture composition, not a test of the HUD toggle. Avoid actionability
+  // waits and duplicate frames/readbacks before the actual visual evidence.
+  if (wasOpen) await hud.evaluate(element => { (element as HTMLDetailsElement).open = false; });
   try {
-    await test.info().attach(name, { body: await page.screenshot(), contentType: "image/png" });
+    const body = await observation(page).measure("visual-capture", () => page.screenshot());
+    await test.info().attach(name, { body, contentType: "image/png" });
   } finally {
-    if (wasOpen) await page.locator(".hud-summary").click();
+    if (wasOpen) await hud.evaluate(element => { (element as HTMLDetailsElement).open = true; });
   }
 }
 
-async function createFunctionalClient(browser: Browser) {
-  // Match the bounded two-client media check below. Keep CSS layout, scene bytes,
-  // materials and quality profiles; these 320x200 captures are functional evidence.
-  const context = await browser.newContext({ viewport: { width: 640, height: 400 }, deviceScaleFactor: 0.5 });
+async function createReferenceClient(browser: Browser, visual = false) {
+  // Keep the existing functional drawing buffer, but never call its pixels visual
+  // acceptance. Explicit visual scenarios render the real scene at normal DPR.
+  const context = await browser.newContext({ viewport: { width: 640, height: 400 }, deviceScaleFactor: visual ? 1 : 0.5 });
   try { return { context, page: await observeScenePage(context.newPage()) }; }
   catch (error) { await context.close(); throw error; }
 }
 
-async function assertFunctionalRenderBuffer(page: Page) {
-  expect(await page.evaluate(() => {
+async function assertReferenceRenderBuffer(page: Page, visual = false) {
+  const sample = await page.evaluate(() => {
     const canvas = document.querySelector<HTMLCanvasElement>("#scene canvas");
     return [innerWidth, innerHeight, devicePixelRatio, canvas?.width, canvas?.height];
-  })).toEqual([640, 400, 0.5, 320, 200]);
-}
-
-async function attachFunctionalRenderDiagnostics(testInfo: TestInfo, pages: Page[]) {
-  const samples = await Promise.all(pages.map(page => page.evaluate(() => {
-    const canvas = document.querySelector<HTMLCanvasElement>("#scene canvas");
-    return { viewport: [innerWidth, innerHeight], deviceScaleFactor: devicePixelRatio,
-      drawingBuffer: [canvas?.width, canvas?.height],
-      frameBudgetMs: (window as any).__VRATA_DEBUG__?.avatarPoseTransport?.frameBudgetMs ?? null };
-  }).catch(() => ({ unavailable: true }))));
-  await testInfo.attach("functional-render-diagnostics", { body: JSON.stringify(samples), contentType: "application/json" });
+  });
+  buffers.set(page, sample);
+  expect(sample).toEqual(visual ? [640, 400, 1, 640, 400] : [640, 400, 0.5, 320, 200]);
 }
 
 test("reference UI shows three real previews and creates an owner-bound private workspace", async ({ page, request }) => {
@@ -206,10 +226,7 @@ test("template selection confirms edited-default resets and API rejects mutable 
   expect(stale.status()).toBe(409);
 });
 
-test("reference presentation applies join-muted defaults and restores rendered PDF pages for late join", async ({ request, browser }, testInfo) => {
-  const publisher = await createFunctionalClient(browser);
-  const page = publisher.page;
-  try {
+async function preparePresentation(page: Page, request: APIRequestContext) {
   const room = await create(request, "presentation-room-basic");
   await openRoom(page, await hostLink(request, room.roomId));
   await expect(page.locator("#guest-onboarding")).toBeVisible();
@@ -227,46 +244,72 @@ test("reference presentation applies join-muted defaults and restores rendered P
   await page.locator("#document-surface-button").click();
   await expect(page.locator("#presentation-page-label")).toHaveText("Page 1 / 2", { timeout: 30000 });
   await page.locator("#presentation-next").click();
-  const viewer = await createFunctionalClient(browser);
-  const context = viewer.context;
+  return room;
+}
+
+async function joinLatePresentation(late: Page, roomLink: string, testInfo: TestInfo) {
+  try { await join(late, `${roomLink}?debug=1&scenefit=0&onboard=0`); }
+  catch (error) {
+    await attachPhaseDiagnostics(testInfo, "late-join-diagnostic");
+    throw error;
+  }
+  await expect.poll(() => late.evaluate(() => `${(window as any).__VRATA_DEBUG__?.pdfPresentation?.renderState}:${(window as any).__VRATA_DEBUG__?.pdfPresentation?.page}`), { timeout: 30000 }).toBe("ready:2");
+  await expect(late.locator("#presentation-prev")).toBeDisabled();
+}
+
+// Independent default-suite criteria. Functional late-join/release cannot be
+// consumed by a canvas readback; the visual case still renders BOTH real clients
+// with the same PDF/late-observer/occupied-seat conditions, at normal DPR.
+for (const visual of [false, true]) test(visual
+  ? "reference presentation visual: late page two with authoritative occupied seat"
+  : "reference presentation applies join-muted defaults and restores rendered PDF pages for late join",
+async ({ request, browser, launchOptions, headless, channel }, testInfo) => {
+  const publisher = await createReferenceClient(browser, visual);
+  let observerBrowser: Browser | undefined;
   try {
-    const late = viewer.page;
-    try { await join(late, `${room.roomLink}?debug=1&scenefit=0&onboard=0`); } catch (error) {
-      const diagnostic = await late.evaluate(() => {
-        const d = (window as any).__VRATA_DEBUG__;
-        return { scene: d?.sceneDebug, state: d?.sceneBundleState, connected: d?.roomStateConnected, issue: d?.issueCode, status: d?.statusLine };
-      }).catch(() => null);
-      await testInfo.attach("late-join-diagnostic", { body: JSON.stringify(diagnostic), contentType: "application/json" });
+    const room = await preparePresentation(publisher.page, request);
+    observerBrowser = await browser.browserType().launch({ ...launchOptions, headless, channel });
+    const viewer = await createReferenceClient(observerBrowser, visual);
+    try {
+      await joinLatePresentation(viewer.page, room.roomLink, testInfo);
+      await assertReferenceRenderBuffer(publisher.page, visual);
+      await assertReferenceRenderBuffer(viewer.page, visual);
+      await verifySeat(publisher.page, "seat-01", viewer.page, visual
+        ? () => captureReferenceView(viewer.page, "presentation-page-two") : undefined);
+    } catch (error) {
+      await attachPhaseDiagnostics(testInfo, "reference-failure-before-cleanup");
       throw error;
-    }
-    await expect.poll(() => late.evaluate(() => `${(window as any).__VRATA_DEBUG__?.pdfPresentation?.renderState}:${(window as any).__VRATA_DEBUG__?.pdfPresentation?.page}`), { timeout: 30000 }).toBe("ready:2");
-    await expect(late.locator("#presentation-prev")).toBeDisabled();
-    await assertFunctionalRenderBuffer(page);
-    await assertFunctionalRenderBuffer(late);
-    await verifySeat(page, "seat-01", late, () => captureReferenceView(late, "presentation-page-two"));
-  } finally { await attachFunctionalRenderDiagnostics(testInfo, [page, viewer.page]); await context.close(); }
-  } finally { await publisher.context.close(); }
+    } finally { await viewer.context.close(); }
+  } finally { await observerBrowser?.close(); await publisher.context.close(); }
+});
+
+test("reference meeting visual: real scene at spawn", async ({ page, request }) => {
+  const room = await create(request, "meeting-room-basic");
+  await join(page, await hostLink(request, room.roomId), false);
+  await assertReferenceRenderBuffer(page, true);
+  await captureReferenceView(page, "meeting-spawn");
 });
 
 // On staging the second participant's media path from a CI runner fails intermittently (ICE through the
 // runner NAT, the client gives up after ~17 s without retrying TCP or relay), so the scenario runs in
 // Staging Extended; the deploy gate keeps real two-party media through runtime-staging voice and orchestration.
-test(`${staging ? "@staging-extended " : ""}reference meeting synchronizes only declared surfaces across two participants`, async ({ request, browser }, testInfo) => {
-  const publisher = await createFunctionalClient(browser);
+test(`${staging ? "@staging-extended " : ""}reference meeting synchronizes only declared surfaces across two participants`, async ({ request, browser, launchOptions, headless, channel }, testInfo) => {
+  const publisher = await createReferenceClient(browser);
   const page = publisher.page;
+  let observerBrowser: Browser | undefined;
   try {
   const room = await create(request, "meeting-room-basic");
   const hostUrl = new URL(await hostLink(request, room.roomId));
   if (staging) hostUrl.searchParams.set("audiomock", "1");
-  await join(page, hostUrl.href);
-  await captureReferenceView(page, "meeting-spawn");
-  const viewer = await createFunctionalClient(browser);
+  await join(page, hostUrl.href, false);
+  observerBrowser = await browser.browserType().launch({ ...launchOptions, headless, channel });
+  const viewer = await createReferenceClient(observerBrowser);
   const context = viewer.context;
   try {
     const observer = viewer.page;
     await join(observer, `${room.roomLink}?debug=1&scenefit=0&onboard=0${staging ? "&audiomock=1" : ""}`);
-    await assertFunctionalRenderBuffer(page);
-    await assertFunctionalRenderBuffer(observer);
+    await assertReferenceRenderBuffer(page);
+    await assertReferenceRenderBuffer(observer);
     expect(await page.evaluate(() => (window as any).__VRATA_TEST__.createWhiteboardObject("whiteboard-wall"))).toBe(true);
     await expect.poll(() => observer.evaluate(() => (window as any).__VRATA_DEBUG__?.mediaObjects?.surfaces.find((s: any) => s.surfaceId === "whiteboard-wall")?.activeObjectType), { timeout: 15000 }).toBe("whiteboard");
     const surfaces = await page.evaluate(() => (window as any).__VRATA_DEBUG__.mediaObjects.surfaces.map((s: any) => s.surfaceId).sort());
@@ -285,8 +328,11 @@ test(`${staging ? "@staging-extended " : ""}reference meeting synchronizes only 
       const seatId = `seat-${String(seat).padStart(2, "0")}`;
       await test.step(seatId, () => verifySeat(page, seatId, observer));
     }
-  } finally { await attachFunctionalRenderDiagnostics(testInfo, [page, viewer.page]); await context.close(); }
-  } finally { await publisher.context.close(); }
+  } catch (error) {
+    await attachPhaseDiagnostics(testInfo, "reference-failure-before-cleanup");
+    throw error;
+  } finally { await context.close(); }
+  } finally { await observerBrowser?.close(); await publisher.context.close(); }
 });
 
 if (staging) test("reference presentation receives moving screen-share frames through the real media transport", async ({ request, playwright }) => {
@@ -315,7 +361,7 @@ if (staging) test("reference presentation receives moving screen-share frames th
     await join(page, await hostLink(request, room.roomId));
     await join(observer, `${room.roomLink}?debug=1&scenefit=0&onboard=0`);
     for (const client of [page, observer]) {
-      await assertFunctionalRenderBuffer(client);
+      await assertReferenceRenderBuffer(client);
     }
     // Replace only the OS capture source. Publishing, subscription, decoding and
     // surface presentation use the ordinary product transport, without sharemock.

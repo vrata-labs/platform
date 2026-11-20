@@ -5,6 +5,8 @@ import { parseRoomPluginRuntimeSnapshot, roomPluginContentPath, ROOM_PLUGIN_RUNT
 import type { RoomPluginTokenProof } from "./token-bound.js";
 import { RoomPluginRuntimeError } from "./runtime-errors.js";
 
+export const ROOM_PLUGIN_SNAPSHOT_TIMEOUT_MS = 2000;
+
 export class RoomPluginHttpError extends RoomPluginRuntimeError {
   constructor(readonly disposition: "unsupported" | "denied" | "changed" | "unavailable", readonly identityReason: IdentityRequirementReason | null = null) {
     super("network-unavailable"); this.name = "RoomPluginHttpError";
@@ -41,7 +43,7 @@ export function createRoomPluginHttp(input: { apiBaseUrl: string; roomId: string
     let timer: ReturnType<typeof setTimeout> | undefined, rejectAbort!: () => void;
     const cancelled = new Promise<never>((_, reject) => { rejectAbort = () => reject(new RoomPluginHttpError("unavailable")); });
     abort.signal.addEventListener("abort", rejectAbort, { once: true });
-    timer = setTimeout(() => abort.abort(), content ? ROOM_PLUGIN_LIMITS.bindingLeaseMs : 2000);
+    timer = setTimeout(() => abort.abort(), content ? ROOM_PLUGIN_LIMITS.bindingLeaseMs : ROOM_PLUGIN_SNAPSHOT_TIMEOUT_MS);
     const loading = (async () => {
       const response = await Reflect.apply(fetcher, globalThis, [new URL(path, input.apiBaseUrl).href, {
         headers: { authorization: `Bearer ${proof.token}` }, credentials: "omit", redirect: "error", cache: "no-store", signal: abort.signal

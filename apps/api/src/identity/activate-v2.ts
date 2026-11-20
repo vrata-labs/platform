@@ -1,6 +1,8 @@
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { Pool } from "pg";
+import { createRoomSessionV2Codec } from "@vrata/shared-types/room-session-v2";
+import { getRoomSessionTokenSecret } from "@vrata/shared-types/session-token";
 import { createPostgresIdentityProtocol } from "./protocol.js";
 
 /** Counts only: no room IDs, names, identities or credentials leave the database. */
@@ -39,6 +41,12 @@ export async function activateIdentityProtocolV2(pool: Pool, options: { dryRun: 
   return { before, after, raised: true, dryRun: false, audit };
 }
 
+/** Whether this process's STATE_TOKEN_SECRET can sign v2 room sessions: the API resolves the secret the same way
+ * and the codec refuses fewer than 32 bytes. After the raise a secret that fails here fails every v2 admission. */
+export function identitySessionSecretReady(env: NodeJS.ProcessEnv = process.env): boolean {
+  try { createRoomSessionV2Codec(getRoomSessionTokenSecret(env)); return true; } catch { return false; }
+}
+
 async function operatorMain(): Promise<void> {
   const args = new Set(process.argv.slice(2));
   const dryRun = args.has("--dry-run");
@@ -46,9 +54,12 @@ async function operatorMain(): Promise<void> {
   try {
     if (!dryRun && !args.has("--confirm-irreversible")) throw new Error("identity_activation_confirmation_required");
     if ([...args].some(arg => arg !== "--dry-run" && arg !== "--confirm-irreversible")) throw new Error("identity_activation_invalid_arguments");
+    // Checked before connecting: the raise is irreversible. Only a boolean is reported, never the secret.
+    const secretReady = identitySessionSecretReady();
+    if (!dryRun && !secretReady) throw new Error("identity_activation_secret_too_short");
     if (!process.env.POSTGRES_URL) throw new Error("identity_activation_database_required");
     pool = new Pool({ connectionString: process.env.POSTGRES_URL, max: 1 });
-    process.stdout.write(`${JSON.stringify({ ok: true, ...await activateIdentityProtocolV2(pool, { dryRun }) })}\n`);
+    process.stdout.write(`${JSON.stringify({ ok: true, ...await activateIdentityProtocolV2(pool, { dryRun }), ...(dryRun ? { secretReady } : {}) })}\n`);
   } catch (error) {
     // Fixed codes only: no connection strings, SQL or stack traces.
     const message = error instanceof Error && /^[a-z0-9_]+$/.test(error.message) ? error.message : "identity_activation_failed";

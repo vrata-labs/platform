@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Room } from "livekit-client";
 import type { SurfaceCommandResult } from "../room-state-client.js";
+import { createRoomStateRenewalCutover } from "../room-state-renewal.js";
 import { createScreenShareActions, type ScreenShareActionsContext } from "./screen-share-actions.js";
 
 function fixture() {
@@ -34,9 +35,9 @@ function fixture() {
       async patchScreenShareObject(objectId, surfaceId, expectedRevision, patch) {
         assert.equal(objectId, "owned-screen"); assert.equal(surfaceId, "pinned-main"); events.push(patch.type);
         await hooks.step(patch.type); return result({ revision: ++revision });
-      },
-      async stopScreenShareObject(objectId, surfaceId) { assert.equal(objectId, "owned-screen"); assert.equal(surfaceId, "pinned-main"); events.push("stop-object"); return result(); }
+      }
     },
+    async stopFailedShare(objectId, surfaceId) { assert.equal(objectId, "owned-screen"); assert.equal(surfaceId, "pinned-main"); events.push("stop-object"); },
     async ensureMediaRoom() { events.push("ensure-room"); await hooks.step("ensure-room"); return room; },
     attach(_stream, input) { assert.equal(_stream, stream); assert.equal(input.surfaceId, "pinned-main"); events.push("attach"); },
     attachMock: () => { events.push("attach-mock"); }, bindEnded: () => { events.push("bind-ended"); },
@@ -55,6 +56,37 @@ test("prepared capture publishes exactly its own tracks without touching the mic
     "attach", "bind-ended", "mark-active", "sync", "status:Sharing screen", "report"]);
   assert.equal(f.context.debugState.screenShare.publishedTrackSid, "screen-video-sid");
   assert.equal(f.microphone.readyState, "live");
+});
+
+test("renewal between mark-publishing and its reply preserves only the in-flight share", async () => {
+  const f = fixture(), oldSocket = {}, plan = {};
+  const state = { connection: oldSocket, transition: plan as object | null, authority: "presenter:7" };
+  let timer: (() => void) | undefined;
+  const cutover = createRoomStateRenewalCutover({
+    current: () => state, now: () => 400, schedule: run => { timer = run; return () => { timer = undefined; }; },
+    replace: connection => {
+      assert.equal(connection, oldSocket);
+      f.events.push("replace-socket");
+      f.hooks.connected = f.hooks.active = false;
+    }
+  });
+  f.hooks.step = async name => {
+    if (name === "mark-publishing") {
+      cutover.request(oldSocket, true, 900);
+      assert.ok(timer);
+      assert.equal(f.hooks.connected, true);
+    }
+  };
+  assert.equal(await f.start(), true);
+  assert.equal(f.context.debugState.screenShare.localPublishing, true);
+  assert.equal(f.events.includes("replace-socket"), false);
+  state.transition = null;
+  cutover.sync();
+  assert.equal(f.events.at(-1), "replace-socket");
+  assert.equal(timer, undefined);
+  assert.equal(f.events.filter(event => event === "create").length, 1);
+  assert.equal(f.video.readyState, "live");
+  assert.equal(f.audio.readyState, "live");
 });
 
 for (const boundary of ["create", "mark-selecting", "ensure-room", "mark-publishing", "publish:video", "publish:audio", "mark-active"]) {

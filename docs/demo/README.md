@@ -98,6 +98,8 @@ pnpm demo:public check --state-file .local/public-demo/staging.json
 
 ## Cleanup и восстановление после сбоя
 
+Установленные плагины очищаются до документов: disable → unbind → plugin blobs → document blobs → room → tenant. CAS revision перечитывается после каждого изменения; ошибка прерывает очистку и допускает повтор после устранения причины. Общий SDK и пакеты соседних комнат сохраняются. Контракт restart/restore и проверка self-host assets: [Storage lifecycle](../plugin-storage-lifecycle.md).
+
 ```bash
 pnpm demo:public cleanup --state-file .local/public-demo/local.json
 # Если private state уже исчез после успешной очистки — безопасный повтор только по redacted record:

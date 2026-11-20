@@ -63,6 +63,24 @@ const guards = [
     THEN RAISE EXCEPTION 'identity_protocol_namespace_immutable' USING ERRCODE = '23514'; END IF;
     RETURN NEW;
   END;` },
+  // The activation namespace stays immutable (above); a rotation writes the effective one beside it. One rotation
+  // appends the replaced namespace to the history (never reused) and may append namespaces to the retired list;
+  // nothing is ever removed from either list.
+  { table: "room_identity_protocol_policy", name: "vrata_identity_media_namespace_rotation", body: `BEGIN
+    IF ROW(NEW.rotated_media_namespace, NEW.retired_media_namespaces, NEW.previous_media_namespaces)
+      IS NOT DISTINCT FROM ROW(OLD.rotated_media_namespace, OLD.retired_media_namespaces, OLD.previous_media_namespaces) THEN RETURN NEW; END IF;
+    IF OLD.minimum_protocol < 2 OR OLD.media_namespace IS NULL OR NEW.media_namespace IS DISTINCT FROM OLD.media_namespace
+      OR NEW.rotated_media_namespace IS NULL OR NEW.rotated_media_namespace !~ '^[a-f0-9]{32}$'
+      OR NEW.previous_media_namespaces IS DISTINCT FROM
+        array_append(OLD.previous_media_namespaces, coalesce(OLD.rotated_media_namespace, OLD.media_namespace))
+      OR NEW.rotated_media_namespace = ANY(NEW.previous_media_namespaces)
+      OR NEW.retired_media_namespaces IS NULL OR NEW.rotated_media_namespace = ANY(NEW.retired_media_namespaces)
+      OR NEW.retired_media_namespaces[1:cardinality(OLD.retired_media_namespaces)] IS DISTINCT FROM OLD.retired_media_namespaces
+      OR EXISTS (SELECT 1 FROM unnest(NEW.retired_media_namespaces) AS r(value) WHERE r.value IS NULL OR r.value !~ '^[a-f0-9]{32}$')
+      OR cardinality(NEW.retired_media_namespaces) <> (SELECT count(DISTINCT r.value) FROM unnest(NEW.retired_media_namespaces) AS r(value))
+    THEN RAISE EXCEPTION 'identity_media_namespace_rotation_invalid' USING ERRCODE = '23514'; END IF;
+    RETURN NEW;
+  END;` },
   { table: "room_identity_protocol_policy", name: "vrata_identity_media_codec_monotonic", body: `BEGIN
     IF NEW.media_codec < OLD.media_codec THEN RAISE EXCEPTION 'media_codec_downgrade_forbidden' USING ERRCODE = '23514'; END IF;
     RETURN NEW;
@@ -161,6 +179,9 @@ const columns = [
   ["room_identity_protocol_policy", "minimum_protocol", "integer", true],
   ["room_identity_protocol_policy", "media_namespace", "text", false],
   ["room_identity_protocol_policy", "media_codec", "integer", true],
+  ["room_identity_protocol_policy", "rotated_media_namespace", "text", false],
+  ["room_identity_protocol_policy", "retired_media_namespaces", "text[]", true],
+  ["room_identity_protocol_policy", "previous_media_namespaces", "text[]", true],
   ["rooms", "media_incarnation", "text", true],
   ["room_identity_admission_buckets_v2", "origin_hash", "text", true],
   ["room_identity_admission_buckets_v2", "kind", "text", true],
@@ -230,6 +251,10 @@ export async function installRoomIdentitySchema(client: PoolClient): Promise<voi
     -- A recreated room row receives a fresh incarnation; ordinary updates never change it.
     alter table room_identity_protocol_policy add column if not exists media_codec integer not null default 2;
     alter table rooms add column if not exists media_incarnation text not null default replace(gen_random_uuid()::text, '-', '');
+    -- Namespace rotation: the effective media namespace is coalesce(rotated_media_namespace, media_namespace).
+    alter table room_identity_protocol_policy add column if not exists rotated_media_namespace text;
+    alter table room_identity_protocol_policy add column if not exists retired_media_namespaces text[] not null default '{}';
+    alter table room_identity_protocol_policy add column if not exists previous_media_namespaces text[] not null default '{}';
     do $media$
     begin
       if not exists (select 1 from pg_constraint where conrelid='room_identity_protocol_policy'::regclass and conname='identity_protocol_media_codec') then

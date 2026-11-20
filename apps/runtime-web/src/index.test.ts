@@ -276,6 +276,82 @@ test("bootRuntime maps reserved avatar flags and accepts additive template metad
   }
 });
 
+function minimalBootManifest() {
+  return {
+    roomId: "demo-room",
+    template: "meeting-room-basic",
+    realtime: { roomStateUrl: "ws://127.0.0.1:2567" },
+    theme: { primaryColor: "#5fc8ff", accentColor: "#163354" },
+    assets: [],
+    features: { voice: true, spatialAudio: true, screenShare: false },
+    avatars: { avatarsEnabled: false },
+    access: { joinMode: "link", guestAllowed: true, roleQueryAllowed: false, visibility: "public" }
+  };
+}
+
+async function bootWithHealth(health: Response) {
+  const previous = globalThis.fetch;
+  const paths: string[] = []; const admissions: Record<string, unknown>[] = [];
+  globalThis.fetch = async (input, init) => {
+    const path = new URL(String(input)).pathname; paths.push(path);
+    if (path === "/health") return health;
+    if (path === "/api/tokens/state") {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>; admissions.push(body);
+      return Response.json(body.identityProtocolVersion === 2
+        ? { token: "session", expiresInSeconds: 900, identityProtocolVersion: 2, participantId: "issued-id", identityCredential: "issued-credential" }
+        : { token: "session", expiresInSeconds: 900 });
+    }
+    return Response.json(minimalBootManifest());
+  };
+  const { bootRuntime } = await import("./index.js");
+  try {
+    const boot = await bootRuntime("http://127.0.0.1:4000", "demo-room", "Mozilla/5.0",
+      { participantId: "untrusted-id", displayName: "Guest", requestedRole: "host" });
+    return { boot, paths, admissions };
+  } catch (error) {
+    return { error, paths, admissions };
+  } finally { globalThis.fetch = previous; }
+}
+
+for (const [status, body] of [[503, { error: "identity_authority_unavailable" }], [502, null]] as const) {
+  test(`bootRuntime refuses admission when /health answers ${status}`, async () => {
+    const result = await bootWithHealth(body ? Response.json(body, { status }) : new Response("bad gateway", { status }));
+    assert.match(String(result.error), new RegExp(`runtime_health_unavailable:${status}`));
+    assert.deepEqual(result.paths, ["/health"]);
+    assert.equal(result.admissions.length, 0);
+  });
+}
+
+test("bootRuntime keeps the legacy admission body when /health does not announce identity v2", async () => {
+  const result = await bootWithHealth(Response.json({ features: {} }));
+  assert.equal(result.error, undefined);
+  assert.deepEqual(result.admissions, [{ roomId: "demo-room", participantId: "untrusted-id", requestedRole: "host", displayName: "Guest" }]);
+  assert.equal(result.boot?.identityProtocolVersion, undefined);
+});
+
+test("bootRuntime sends the v2 admission body without the local participant ID when /health announces identity v2", async () => {
+  const result = await bootWithHealth(Response.json({ features: { identityProtocolVersion: 2 } }));
+  assert.equal(result.error, undefined);
+  assert.deepEqual(result.admissions, [{ roomId: "demo-room", identityProtocolVersion: 2, displayName: "Guest" }]);
+  assert.equal(result.boot?.identityProtocolVersion, 2);
+  assert.equal(result.boot?.participantId, "issued-id");
+});
+
+test("voice planning tolerates an unavailable /health and keeps the spatial-audio default", async () => {
+  const previous = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const path = new URL(String(input)).pathname;
+    if (path === "/health") return Response.json({ error: "identity_authority_unavailable" }, { status: 503 });
+    if (path.endsWith("/manifest")) return Response.json(minimalBootManifest());
+    return Response.json({ token: "media", expiresInSeconds: 60, livekitUrl: "ws://media.example.test" });
+  };
+  try {
+    const plan = await planVoiceSession("http://127.0.0.1:4000", "demo-room", "participant", "proof");
+    assert.equal(plan.token, "media");
+    assert.equal(plan.spatialAudioEnabled, true);
+  } finally { globalThis.fetch = previous; }
+});
+
 test("formatSpaceOptions appends short room id for duplicate names", () => {
   const options = formatSpaceOptions([
     {

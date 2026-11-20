@@ -7,5 +7,6 @@
   "frameTokenCodec": 2,
   "mediaIdentityCodec": 2,
   "mediaScreenReconciler": 2,
-  "mediaCodecBoundary": 3
+  "mediaCodecBoundary": 3,
+  "mediaNamespaceRotation": 1
 }

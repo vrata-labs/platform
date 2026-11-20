@@ -3,8 +3,10 @@ import * as THREE from "three";
 import { applyProceduralMouthState, createProceduralAvatarHead } from "./avatar-instance.js";
 import type { AvatarLipsyncSourceState, AvatarLipsyncState } from "./avatar-lipsync.js";
 import { createAvatarPoseBuffer, pushAvatarPoseFrame, pruneAvatarPoseBuffer, sampleAvatarPoseBuffer, type AvatarPoseBuffer } from "./avatar-pose-buffer.js";
+import { resolveSeatRootPosition } from "./avatar-seating.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "../motion-state.js";
 import type { PresenceState } from "../index.js";
+import type { SceneBundleSeatAnchor } from "../scene-bundle.js";
 import type { CompactPoseFrame } from "./avatar-types.js";
 import { normalizePoseTransform } from "../pose.js";
 
@@ -48,6 +50,10 @@ export interface RemoteAvatarDebugState {
     hasAudioNode: boolean;
     appliedRootYaw: number;
     appliedHeadYaw: number;
+    /** Cushion height of the seat the participant reports sitting on; null while standing or for an unknown seat. */
+    seatCushionY: number | null;
+    /** Position, vertical extent and visibility of the drawn body mesh, unlike the received root/body above. */
+    renderedBody: { x: number; y: number; z: number; bottomY: number; topY: number; visible: boolean } | null;
   }>;
   remoteAvatarReliableCount: number;
   remoteAvatarPoseCount: number;
@@ -220,6 +226,47 @@ function resolveRemoteBodyWorldY(rootY: number, inputMode: string | null | undef
   return rootY + resolveRemoteBodyY(inputMode);
 }
 
+// Standing desktop keeps the body top 4 cm under the head centre (1.56 m vs 1.60 m); a seated body keeps that
+// relation to the head the pose places. The minimum keeps a visible torso if a tracked head dips to the cushion.
+const SEATED_BODY_TOP_BELOW_HEAD_M = 0.04;
+const SEATED_BODY_MIN_LENGTH_M = 0.3;
+
+export interface RemoteBodyExtent {
+  /** Body geometry bounds along Y at scale 1, relative to the mesh origin. */
+  minY: number;
+  maxY: number;
+}
+
+export interface RemoteBodyShape {
+  centerY: number;
+  scaleY: number;
+  bottomY: number;
+  topY: number;
+}
+
+/**
+ * Standing: the full body at poseFrame.root.y plus the input-mode offset. Seated (cushion known): the body rests on
+ * the cushion and reaches up to the head, so neither a lowered desktop rig nor a tracked VR head pushes it through
+ * the seat. Orientation is not part of the shape; callers keep it yaw-only.
+ */
+export function resolveRemoteBodyShape(input: {
+  rootY: number;
+  headY: number;
+  inputMode: string | null | undefined;
+  seatCushionY: number | null;
+  extent: RemoteBodyExtent;
+}): RemoteBodyShape {
+  const height = input.extent.maxY - input.extent.minY;
+  if (input.seatCushionY === null || !Number.isFinite(input.seatCushionY) || !(height > 0)) {
+    const centerY = resolveRemoteBodyWorldY(input.rootY, input.inputMode);
+    return { centerY, scaleY: 1, bottomY: centerY + input.extent.minY, topY: centerY + input.extent.maxY };
+  }
+  const bottomY = input.seatCushionY;
+  const topY = Math.max(input.headY - SEATED_BODY_TOP_BELOW_HEAD_M, bottomY + SEATED_BODY_MIN_LENGTH_M);
+  const scaleY = (topY - bottomY) / height;
+  return { centerY: bottomY - input.extent.minY * scaleY, scaleY, bottomY, topY };
+}
+
 function resolveInterpolatedPose(sample: ReturnType<typeof sampleAvatarPoseBuffer>, renderAtMs: number): CompactPoseFrame | null {
   if (sample.previous && sample.next && sample.next.sentAtMs > sample.previous.sentAtMs) {
     const alpha = THREE.MathUtils.clamp(
@@ -316,10 +363,35 @@ export function createRemoteAvatarRuntime(input: {
   bodyGeometry: THREE.BufferGeometry;
   headGeometry: THREE.BufferGeometry;
   localParticipantId: string;
+  /** Scene seat anchors of this receiver; a remote participant's reported seat resolves to its cushion height here. */
+  getSeatAnchor?: (seatId: string) => SceneBundleSeatAnchor | undefined;
 }) {
   const remoteAvatars = new Map<string, RemoteAvatarEntity>();
   const remoteMotionTracks = new Map<string, RemoteAvatarMotion>();
   const remoteAvatarParticipants = new Map<string, RemoteAvatarParticipantModel>();
+  if (!input.bodyGeometry.boundingBox) input.bodyGeometry.computeBoundingBox();
+  const bodyExtent: RemoteBodyExtent = {
+    minY: input.bodyGeometry.boundingBox!.min.y,
+    maxY: input.bodyGeometry.boundingBox!.max.y
+  };
+
+  // The participant's own reliable state says whether its published pose is seated (it is sent from the same
+  // current seat that lowers the sender's rig); the cushion comes from this receiver's scene seat anchor.
+  function resolveSeatCushionY(reliableState: RemoteAvatarReliableStateView | null | undefined): number | null {
+    if (!reliableState?.seated || typeof reliableState.seatId !== "string") return null;
+    const anchor = input.getSeatAnchor?.(reliableState.seatId);
+    return anchor ? resolveSeatRootPosition(anchor).y : null;
+  }
+
+  function resolveBodyShape(participant: RemoteAvatarParticipantModel | undefined, rootY: number, headY: number): RemoteBodyShape {
+    return resolveRemoteBodyShape({
+      rootY,
+      headY,
+      inputMode: participant?.reliableState?.inputMode ?? null,
+      seatCushionY: resolveSeatCushionY(participant?.reliableState),
+      extent: bodyExtent
+    });
+  }
 
   function ensureParticipantModel(participantId: string): RemoteAvatarParticipantModel {
     let model = remoteAvatarParticipants.get(participantId);
@@ -411,7 +483,7 @@ export function createRemoteAvatarRuntime(input: {
         const debugBody = poseFrame
           ? {
             x: poseFrame.root.x,
-            y: resolveRemoteBodyWorldY(poseFrame.root.y, participant.reliableState?.inputMode ?? null),
+            y: resolveBodyShape(participant, poseFrame.root.y, poseFrame.head.y).centerY,
             z: poseFrame.root.z,
             yaw: poseFrame.root.yaw
           }
@@ -426,6 +498,7 @@ export function createRemoteAvatarRuntime(input: {
           : head;
         const playbackDelayMs = resolvePlaybackDelayMs(participant.poseBuffer.recommendedPlaybackDelayMs, participant.reliableState?.inputMode ?? null);
         const captureTimeMs = presence ? getPresenceCaptureTime(presence.updatedAt, nowMs) : participant.poseFrame?.sentAtMs ?? nowMs;
+        const seatCushionY = resolveSeatCushionY(participant.reliableState);
         return {
           participantId: participant.participantId,
           mode: presence?.mode ?? "desktop",
@@ -460,7 +533,18 @@ export function createRemoteAvatarRuntime(input: {
           hasVisualEntity: Boolean(entity),
           hasAudioNode: false,
           appliedRootYaw: roundNumber(entity?.body.rotation.y ?? root.yaw),
-          appliedHeadYaw: roundNumber(entity?.head.rotation.y ?? head.yaw)
+          appliedHeadYaw: roundNumber(entity?.head.rotation.y ?? head.yaw),
+          seatCushionY: seatCushionY === null ? null : roundNumber(seatCushionY),
+          renderedBody: entity
+            ? {
+              x: roundNumber(entity.body.position.x),
+              y: roundNumber(entity.body.position.y),
+              z: roundNumber(entity.body.position.z),
+              bottomY: roundNumber(entity.body.position.y + bodyExtent.minY * entity.body.scale.y),
+              topY: roundNumber(entity.body.position.y + bodyExtent.maxY * entity.body.scale.y),
+              visible: entity.body.visible && entity.body.parent === input.scene
+            }
+            : null
         };
       });
     debugState.remoteAvatarParticipants = Array.from(remoteAvatarParticipants.values())
@@ -619,10 +703,9 @@ export function createRemoteAvatarRuntime(input: {
         applyProceduralMouthState(entity.mouth, lipsync.mouthAmount);
         entity.mouth.visible = true;
         if (poseFrame) {
-          entity.body.position.lerp(
-            new THREE.Vector3(poseFrame.root.x, resolveRemoteBodyWorldY(poseFrame.root.y, reliableState?.inputMode ?? null), poseFrame.root.z),
-            bodyPoseAlpha
-          );
+          const bodyShape = resolveBodyShape(participant, poseFrame.root.y, poseFrame.head.y);
+          entity.body.position.lerp(new THREE.Vector3(poseFrame.root.x, bodyShape.centerY, poseFrame.root.z), bodyPoseAlpha);
+          entity.body.scale.y = THREE.MathUtils.lerp(entity.body.scale.y, bodyShape.scaleY, bodyPoseAlpha);
           entity.head.position.lerp(new THREE.Vector3(poseFrame.head.x, poseFrame.head.y, poseFrame.head.z), headPoseAlpha);
           entity.leftHand.position.lerp(new THREE.Vector3(poseFrame.leftHand.x, poseFrame.leftHand.y, poseFrame.leftHand.z), headPoseAlpha);
           entity.rightHand.position.lerp(new THREE.Vector3(poseFrame.rightHand.x, poseFrame.rightHand.y, poseFrame.rightHand.z), headPoseAlpha);
@@ -644,10 +727,9 @@ export function createRemoteAvatarRuntime(input: {
         } else {
           if (bodySample && headSample) {
             const fallbackBodyY = participant ? participant.poseFrame?.frame.root.y ?? entity.body.position.y : entity.body.position.y;
-            entity.body.position.lerp(
-              new THREE.Vector3(bodySample.x, resolveRemoteBodyWorldY(fallbackBodyY, reliableState?.inputMode ?? null), bodySample.z),
-              fallbackBodyAlpha
-            );
+            const bodyShape = resolveBodyShape(participant, fallbackBodyY, participant?.poseFrame?.frame.head.y ?? entity.head.position.y);
+            entity.body.position.lerp(new THREE.Vector3(bodySample.x, bodyShape.centerY, bodySample.z), fallbackBodyAlpha);
+            entity.body.scale.y = THREE.MathUtils.lerp(entity.body.scale.y, bodyShape.scaleY, fallbackBodyAlpha);
             entity.head.position.lerp(new THREE.Vector3(headSample.x, 1.58, headSample.z), fallbackPoseAlpha);
             entity.body.rotation.x = 0;
             entity.body.rotation.z = 0;

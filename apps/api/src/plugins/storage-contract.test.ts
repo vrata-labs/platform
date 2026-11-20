@@ -678,8 +678,41 @@ for (const engine of ["Memory", "Postgres"] as const) {
       // A stale cleanup must never delete a newly-created room reusing the same public ID.
       await restarted.createRoom({ ...scope, templateId: "meeting-room-basic", name: "Replacement room" });
       await assert.rejects(restarted.deleteRoom(scope.roomId, { tenantId: scope.tenantId, deletionId: intent.deletionId }), code("room_plugin_cleanup_pending"));
+      await assert.rejects(restarted.prepareRoomDocumentCleanup(scope.roomId, scope.tenantId, intent.deletionId), code("room_plugin_cleanup_pending"));
       const ordinary = await room(f);
       assert.equal(await deleteRoomWithPluginCleanup(restarted, ordinary, () => { throw new Error("must_not_resolve_blob_config"); }), true);
+    });
+
+    await t.test("document cleanup retains retry keys across restart and rejects a concurrent document before parent removal", async () => {
+      const scope = await room(f), other = await room(f), objects = blobs(f);
+      const service = createRoomPluginPackageService(f.storage.roomPlugins, objects.adapter);
+      const pkg = await service.savePackage(scope, artifact("lifecycle"));
+      const preserved = await service.savePackage(other, artifact("lifecycle"));
+      await f.storage.roomPlugins.putBinding(scope, pkg.pluginId, binding(pkg), 0);
+      const createDocument = (name: string) => f.storage.createRoomDocument({
+        ...scope, documentId: randomUUID(), filename: `${name}.pdf`, contentType: "application/pdf", sizeBytes: 4,
+        checksum: "sha256:" + "a".repeat(64), storageKey: `documents/${scope.roomId}/${name}.pdf`,
+        uploadedBy: null, metadata: { kind: "pdf", pageCount: 1 }
+      });
+      const first = await createDocument("first");
+      await assert.rejects(deleteRoomWithPluginCleanup(f.storage, scope, () => objects.adapter, undefined, async key => {
+        await f.checkNoFence(scope);
+        assert.equal(objects.objects.has(pkg.storageKey), false, "plugin bytes precede document bytes");
+        assert.equal(key, first.storageKey); throw new Error("document_delete_retry");
+      }), /document_delete_retry/);
+      const restarted = await f.restart();
+      assert.ok((await restarted.listRoomDocuments(scope.roomId, true))[0].deletedAt);
+      assert.ok(await restarted.getRoom(scope.roomId));
+      let late = false;
+      await assert.rejects(deleteRoomWithPluginCleanup(restarted, scope, () => objects.adapter, undefined, async () => {
+        if (!late) { late = true; await createDocument("late"); }
+      }), code("room_plugin_cleanup_pending"));
+      const cleaned: string[] = [];
+      assert.equal(await deleteRoomWithPluginCleanup(await f.restart(), scope, () => objects.adapter, undefined, async key => { cleaned.push(key); }), true);
+      assert.equal(cleaned.length, 2);
+      assert.ok(cleaned.includes(first.storageKey));
+      assert.ok(objects.objects.has(preserved.storageKey));
+      assert.ok(await restarted.getRoom(other.roomId));
     });
 
     await t.test("backend configuration drift blocks reads/idempotent upload/cleanup before IO or deletion confirmation", async () => {

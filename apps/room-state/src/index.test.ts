@@ -10,6 +10,7 @@ import {
   applyMediaObjectCreateCommand,
   applyMediaObjectPatchCommand,
   applyRemoteBrowserExecutorPatchCommand,
+  classifyRemoteBrowserBinding,
   applyMediaObjectStopCommand,
   applyDocumentMediaObjectsCleanup,
   applyPdfPresentationDocumentCleanup,
@@ -662,7 +663,7 @@ test("remote browser executor callback activates LiveKit media tracks", () => {
     objectId,
     executorSessionId: `remote-browser:${objectId}`,
     executorInstanceId,
-    mediaParticipantId: `remote-browser:${objectId}`
+    mediaParticipantId: executorInstanceId
   }), true);
   assert.equal(verifyRemoteBrowserBinding(server, {
     roomId: "demo-room",
@@ -696,7 +697,7 @@ test("remote browser executor callback activates LiveKit media tracks", () => {
     executorInstanceId,
     patch: {
       type: "mark-active",
-      mediaParticipantId: `remote-browser:${objectId}`,
+      mediaParticipantId: executorInstanceId,
       mediaTrackSid: "TR_VP",
       audioTrackSid: "TR_AUDIO",
       inputEventId: "executor:active:1"
@@ -712,6 +713,49 @@ test("remote browser executor callback activates LiveKit media tracks", () => {
   assert.equal(payload.type, "room_state");
   assert.equal(payload.room.mediaObjects.objects[objectId].state.mediaTrackSid, "TR_VP");
   assert.equal("frameStreamId" in payload.room.mediaObjects.objects[objectId].state, false);
+});
+
+test("remote browser binding names why an instance is not current, and only lasting reasons are final", () => {
+  const server = createRoomStateServer();
+  connectParticipant(server, "demo-room", "host", createSocket() as never, { role: "host" });
+  const objectId = applyMediaObjectCreateCommand(server, "demo-room", "host", {
+    commandId: "cmd-create-browser", surfaceId: "debug-main", objectType: "remote-browser"
+  }).objectId ?? "";
+  const sessionId = `remote-browser:${objectId}`;
+  const open = (expectedRevision: number, inputEventId: string) => applyMediaObjectPatchCommand(server, "demo-room", "host", {
+    commandId: `cmd-open-${inputEventId}`, surfaceId: "debug-main", objectId, expectedRevision,
+    patch: { type: "open-url", url: "https://example.com", inputEventId }
+  });
+  const reason = (instanceId: string, overrides: Partial<Parameters<typeof classifyRemoteBrowserBinding>[1]> = {}) => classifyRemoteBrowserBinding(server, {
+    roomId: "demo-room", objectId, executorSessionId: sessionId, executorInstanceId: instanceId, mediaParticipantId: instanceId, ...overrides
+  });
+
+  assert.equal(open(0, "host:open:1").accepted, true);
+  const first = `${sessionId}:instance:1`;
+  assert.equal(reason(first), "authorized");
+  assert.equal(reason(first, { mediaParticipantId: sessionId }), "mismatch");
+  assert.equal(reason(first, { executorSessionId: "remote-browser:other" }), "mismatch");
+  assert.equal(reason(first, { objectId: "missing-object" }), "object_missing");
+  assert.equal(reason(first, { roomId: "never-loaded-room" }), "room_missing");
+  // The binding check reads; it never creates the room it was asked about.
+  assert.equal(server.rooms.has("never-loaded-room"), false);
+
+  const reopened = open(1, "host:open:2");
+  assert.equal(reopened.accepted, true);
+  const second = `${sessionId}:instance:${reopened.revision}`;
+  assert.equal(reason(first), "superseded");
+  assert.equal(reason(second), "authorized");
+
+  assert.equal(applyRemoteBrowserExecutorPatchCommand(server, {
+    roomId: "demo-room", surfaceId: "debug-main", objectId, executorSessionId: sessionId, executorInstanceId: second,
+    patch: { type: "mark-stopped", inputEventId: "executor:stopped:1" }
+  }).accepted, true);
+  assert.equal(reason(second), "stopped");
+  assert.equal(applyRemoteBrowserExecutorPatchCommand(server, {
+    roomId: "demo-room", surfaceId: "debug-main", objectId, executorSessionId: sessionId, executorInstanceId: second,
+    patch: { type: "mark-publishing", mediaParticipantId: second, inputEventId: "executor:revive:1" }
+  }).accepted, false);
+  assert.equal(reason(second), "stopped");
 });
 
 test("remote browser open-url forwards the derived frame stream without storing it", () => {
@@ -741,8 +785,8 @@ test("remote browser open-url forwards the derived frame stream without storing 
       patch: { type: "open-url", url: "https://example.com", inputEventId: "host:open:1" }
     });
     assert.equal(opened.accepted, true);
-    assert.deepEqual(forwarded.map(({ url, body }) => [url, body.sessionId, body.executorInstanceId, body.frameStreamId]), [
-      ["http://remote-browser.test/api/sessions", `remote-browser:${objectId}`, `remote-browser:${objectId}:instance:1`, `remote-browser:${objectId}:frames`]
+    assert.deepEqual(forwarded.map(({ url, body }) => [url, body.sessionId, body.executorInstanceId, body.frameStreamId, body.surfaceId]), [
+      ["http://remote-browser.test/api/sessions", `remote-browser:${objectId}`, `remote-browser:${objectId}:instance:1`, `remote-browser:${objectId}:frames`, "debug-main"]
     ]);
     // An immediate replay of the same open is a duplicate: no revision, no new instance, no second executor request.
     const replayed = applyMediaObjectPatchCommand(server, "demo-room", "host", {
@@ -759,6 +803,124 @@ test("remote browser open-url forwards the derived frame stream without storing 
     assert.equal((server.rooms.get("demo-room")?.mediaObjects.objects[objectId]?.state as { frameStreamId?: string } | undefined)?.frameStreamId, undefined);
     const payload = JSON.parse(hostSocket.sent[hostSocket.sent.length - 1]!);
     assert.equal("frameStreamId" in payload.room.mediaObjects.objects[objectId].state, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousUrl === undefined) delete process.env.REMOTE_BROWSER_INTERNAL_URL;
+    else process.env.REMOTE_BROWSER_INTERNAL_URL = previousUrl;
+  }
+});
+
+test("remote browser open-url, retry and replacement start the executor on the object's surface", () => {
+  const previousUrl = process.env.REMOTE_BROWSER_INTERNAL_URL;
+  const originalFetch = globalThis.fetch;
+  const forwarded: Array<{ url: string; body: Record<string, unknown> }> = [];
+  process.env.REMOTE_BROWSER_INTERNAL_URL = "http://remote-browser.test";
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    forwarded.push({ url: String(url), body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+    return new Response(null, { status: 200 });
+  }) as typeof fetch;
+  try {
+    for (const surfaceId of ["laptop-screen", "whiteboard-wall"]) {
+      forwarded.length = 0;
+      const server = createRoomStateServer();
+      const hostSocket = createSocket();
+      connectParticipant(server, "demo-room", "host", hostSocket as never, { role: "host" });
+      const created = applyMediaObjectCreateCommand(server, "demo-room", "host", { commandId: `cmd-create-${surfaceId}`, surfaceId, objectType: "remote-browser" });
+      assert.equal(created.accepted, true, surfaceId);
+      const objectId = created.objectId ?? "";
+      const open = (revision: number, inputEventId: string, url: string) => applyMediaObjectPatchCommand(server, "demo-room", "host", {
+        commandId: `cmd-${inputEventId}`,
+        surfaceId,
+        objectId,
+        expectedRevision: revision,
+        patch: { type: "open-url", url, inputEventId }
+      });
+      const revision = () => server.rooms.get("demo-room")?.mediaObjects.objects[objectId]?.revision ?? -1;
+      const instance = () => (server.rooms.get("demo-room")?.mediaObjects.objects[objectId]?.state as { executorInstanceId?: string } | undefined)?.executorInstanceId ?? "";
+
+      assert.equal(open(revision(), "host:open:1", "https://example.com").accepted, true);
+      const failed = applyRemoteBrowserExecutorPatchCommand(server, {
+        roomId: "demo-room",
+        surfaceId,
+        objectId,
+        executorSessionId: `remote-browser:${objectId}`,
+        executorInstanceId: instance(),
+        patch: { type: "mark-failed", errorCode: "navigation_failed", inputEventId: "executor:failed:1" }
+      });
+      assert.equal(failed.accepted, true, surfaceId);
+      // Retry after a failure, then a replacement of the running session with another URL.
+      assert.equal(open(revision(), "host:open:2", "https://example.com").accepted, true);
+      assert.equal(open(revision(), "host:open:3", "https://example.org").accepted, true);
+      assert.deepEqual(forwarded.map(({ url, body }) => [url, body.surfaceId, body.objectId, body.url]), [
+        ["http://remote-browser.test/api/sessions", surfaceId, objectId, "https://example.com"],
+        ["http://remote-browser.test/api/sessions", surfaceId, objectId, "https://example.com"],
+        ["http://remote-browser.test/api/sessions", surfaceId, objectId, "https://example.org"]
+      ]);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousUrl === undefined) delete process.env.REMOTE_BROWSER_INTERNAL_URL;
+    else process.env.REMOTE_BROWSER_INTERNAL_URL = previousUrl;
+  }
+});
+
+test("remote browser executor callbacks are accepted only on the object's own surface", () => {
+  const previousUrl = process.env.REMOTE_BROWSER_INTERNAL_URL;
+  const originalFetch = globalThis.fetch;
+  process.env.REMOTE_BROWSER_INTERNAL_URL = "http://remote-browser.test";
+  globalThis.fetch = (async () => new Response(null, { status: 200 })) as typeof fetch;
+  try {
+    for (const [surfaceId, foreignSurfaceIds] of [
+      ["laptop-screen", ["debug-main", "whiteboard-wall"]],
+      ["whiteboard-wall", ["debug-main", "laptop-screen"]]
+    ] as const) {
+      const server = createRoomStateServer();
+      connectParticipant(server, "demo-room", "host", createSocket() as never, { role: "host" });
+      const created = applyMediaObjectCreateCommand(server, "demo-room", "host", { commandId: `cmd-create-${surfaceId}`, surfaceId, objectType: "remote-browser" });
+      assert.equal(created.accepted, true, surfaceId);
+      const objectId = created.objectId ?? "";
+      const sessionId = `remote-browser:${objectId}`;
+      const object = () => server.rooms.get("demo-room")?.mediaObjects.objects[objectId];
+      const status = () => (object()?.state as { status?: string } | undefined)?.status;
+      const instance = () => (object()?.state as { executorInstanceId?: string } | undefined)?.executorInstanceId ?? "";
+      const open = (inputEventId: string) => applyMediaObjectPatchCommand(server, "demo-room", "host", {
+        commandId: `cmd-${inputEventId}`,
+        surfaceId,
+        objectId,
+        expectedRevision: object()?.revision ?? -1,
+        patch: { type: "open-url", url: "https://example.com", inputEventId }
+      });
+      const callback = (callbackSurfaceId: string, patch: Record<string, unknown>) => applyRemoteBrowserExecutorPatchCommand(server, {
+        roomId: "demo-room",
+        surfaceId: callbackSurfaceId,
+        objectId,
+        executorSessionId: sessionId,
+        executorInstanceId: instance(),
+        patch
+      });
+      const expectOnlyOwnSurface = (patch: Record<string, unknown>, expectedStatus: string) => {
+        const before = { status: status(), revision: object()?.revision };
+        for (const foreignSurfaceId of foreignSurfaceIds) {
+          const refused = callback(foreignSurfaceId, { ...patch, inputEventId: `${String(patch.inputEventId)}:${foreignSurfaceId}` });
+          assert.equal(refused.accepted, false, `${surfaceId} <- ${foreignSurfaceId} ${String(patch.type)}`);
+          assert.equal(refused.blockedReason, "object-surface-mismatch", `${surfaceId} <- ${foreignSurfaceId} ${String(patch.type)}`);
+        }
+        assert.deepEqual({ status: status(), revision: object()?.revision }, before, `${surfaceId} ${String(patch.type)} unchanged by foreign callbacks`);
+        const accepted = callback(surfaceId, patch);
+        assert.equal(accepted.accepted, true, `${surfaceId} ${String(patch.type)}`);
+        assert.equal(accepted.surfaceId, surfaceId);
+        assert.equal(status(), expectedStatus, `${surfaceId} ${String(patch.type)}`);
+      };
+
+      assert.equal(open("host:open:1").accepted, true, surfaceId);
+      assert.equal(status(), "loading");
+      expectOnlyOwnSurface({ type: "mark-publishing", mediaParticipantId: instance(), inputEventId: "executor:publishing:1" }, "publishing");
+      expectOnlyOwnSurface({ type: "mark-active", mediaParticipantId: instance(), mediaTrackSid: "TR_VP", audioTrackSid: "TR_AUDIO", inputEventId: "executor:active:1" }, "active");
+      // A fresh executor generation that fails before publishing.
+      assert.equal(open("host:open:2").accepted, true, surfaceId);
+      assert.equal(status(), "loading");
+      expectOnlyOwnSurface({ type: "mark-failed", errorCode: "navigation_failed", inputEventId: "executor:failed:1" }, "failed");
+    }
   } finally {
     globalThis.fetch = originalFetch;
     if (previousUrl === undefined) delete process.env.REMOTE_BROWSER_INTERNAL_URL;
