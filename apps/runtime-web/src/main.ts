@@ -75,6 +75,7 @@ import {
   type RoomStateSnapshot,
   type SurfaceCommandResult
 } from "./room-state-client.js";
+import { createRoomStateRenewalCutover } from "./room-state-renewal.js";
 import { classifyMediaError, classifyRoomStateError, classifyScreenShareActionError, createFaultError, getRuntimeIssue, shouldRetryConnection, type RuntimeIssue } from "./runtime-errors.js";
 import { canRetry, createReconnectPolicy, getReconnectDelayMs } from "./reconnect.js";
 import { applyRuntimeIssueState, clearRuntimeIssueState, createRuntimeUiState } from "./runtime-state.js";
@@ -130,7 +131,7 @@ import { planRemoteBrowserXrPointer } from "./media/remote-browser-xr-input.js";
 import { getScreenShareErrorCode } from "./media/screen-share-object.js";
 import { captureScreenShareStream, createMockShareStream } from "./media/screen-share-capture.js";
 import { createScreenShareActions } from "./media/screen-share-actions.js";
-import { createMeetingToolTransition, MeetingToolTransitionError, planMeetingTool, type MeetingToolContext } from "./meeting/meeting-tool-transition.js";
+import { createMeetingToolTransition, MeetingToolTransitionError, planMeetingTool, type MeetingToolContext, type MeetingToolPlan } from "./meeting/meeting-tool-transition.js";
 import { createMeetingToolUi, meetingToolMessage } from "./meeting/meeting-tool-ui.js";
 import { createInactiveWhiteboardDebugSnapshot, createWhiteboardObjectRuntime } from "./media/whiteboard-object.js";
 import { applySpatialSettings, createSpatialAudioSettings, resolveSpatialAudioMode } from "./spatial-audio.js";
@@ -693,6 +694,7 @@ const mediaRoomIdleDisconnectScheduler = createMediaRoomIdleScheduler<Room, numb
   clearTimer: (timer) => window.clearTimeout(timer)
 });
 let roomStateClient: RoomStateClient | null = null;
+let roomStateSocketDeadlineMs: number | null = null;
 let roomStateAccessToken = "";
 const roomPluginTokenBound = new RoomPluginTokenBound();
 let roomStateConnected = false;
@@ -1451,12 +1453,41 @@ const { renderHostControls, refreshSessionControl, runHostControlAction, canMana
   transferHostButton, transferOwnerButton, grantPresenterButton, revokePresenterButton,
   fetchRoomSessionControl, applyAccessDebug, disableRuntimeForSessionBlock,
   applyAuthorityAccess: access => applyAccessDebug(access, roomStateAccessToken),
-  onAuthorityChanged: () => { meetingNavigation?.requestSync(); if (roomPluginAuthorReady) roomPluginAuthor.sync(); },
+  onAuthorityChanged: () => {
+    roomStateRenewal.sync();
+    meetingNavigation?.requestSync(); if (roomPluginAuthorReady) roomPluginAuthor.sync();
+  },
   onPluginBindingsRevision: revision => { roomPluginRuntime.observeRevisionHint(revision); if (roomPluginAuthorReady) roomPluginAuthor.observeRevision(revision); }
 });
 let sessionControlBlocked = false;
 let meetingTools: ReturnType<typeof createMeetingToolTransition> | null = null;
 let meetingToolsCurrent: (() => MeetingToolContext) | null = null;
+const roomStateRenewal = createRoomStateRenewalCutover<RoomStateClient, MeetingToolPlan>({
+  current: () => {
+    const transition = meetingTools?.snapshot();
+    return {
+      connection: roomStateClient,
+      authority: roomStateAuthorityKey(),
+      // Do not keep a socket for a confirmation or an open capture picker.
+      transition: roomStateConnected && transition?.plan?.intent.kind === "screen"
+        && (transition.phase === "stopping" || transition.phase === "starting") ? transition.plan : null
+    };
+  },
+  replace: replaceRoomStateSocket,
+  now: () => performance.now(),
+  schedule: (run, delayMs) => {
+    const timer = window.setTimeout(run, delayMs);
+    return () => window.clearTimeout(timer);
+  }
+});
+let roomPageSuspended = false;
+let roomStateRefreshOnRestore: RoomStateClient | null = null;
+
+function roomStateAuthorityKey(): string | null {
+  const revision = authorityRevision();
+  return revision === null ? null : JSON.stringify([revision, debugState.access.role,
+    [...debugState.access.permissions].sort(), debugState.personalRoom.isOwner]);
+}
 let surfaceStopRevisionSupported = false;
 // Seat claim/release correlation announced by room-state, and whether this connection delivered occupancy yet.
 let seatCommandCorrelationSupported = false;
@@ -1722,12 +1753,7 @@ function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["acc
     lastSurfaceCommandAccepted: previousLastSurfaceCommandAccepted
   };
   if (previousRole !== access.role && debugState.roomStateUrl) {
-    roomStateConnected = false;
-    debugState.roomStateConnected = false;
-    mediaSurfaceCommands.rejectAll("room_state_reconnecting");
-    roomStateClient?.close();
-    roomStateClient = null;
-    connectRoomStateWithRetry(debugState.roomStateUrl);
+    replaceRoomStateSocket(roomStateClient);
   }
   syncMediaCapabilityControls();
   syncNotesAccessUi();
@@ -1741,6 +1767,17 @@ function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["acc
   }
 }
 
+function replaceRoomStateSocket(previous: RoomStateClient | null): void {
+  if (roomStateClient !== previous || !debugState.roomStateUrl || sessionControlBlocked || runtimeSessionGate.reason) return;
+  roomStateRenewal.clear();
+  roomStateConnected = false;
+  debugState.roomStateConnected = false;
+  mediaSurfaceCommands.rejectAll("room_state_reconnecting");
+  roomStateClient = null;
+  previous?.close();
+  connectRoomStateWithRetry(debugState.roomStateUrl);
+}
+
 function disableRuntimeForSessionBlock(reason: string): void {
   roomPluginTokenBound.clear();
   try { roomPluginRuntime.stop(); if (roomPluginAuthorReady) roomPluginAuthor.stop(); } catch { /* Plugin cleanup must not prevent the core session block. */ }
@@ -1748,6 +1785,7 @@ function disableRuntimeForSessionBlock(reason: string): void {
   const message = describeSessionControlReason(reason);
   showRoomAccessEnded(roomAccessEndedEl, reason);
   sessionControlBlocked = true;
+  roomStateRenewal.clear();
   meetingTools?.invalidate();
   clearRoomStateReconnect();
   clearSeatReclaimRetry();
@@ -1791,11 +1829,19 @@ function disableRuntimeForSessionBlock(reason: string): void {
 
 const sessionControlPoller = createSessionControlPoller({ intervalMs: SESSION_CONTROL_REFRESH_INTERVAL_MS,
   refresh: () => refreshSessionControl() });
-window.addEventListener("pagehide", () => { sessionControlPoller.stop(); roomPluginRuntime.stop(); });
+window.addEventListener("pagehide", () => {
+  roomPageSuspended = true;
+  roomStateRefreshOnRestore = roomStateRenewal.clear();
+  sessionControlPoller.stop(); roomPluginRuntime.stop();
+});
 window.addEventListener("pageshow", event => {
+  roomPageSuspended = false;
   if (event.persisted && !sessionControlBlocked && !runtimeSessionGate.reason) {
+    if (roomStateRefreshOnRestore && roomStateConnected
+      && roomStateRefreshOnRestore.socket.readyState === WebSocket.OPEN) replaceRoomStateSocket(roomStateRefreshOnRestore);
     sessionControlPoller.start(); roomPluginRuntime.start(activeIdentityProtocolVersion);
   }
+  roomStateRefreshOnRestore = null;
 });
 document.addEventListener("visibilitychange", () => roomPluginRuntime.availabilityChanged());
 window.addEventListener("online", () => { roomPluginRuntime.availabilityChanged(); roomPluginAuthor.sync(); });
@@ -1810,7 +1856,7 @@ function startIdentitySessionRenewal(expiresInSeconds: number): void {
       window.clearInterval(timer);
       return;
     }
-    if (inFlight || Date.now() < nextAttemptAtMs) return;
+    if (roomPageSuspended || inFlight || Date.now() < nextAttemptAtMs) return;
     inFlight = true;
     nextAttemptAtMs = Date.now() + 60_000;
     void (async () => {
@@ -1824,27 +1870,26 @@ function startIdentitySessionRenewal(expiresInSeconds: number): void {
         const renewed = await fetchStateToken(apiBaseUrl, roomId, {
           identityProtocolVersion: 2, identityCredential, participantId, displayName
         });
+        if (sessionControlBlocked || runtimeSessionGate.reason || roomPageSuspended) return;
         if (renewed.identityProtocolVersion !== 2 || renewed.participantId !== participantId
           || !renewed.identityCredential || !renewed.token) {
           runtimeSessionGate.require("identity_recovery_required");
           return;
         }
-        if (sessionControlBlocked || runtimeSessionGate.reason) return;
         roomIdentityTab.rememberIdentity(renewed.identityCredential);
         const previousRole = debugState.access.role;
+        const previousAuthority = roomStateAuthorityKey();
+        const previousSocket = roomStateClient;
         const access = acceptRenewedAuthority(renewed);
         roomPluginTokenBound.admit(pluginTokenRequest, renewed.token, renewed.expiresInSeconds);
         applyAccessDebug(access ?? debugState.access, renewed.token, renewed.expiresInSeconds);
         roomPluginRuntime.kick();
         nextAttemptAtMs = Date.now() + Math.max(30_000, Math.min(420_000, (renewed.expiresInSeconds - 120) * 1000));
-        // Existing sockets still carry the old exp; reconnect with the new rs2.
-        if (previousRole === debugState.access.role && roomStateClient && debugState.roomStateUrl) {
-          roomStateConnected = false;
-          debugState.roomStateConnected = false;
-          mediaSurfaceCommands.rejectAll("room_state_reconnecting");
-          roomStateClient.close();
-          roomStateClient = null;
-          connectRoomStateWithRetry(debugState.roomStateUrl);
+        // The server still checks the old socket's own proof on every command.
+        // Only a confirmed, unchanged authority can finish an in-flight handoff.
+        if (previousRole === debugState.access.role && previousSocket && roomStateClient === previousSocket) {
+          roomStateRenewal.request(previousSocket, access !== null && previousAuthority === roomStateAuthorityKey(),
+            previousSocket.socket.readyState === WebSocket.OPEN ? roomStateSocketDeadlineMs : null);
         }
       } catch (error) {
         if (runtimeSessionGate.reason) return;
@@ -2260,12 +2305,14 @@ function routeSurfaceInputToMediaObject(event: SurfaceInputEvent): boolean {
 }
 
 function handleRoomSnapshot(snapshot: RoomStateSnapshot): void {
+  const firstSnapshot = !roomStateOccupancySeen;
   roomStateServerOffsetMs = snapshot.serverTimeMs - Date.now();
   roomSeatOccupancy = { ...(snapshot.seatOccupancy ?? {}) };
   roomMediaObjects = snapshot.mediaObjects;
   surfaceStopRevisionSupported = snapshot.capabilities?.surfaceStopRevision === true;
   seatCommandCorrelationSupported = snapshot.capabilities?.seatCommandCorrelation === true;
   roomStateOccupancySeen = true;
+  if (firstSnapshot) void flushDeferredScreenShareStops();
   meetingTools?.sync();
   syncSeatStateFromOccupancy();
   syncMediaObjectsDebugState();
@@ -4013,21 +4060,22 @@ function detachMediaRoomScreenShareEntry(entry: ScreenShareRuntimeEntry): void {
   const surfaceId = entry.surfaceId;
   detachScreenShareEntry(entry);
   if (shouldStopObject) {
-    deferredScreenShareStops.enqueue(objectId, surfaceId);
-    void flushDeferredScreenShareStops();
+    void queueLocalScreenShareStop(objectId, surfaceId);
   }
+}
+
+function queueLocalScreenShareStop(objectId: string, surfaceId: string): Promise<void> {
+  if (sessionControlBlocked || runtimeSessionGate.reason) return Promise.resolve();
+  deferredScreenShareStops.enqueue(objectId, surfaceId);
+  return flushDeferredScreenShareStops();
 }
 
 function flushDeferredScreenShareStops(): Promise<void> {
   return deferredScreenShareStops.flush({
-    canSend: Boolean(roomStateClient && roomStateConnected),
-    isStillActive: (objectId, surfaceId) => {
-      if (!roomMediaObjects) {
-        return true;
-      }
-      return Boolean(roomMediaObjects.objects[objectId]
-        && roomMediaObjects.surfaces[surfaceId]?.activeObjectId === objectId);
-    },
+    canSend: Boolean(roomStateClient && roomStateConnected && roomStateOccupancySeen),
+    isStillActive: (objectId, surfaceId) => roomMediaObjects?.objects[objectId]?.ownerParticipantId === participantId
+      && roomMediaObjects.objects[objectId]?.type === SCREEN_SHARE_OBJECT_TYPE
+      && roomMediaObjects.surfaces[surfaceId]?.activeObjectId === objectId,
     send: async (objectId, surfaceId) => {
       const result = await mediaSurfaceCommands.stopScreenShareObject(objectId, surfaceId);
       return result.accepted
@@ -4490,6 +4538,7 @@ const screenShareActions = createScreenShareActions({
   canStart: surfaceId => debugState.access.canStartScreenShare && roomStateConnected && !activeMediaObjectForSurface(surfaceId)
     && surfaceAllowsObject(surfaceId, SCREEN_SHARE_OBJECT_TYPE),
   commands: mediaSurfaceCommands, ensureMediaRoom: () => ensureMediaRoom(true),
+  stopFailedShare: queueLocalScreenShareStop,
   mediaAudioEnabled: surfaceId => shouldPublishMediaSurfaceAudio(roomMediaObjects, surfaceId),
   attach: (stream, input) => attachScreenShareStream(stream, { ...input, ownerParticipantId: participantId }),
   attachMock: attachMockVideoStream, bindEnded: bindLocalScreenShareTrackEnd,
@@ -4507,7 +4556,7 @@ const meetingToolUi = createMeetingToolUi({ document, confirm: () => meetingTool
 function initializeMeetingTools(boot: { templateSurfaces?: RoomTemplateSurface[]; templateSettings?: { presentation?: { surfaceId?: string } } }): void {
   meetingToolsCurrent = () => ({ leaseKey: JSON.stringify([roomId, participantId, roomStateConnectionGeneration,
     sessionControlBlocked, roomStateConnected, authorityRevision(), [...debugState.access.permissions].sort()]),
-    blocked: sessionControlBlocked || Boolean(runtimeSessionGate.reason), connected: roomStateConnected,
+    blocked: sessionControlBlocked || Boolean(runtimeSessionGate.reason) || roomPageSuspended || roomStateRenewal.expired(), connected: roomStateConnected,
     participantId, permissions: debugState.access.permissions, screenSupported: shareMockEnabled || browserMediaCapabilities.screenShare.supported,
     screenEnabled: shareMockEnabled || runtimeFlags.screenShare, documentsEnabled: runtimeFlags.documentsEnabled,
     stopRevisionSupported: surfaceStopRevisionSupported, xrActive: renderer.xr.isPresenting,
@@ -4540,6 +4589,7 @@ function initializeMeetingTools(boot: { templateSurfaces?: RoomTemplateSurface[]
       return started;
     },
     changed: state => {
+      roomStateRenewal.sync();
       meetingToolUi.render(state); renderDocumentsUi(); syncMediaCapabilityControls(); syncWhiteboardControls();
       startShareButton.disabled = !canUseScreenShareControl(); stopShareButton.disabled = !canStopLocalScreenShare();
       reconcileMediaRoomIdleDisconnect(livekitRoom, "meeting_tool_transition_idle");
@@ -5256,6 +5306,7 @@ function clearSeatReclaimRetry(): void {
 
 function connectRoomStateWithRetry(roomStateUrl: string): void {
   if (sessionControlBlocked) return;
+  roomStateRenewal.clear();
   clearRoomStateReconnect();
   clearSeatReclaimRetry();
   debugState.roomStateMode = "disconnected";
@@ -5280,6 +5331,8 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
   seatCommandCorrelationSupported = false; roomStateOccupancySeen = false;
   meetingTools?.sync();
   const isCurrentConnection = () => connectionGeneration === roomStateConnectionGeneration;
+  const proof = roomPluginTokenBound.capture();
+  roomStateSocketDeadlineMs = proof?.token === roomStateAccessToken ? proof.deadlineMs : null;
   roomStateClient = connectRoomState(roomStateUrl, roomId, participantId, {
     onIdentityRequired: (reason) => {
       if (isCurrentConnection()) runtimeSessionGate.require(reason);
@@ -5294,7 +5347,6 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       startShareButton.disabled = !canUseScreenShareControl();
       stopShareButton.disabled = !canStopLocalScreenShare();
       setRoomStateStatus("Room-state: connected");
-      void flushDeferredScreenShareStops();
       if (runtimeUiState.issueCode === "room_state_failed") {
         clearIssue(debugState.audioState === "connected-passive" ? `Joined as ${displayName}` : debugState.statusLine);
       }
@@ -5408,6 +5460,8 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       const issue = classifyRoomStateError(error);
       roomStateConnected = false;
       debugState.roomStateConnected = false;
+      roomStateRenewal.clear();
+      meetingTools?.sync();
       roomPluginRuntime.connectionChanged();
       roomPluginSeats.stop("offline");
       mediaSurfaceCommands.rejectAll("room_state_error");
@@ -5428,6 +5482,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       const issue = getRuntimeIssue("room_state_failed");
       roomStateConnected = false;
       debugState.roomStateConnected = false;
+      roomStateRenewal.clear();
       roomPluginRuntime.connectionChanged();
       roomPluginSeats.stop("offline");
       mediaSurfaceCommands.rejectAll("room_state_closed");

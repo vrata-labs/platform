@@ -200,6 +200,42 @@
       "checked_at": "2026-11-14T18:36:59Z",
       "status": "available",
       "summary": "DONE_LOCAL_EXTERNAL_BLOCKED. Stage backup включает проверенные полные current/previous/Wave 2 snapshots, реальные bindings/derived descriptor keys, полный inventory и room URLs точного SQL-дампа с template snapshot; вложенные версии проверяются по marker/binding даже после prune. Operation lock затем shared state lock и конечная проверка исключают смешение acceptance; незавершённый каталог не участвует в retention, ошибка инвалидирует manifest и удаляет частичные scene copies. Общий backup format/restore не изменён. Companion validate/restore проверяет основной backup и все scene files, атомарно восстанавливает отдельный каталог без Git сцен и без создания host designation/gate/accepted-release/active. Все 45 helper и 50 обязательных Node tests k04 успешны, включая 8 новых recovery tests; 140 дополнительных backup tests успешны, один прежний optional real-fixture test пропущен без VRATA_TEST_BACKUP_FIXTURE_JSON. Compile/diff успешны. Два настоящих локальных пакета ed0c972/0a3b492 распакованы отдельно: 216 files/409577033 bytes/28 scenes и 13 required; archive SHA256 bd24b8141d94720cd280b29a1f02b21fef5a3ecd4b8ca22768c244a57a674526, inventory db218b7554d31738e17033da8fd64e9672a6f53f6d0e1ea1b2ab3e17b31a3c57. Исторический descriptor SHA256 4dccfa6857a443b74481ab99ac1fbd6286d5941cd0fc930f6c4b1a83740b66a4; новый совпадает с S21. Два старых backup повторно checksum-valid: 49/51 rooms, versioned URLs на соответствующие accepted images, assetSha у обоих 0a3b492; snapshots в них нет, полное scene recovery отклоняется. Приватная таблица связывает исходные bindings с descriptors/archive/inventory и локальными результатами. Это не S3 download и не полная история хоста; k03/k06, after-bootstrap inventory, CI/stage остаются открыты. Внешние policy/role/key операции не повторялись."
+    },
+    {
+      "id": "S23",
+      "system": "test",
+      "locator": "https://github.com/vrata-labs/platform/actions/runs/44686056491; https://github.com/vrata-labs/platform/actions/runs/44686735799; https://github.com/vrata-labs/platform/actions/runs/44688493941; staging-verified.json; D-018",
+      "version": "runtime 5cd26486828db1a130b75c6a01bd2ddaefa7e71f; asset ed0c972cf05f512c35861ef76cff8f87080f3133",
+      "checked_at": "2026-11-20T07:20:05Z",
+      "status": "available",
+      "summary": "Bootstrap получил pinned release из Selectel S3, без Git сцен; каталог 56/56, Extended 6/6 на программной отрисовке. Hall/BlueOffice/ArtGallery проверены браузером без S3 и Git сцен. Аренда 58147e50 освобождена."
+    },
+    {
+      "id": "S24",
+      "system": "test",
+      "locator": "Off-host backup 2026-11-20T07-18-36-020151Z; proof k06; local k08 receipt; D-018",
+      "version": "runtime 5cd26486828db1a130b75c6a01bd2ddaefa7e71f; backup manifest SHA-256 5decbf4ccc01e726b3c0d3b796be1c2fe180ed2b50ea17285f1acd1c21f5dc2d",
+      "checked_at": "2026-11-20T07:20:05Z",
+      "status": "available",
+      "summary": "В пустой каталог без Git сцен восстановлено 303 файла, из них 215/215 файлов закреплённого инвентаря; 42 комнаты. Current и Wave 2 используют один asset SHA, previousRelease=null. Исходный исторический 0a3b492 и текущий ed0c972 получены из S3 и проверены. В локальном k08: 220 passed, 2 failed, 49 не запустились; private-assets в этой команде не исполнялся."
+    },
+    {
+      "id": "S25",
+      "system": "test",
+      "locator": "Журнал T17 D-124; отчёты адресной диагностики k08",
+      "version": "runtime 5cd26486828db1a130b75c6a01bd2ddaefa7e71f; asset ed0c972cf05f512c35861ef76cff8f87080f3133",
+      "checked_at": "2026-11-20T08:11:47Z",
+      "status": "available",
+      "summary": "2/2 медиа-сценария и 5/5 сценариев создания комнаты и соседних действий прошли адресно. Девять наблюдавшихся клиентских POST завершились HTTP 201; зритель подключился в исходное окно 30 с. Инвентарь до и после совпал, ресурсы удалены. Это не полный k08."
+    },
+    {
+      "id": "S26",
+      "system": "test",
+      "locator": "D-019; журнал T17 D-126; report-1.private.json SHA-256 a99f96b4fac3eef26919f53def1300862f5361902f879380d498a23a11b80c0c",
+      "version": "runtime 5cd26486828db1a130b75c6a01bd2ddaefa7e71f",
+      "checked_at": "2026-11-20T09:15:00Z",
+      "status": "available",
+      "summary": "Второй полный GPU: 262 passed, 1 failed, 8 не стартовали. Отказ на публикации экрана второго докладчика. Отдельный private-assets: 3 passed и 2 прежних необязательных пропуска, не второй шаг штатного k08. Хеши закреплённых сцен совпали; контейнер, сеть и тома этого прогона отсутствуют."
     }
   ],
   "claims": [
@@ -224,10 +260,12 @@
     {"id": "F19", "status": "confirmed", "text": "Task 5 локально интегрировала S3 workflow с binding-first/strict-lock, сохранённым helper/catalog и reader secrets только fetch. 119 focused tests подтверждают в fixtures bootstrap/repeat/old target и S3 refusal/rollback без Git сцен; реальный rollout k05/k11 и публикация k03 остаются открыты.", "sources": ["S21"]},
     {"id": "F20", "status": "confirmed", "text": "Task 6 локально сохраняет проверенные scene snapshots/bindings/room URL versions и восстанавливает точные bytes без Git сцен, не подменяя acceptance. Обязательный k04-набор успешен. Настоящие локальные new/historical архивы проверены полностью, старые metadata-only backups не объявлены восстановленными snapshots. Реальный S3 и полный after-bootstrap recovery inventory k06 остаются открыты.", "sources": ["S22"]},
     {"id": "F21", "status": "confirmed", "text": "Узкий infra PR #159 слит в main как 08b6d04e3e0d71b65093f622f93d17cc716b4adc по отдельному разрешению пользователя на административное исключение; CI run 43691120585 на head 43b5e79 полностью успешен, включая шесть шардов e2e. Локальный полный e2e на том же SHA дал 5 отказов при отсутствии runtime/e2e изменений в diff; k03/k06 открыты.", "sources": ["S22"]},
-    {"id": "F22", "status": "confirmed", "text": "k03 подтверждён: политика бакета сохранена (writer GetObject/PutObject, reader GetObject на private-scenes/releases/*); writer опубликовал релизы ed0c972 и исторический 0a3b492, reader скачал оба с полной сверкой 216 файлов/409577033 байт/28 сцен; повторный publish идемпотентен; reader PUT/DELETE, writer DELETE/LIST/GET вне префикса AccessDenied, анонимный GET 403. С рабочей машины около половины TCP-подключений к хранилищу не устанавливаются; путь от GitHub runner не проверен.", "sources": ["S22"]}
+    {"id": "F22", "status": "confirmed", "text": "k03 подтверждён: политика бакета сохранена (writer GetObject/PutObject, reader GetObject на private-scenes/releases/*); writer опубликовал релизы ed0c972 и исторический 0a3b492, reader скачал оба с полной сверкой 216 файлов/409577033 байт/28 сцен; повторный publish идемпотентен; reader PUT/DELETE, writer DELETE/LIST/GET вне префикса AccessDenied, анонимный GET 403. С рабочей машины около половины TCP-подключений к хранилищу не устанавливались; штатный путь GitHub runner впоследствии подтверждён.", "sources": ["S22", "S23"]},
+    {"id": "F23", "status": "confirmed", "text": "k05/k06/k11 прошли на 5cd2648: S3 использовался только при поставке; полный каталог и Extended успешны, HTTP/WebSocket в браузере не обращаются к S3 или Git сцен, все asset versions исходного и текущего инвентарей проверены. Откат предыдущего приложения не подтверждался.", "sources": ["S23", "S24"]},
+    {"id": "F24", "status": "confirmed", "text": "Оба исходных локальных отказа не повторились адресно и во втором полном прогоне. Второй прогон остановился на другом этапе, поэтому k08 не закрыт.", "sources": ["S24", "S25", "S26"]}
   ],
   "gaps": [
-    {"question": "Устанавливаются ли подключения к s3.ru-3.storage.selcloud.ru с GitHub runner без потерь, ведь helper вызывает AWS CLI без повторов?", "blocking": false, "next_step": "Task 9: проверить fetch-шаг Staging Deploy; при сбоях соединения добавить ограниченный повтор подключения в helper с тестами."},
-    {"question": "Какие ещё исторические bindings/snapshots требуются для current, previous, Wave 2 и сохранённых room URLs и доступны ли точные bytes?", "blocking": true, "next_step": "Task 1 выявила только assetSha 0a3b492 в двух сохранённых backup. Task 6 полностью проверила его настоящий локальный архив и новый ed0c972, но не скачивание из S3; старые metadata-only backups не содержат snapshots/previous/Wave 2. Нужны положительные S3 downloads и обновление инвентаря после bootstrap в Task 9. Остальные identities не установлены и не подменяются новой."}
+    {"question": "Как сработает восстановление прежнего принятого приложения на хосте с предыдущим релизом?", "blocking": false, "next_step": "На новом хосте previousRelease=null. При поставке поверх принятого релиза отдельно проверить прежнюю связку image/assets; восстановление файлов из off-host backup не заменяет эту проверку."},
+    {"question": "Обе полные локальные проверки k08 на 5cd2648 красные; во второй не опубликован экран второго докладчика.", "blocking": true, "next_step": "Различить фазы нового отказа и получить полный GPU-набор и private-assets в одной штатной команде k08. Сохранить исходные сроки и проверки."}
   ]
 }
