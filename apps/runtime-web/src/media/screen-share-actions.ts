@@ -17,7 +17,8 @@ export interface ScreenShareActionsContext {
   canStart(surfaceId: string): boolean;
   mock(): boolean;
   mediaAudioEnabled(surfaceId: string): boolean;
-  commands: Pick<MediaSurfaceCommandClient, "createScreenShareObjectOnSurface" | "patchScreenShareObject" | "stopScreenShareObject">;
+  commands: Pick<MediaSurfaceCommandClient, "createScreenShareObjectOnSurface" | "patchScreenShareObject">;
+  stopFailedShare(objectId: string, surfaceId: string): Promise<void>;
   ensureMediaRoom(): Promise<Room>;
   attach(stream: MediaStream, input: { objectId: string; surfaceId: string; mediaTrackSid: string; publishedTracks: MediaStreamTrack[] }): void;
   attachMock(stream: MediaStream, objectId: string, surfaceId: string, mediaTrackSid: string): void;
@@ -89,7 +90,7 @@ export function createScreenShareActions(context: ScreenShareActionsContext) {
       if (objectId) {
         await context.cleanup(room, objectId, publishedTracks).catch(() => undefined);
         await context.commands.patchScreenShareObject(objectId, surfaceId, revision, { type: "mark-failed", errorCode }).catch(() => undefined);
-        await context.commands.stopScreenShareObject(objectId, surfaceId).catch(() => undefined);
+        await context.stopFailedShare(objectId, surfaceId).catch(() => undefined);
       }
       context.syncControls(); throw error;
     } finally { videos.forEach(track => track.removeEventListener("ended", onEnded)); }
