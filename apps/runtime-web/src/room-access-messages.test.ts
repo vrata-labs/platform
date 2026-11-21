@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { setLocale } from "./i18n/i18n.js";
+import { describeRoomAccessEnded } from "./room-access-ended.js";
 import { describeRoomAccessError, describeSessionControlReason } from "./room-access-messages.js";
 
 test("room access messages preserve every existing reason and unknown fallback", () => {
@@ -31,4 +33,18 @@ test("session blocking messages preserve their deliberately narrower mapping", (
   for (const [reason, expected] of Object.entries(messages)) {
     assert.equal(describeSessionControlReason(reason), expected, reason);
   }
+});
+
+test("access outcomes and the ended screen speak the UI language", () => {
+  setLocale("ru");
+  try {
+    assert.equal(describeRoomAccessError({ reason: "grant_revoked" }), "Вход закрыт: приглашение отозвано");
+    assert.equal(describeSessionControlReason("room_paused"), "Комната на паузе");
+    assert.equal(describeRoomAccessError({ reason: "something_new" }), "Вход закрыт");
+    assert.deepEqual(describeRoomAccessEnded("capacity_full"), { title: "Комната заполнена", message: "Все места заняты. Попробуйте позже." });
+  } finally {
+    setLocale("en");
+  }
+  assert.equal(describeRoomAccessEnded("room_closed")?.title, "This room has ended");
+  assert.equal(describeRoomAccessEnded("room_locked"), null);
 });

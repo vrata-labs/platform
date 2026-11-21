@@ -764,7 +764,7 @@ test("guest onboarding lets guest enter without audio after microphone denial", 
   await page.goto("/rooms/demo-room?onboard=1");
   await page.fill("#guest-name-input", "No Audio Guest");
   await page.click("#guest-check-microphone");
-  await expect(page.locator("#guest-onboarding-status")).toContainText("Microphone permission denied");
+  await expect(page.locator("#guest-onboarding-status")).toContainText("The browser blocked the microphone");
   await page.click("#guest-enter-without-audio");
   await expect(page.locator("#status-line")).toContainText("Joined as No Audio Guest", { timeout: 10000 });
   await expect.poll(async () => page.evaluate(() => {

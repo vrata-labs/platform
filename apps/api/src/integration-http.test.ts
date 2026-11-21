@@ -37,6 +37,8 @@ test("API startup refuses a portal-managed deployment without valid integration 
     const managed = { ...productionEnv, VRATA_PORTAL_MANAGED: "true", VRATA_INTEGRATION_KEYS: integrationKeysEnv([key]) };
     assert.doesNotThrow(() => module.validateProductionApiEnv(managed));
     assert.doesNotThrow(() => module.validateProductionApiEnv({ ...managed, VRATA_ADHOC_ROOMS: "true" }));
+    assert.throws(() => module.validateProductionApiEnv({ ...managed, VRATA_RETURN_TARGETS: JSON.stringify({ fallback: { ru: "http://ru.example.test/", en: "https://en.example.test/" } }) }),
+      /invalid_return_targets:url:fallback:ru/);
   } finally {
     delete process.env.VRATA_DISABLE_AUTOSTART;
   }

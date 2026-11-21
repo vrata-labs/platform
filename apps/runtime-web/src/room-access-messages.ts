@@ -1,47 +1,48 @@
 import type { RuntimeAccessError } from "./index.js";
 import { describeIdentityRequirement } from "./session-upgrade.js";
+import { t } from "./i18n/i18n.js";
 
 export function describeRoomAccessError(error: Pick<RuntimeAccessError, "reason">): string {
   switch (error.reason) {
     case "invite_expired":
-      return "Access denied: invite link expired";
+      return t("access.inviteExpired");
     case "invite_revoked":
-      return "Access denied: invite link revoked";
+      return t("access.inviteRevoked");
     case "room_disabled":
-      return "Access denied: room disabled";
+      return t("access.roomDisabled");
     case "waiting_room_pending":
-      return "Waiting for host approval";
+      return t("access.waitingPending");
     case "waiting_room_rejected":
-      return "Access denied: host rejected the request";
+      return t("access.waitingRejected");
     case "invite_required":
-      return "Access denied: private invite required";
+      return t("access.inviteRequired");
     case "room_locked":
-      return "Access denied: room is locked";
+      return t("access.roomLocked");
     case "participant_removed":
-      return "Access denied: removed by host";
+      return t("access.participantRemoved");
     case "session_ended":
-      return "Session ended by host";
+      return t("access.sessionEnded");
     case "identity_rate_limited":
-      return "Too many new room entries. Please try again later";
+      return t("access.identityRateLimited");
     case "room_identity_full":
-      return "This room has reached its identity limit. Contact the administrator";
+      return t("access.identityFull");
     case "grant_required":
-      return "Access denied: open the room from your invitation link";
+      return t("access.grantRequired");
     case "grant_invalid":
-      return "Access denied: the invitation is used up or not valid for this room";
+      return t("access.grantInvalid");
     case "grant_revoked":
-      return "Access denied: the invitation was withdrawn";
+      return t("access.grantRevoked");
     case "capacity_full":
-      return "The room is full";
+      return t("access.capacityFull");
     case "rate_limited":
-      return "Too many new room entries. Please try again later";
+      return t("access.identityRateLimited");
     case "room_closed":
     case "access_expired":
-      return "This room has ended";
+      return t("access.roomEnded");
     case "room_paused":
-      return "The room is paused";
+      return t("access.roomPaused");
     default:
-      return "Access denied";
+      return t("access.denied");
   }
 }
 
@@ -51,17 +52,17 @@ export function describeSessionControlReason(reason: string): string {
     case "identity_recovery_required":
       return describeIdentityRequirement(reason);
     case "room_locked":
-      return "Access denied: room is locked";
+      return t("access.roomLocked");
     case "participant_removed":
-      return "Access denied: removed by host";
+      return t("access.participantRemoved");
     case "session_ended":
-      return "Session ended by host";
+      return t("access.sessionEnded");
     case "room_closed":
     case "access_expired":
-      return "This room has ended";
+      return t("access.roomEnded");
     case "room_paused":
-      return "The room is paused";
+      return t("access.roomPaused");
     default:
-      return "Access denied";
+      return t("access.denied");
   }
 }

@@ -10,6 +10,7 @@ import { INTEGRATION_CONTRACT, loadIntegrationKeyring, verifyIntegrationAssertio
 import { parseBody } from "./request-body.js";
 import { completeGrantRevocation } from "./grant-revocation.js";
 import { createGrantCode, grantCodeHash, grantEntryUrl } from "./room-grants.js";
+import { RETURN_CONTEXT_ID_PATTERN, RETURN_CONTEXT_KINDS } from "./return-targets.js";
 import { resolveRoomTemplateCreate, templateInputError } from "./room-template-policy.js";
 import { stableJson, templateVersionContentHash } from "./storage-room-records.js";
 import type { IntegrationErrorObject, IntegrationOperationRecord, ManagedRoomAccessPatch, ManagedRoomBlockReason, ManagedRoomGrantRecord, ManagedRoomGrantRole, RoomRecord, Storage } from "./storage.js";
@@ -27,8 +28,6 @@ const MAX_GRACE_SECONDS = 86_400;
 // Clock skew allowed between the portal choosing accessUntil and the platform checking the demo lifetime.
 const DEMO_LIFETIME_SKEW_MS = 60_000;
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-const RETURN_CONTEXT_KINDS = ["catalog-entry", "space", "workspace", "order", "preview"];
-const RETURN_CONTEXT_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 // A crashed request releases its key after this lease, so a retry can finish the same operation.
 const OPERATION_LEASE_SECONDS = 30;
 

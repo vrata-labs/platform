@@ -1,6 +1,7 @@
 import type { IdentityRequirementReason } from "@vrata/shared-types";
 import { describeIdentityRequirement, type createSessionUpgradeGate } from "./session-upgrade.js";
 import { createSessionUpgradeStorage, type SessionNoteDraft } from "./session-upgrade-drafts.js";
+import { t } from "./i18n/i18n.js";
 
 export function mountSessionUpgradeUi(input: {
   gate: ReturnType<typeof createSessionUpgradeGate>;
@@ -68,10 +69,10 @@ export function mountSessionUpgradeUi(input: {
     const recovery = reason === "identity_recovery_required";
     const repeated = store.alreadyReloaded();
     message.textContent = recovery
-      ? "This identity cannot be renewed. Contact the room administrator for secure access recovery. An old participant ID or session token cannot restore ownership."
+      ? t("upgrade.recoveryMessage")
       : repeated
-        ? "Updating did not restore access. A compatible app may not be deployed yet. Try a browser hard refresh or contact the room administrator."
-        : "The server requires a new room session. Update the app and enter again using your invitation. The room's saved materials remain on the server. Host or owner access may require administrator recovery.";
+        ? t("upgrade.repeatedMessage")
+        : t("upgrade.message");
     if (shutdownFailed) message.textContent += " Some local cleanup failed. Save your drafts and close this tab before rejoining.";
     reloadButton.hidden = recovery || repeated;
     dialog.append(draftPanel);

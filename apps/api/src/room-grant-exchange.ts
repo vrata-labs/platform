@@ -3,6 +3,7 @@ import { v2RoomSessionLifetimeSeconds } from "./identity/http-admission.js";
 import { completeGrantRevocation } from "./grant-revocation.js";
 import { createRoomIdentityService } from "./identity/service.js";
 import { managedRoomCutoffMs } from "./room-session-control.js";
+import { resolveReturnUrls, type ReturnTargets } from "./return-targets.js";
 import { grantCodeHash, isGrantCode } from "./room-grants.js";
 import type { Storage } from "./storage-contracts.js";
 
@@ -43,6 +44,8 @@ export async function exchangeRoomGrant(input: {
   secret: string;
   requestId: string;
   reserveAdmission(): Promise<boolean>;
+  /** VRATA_RETURN_TARGETS: the portal's allowlist that turns the grant's returnContext into the way back. */
+  returnTargets?: ReturnTargets;
   now?: () => number;
 }): Promise<ExchangeResult> {
   const { storage, requestId } = input;
@@ -126,6 +129,7 @@ export async function exchangeRoomGrant(input: {
     if (error instanceof IdentityStorageError && error.code === "identity_session_expired") return failure("access_expired", "Room access has expired", requestId);
     throw error;
   }
+  const returnUrls = input.returnTargets ? resolveReturnUrls(input.returnTargets, grant.returnContext) : null;
   return {
     status: 200,
     body: {
@@ -138,7 +142,8 @@ export async function exchangeRoomGrant(input: {
       cutoff: new Date(cutoffMs).toISOString(),
       identityProtocolVersion: 2,
       identityCredential: issued.credential,
-      ...(grant.returnContext ? { returnContext: grant.returnContext } : {})
+      ...(grant.returnContext ? { returnContext: grant.returnContext } : {}),
+      ...(returnUrls ? { returnUrls } : {})
     }
   };
 }
