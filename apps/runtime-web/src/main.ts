@@ -140,6 +140,7 @@ import { createInactiveWhiteboardDebugSnapshot, createWhiteboardObjectRuntime } 
 import { applySpatialSettings, createSpatialAudioSettings, resolveSpatialAudioMode } from "./spatial-audio.js";
 import { captureCanvasDiagnostics, inspectSceneObject } from "./scene-debug.js";
 import { loadSceneBundle } from "./scene-loader.js";
+import { privateSceneSource } from "./private-scene-source.js";
 import { startSceneBundleSession } from "./scene-session.js";
 import { createSceneFrameReadiness } from "./scene-frame-readiness.js";
 import {
@@ -8334,6 +8335,7 @@ async function main(): Promise<void> {
       camera,
       renderer,
       bundleUrl: boot.sceneBundleUrl,
+      ...(boot.privateScene ? {privateFile:privateSceneSource(boot.sceneBundleUrl,boot.roomId,boot.privateScene,()=>roomStateAccessToken)} : {}),
       integrity: boot.sceneIntegrity,
       requiredSurfaces: boot.templateSurfaces,
       requestedCleanSceneMode,

@@ -19,6 +19,7 @@ export interface RoomManifest {
     url: string;
     integrity?: SceneBundleIntegrity;
   };
+  privateScene?: { bundleVersionId:string; contentHash:string; integrity:SceneBundleIntegrity };
   realtime: {
     roomStateUrl: string;
   };

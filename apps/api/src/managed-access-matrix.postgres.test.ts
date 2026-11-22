@@ -44,6 +44,7 @@ interface Route { pattern: string; probes: Probe[] }
 
 const room = (suffix: string) => (f: Fixture) => `/api/rooms/${f.roomId}${suffix}`;
 const ROUTES: Route[] = [
+  { pattern: String.raw`^\/api\/rooms\/([^/]+)\/delivery-descriptor$`, probes: [{method:"POST",path:room("/delivery-descriptor"),policy:"closed"}] },
   // Scope helpers of the request boundary, not routes: the room and participant of a path, the routes it may defer.
   { pattern: String.raw`^\/api\/rooms\/([^/]+)(?:\/|$)`, probes: [] },
   { pattern: String.raw`^\/api\/rooms\/([^/]+)`, probes: [] },

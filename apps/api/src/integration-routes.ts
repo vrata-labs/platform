@@ -7,7 +7,8 @@ import { loadDemoPolicies, type DemoPolicy } from "./demo-policies.js";
 import { isPortalManagedDeployment } from "./feature-flags.js";
 import { json } from "./http-responses.js";
 import { INTEGRATION_CONTRACT, loadIntegrationKeyring, verifyIntegrationAssertion, type IntegrationPrincipal, type IntegrationScope } from "./integration-auth.js";
-import { parseBody } from "./request-body.js";
+import { parseBody, readRequestBuffer } from "./request-body.js";
+import { preparePrivateScene, privateSceneApproval, privateSceneHash, privateSceneStore } from "./private-scene-release.js";
 import { completeGrantRevocation } from "./grant-revocation.js";
 import { createGrantCode, grantCodeHash, grantEntryUrl } from "./room-grants.js";
 import { RETURN_CONTEXT_ID_PATTERN, RETURN_CONTEXT_KINDS } from "./return-targets.js";
@@ -33,7 +34,7 @@ const OPERATION_LEASE_SECONDS = 30;
 
 type ErrorCode = "invalid_request" | "unauthenticated" | "forbidden_scope" | "tenant_mismatch" | "room_not_found" | "idempotency_key_reused"
   | "idempotency_in_progress" | "revision_mismatch" | "template_not_allowed" | "dependency_unavailable"
-  | "room_closed" | "access_expired" | "room_paused" | "grant_invalid";
+  | "room_closed" | "access_expired" | "room_paused" | "grant_invalid" | "bundle_version_conflict" | "published_version_mismatch";
 
 const STATUS_BY_CODE: Record<ErrorCode, number> = {
   invalid_request: 400,
@@ -49,7 +50,9 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   room_closed: 410,
   access_expired: 410,
   room_paused: 423,
-  grant_invalid: 404
+  grant_invalid: 404,
+  bundle_version_conflict: 409,
+  published_version_mismatch: 412
 };
 
 class IntegrationRequestError extends Error {
@@ -126,13 +129,14 @@ function effectiveCutoff(room: RoomRecord): string {
 export function serializeManagedRoom(room: RoomRecord) {
   const managed = room.managed!;
   const contract = referenceTemplateContract(room.templateSnapshot);
-  if (!contract) throw new Error("managed_room_template_contract_missing");
+  const custom = managed.kind==="custom";
+  if (custom ? !managed.bundleVersionId || !managed.bundleContentHash : !contract) throw new Error("managed_room_scene_contract_missing");
   return {
     contract: INTEGRATION_CONTRACT,
     roomId: room.roomId,
     tenantId: room.tenantId,
     kind: managed.kind,
-    template: { templateId: room.templateId, version: room.templateVersion },
+    ...(custom ? (managed.publishedVersionId ? {publishedVersionId:managed.publishedVersionId} : {}) : {template:{templateId:room.templateId,version:room.templateVersion}}),
     ...(managed.ownerSubject ? { ownerSubject: managed.ownerSubject } : {}),
     name: room.name,
     status: managed.status,
@@ -144,9 +148,9 @@ export function serializeManagedRoom(room: RoomRecord) {
     createdAt: managed.createdAt,
     ...(managed.closedAt ? { closedAt: managed.closedAt } : {}),
     ...(managed.demoPolicyId ? { demoPolicyId: managed.demoPolicyId } : {}),
-    scene: {
+    scene: custom ? {bundleVersionId:managed.bundleVersionId,contentHash:managed.bundleContentHash} : {
       releaseId: `${room.templateId}@${room.templateVersion}`,
-      contentHash: `sha256:${templateVersionContentHash(contract)}`
+      contentHash: `sha256:${templateVersionContentHash(contract!)}`
     }
   };
 }
@@ -195,6 +199,14 @@ function parseRoomCreate(body: unknown, policies: ReadonlyMap<string, DemoPolicy
   if (!isPlainObject(body)) throw new IntegrationRequestError("invalid_request", "Request body must be a JSON object");
   assertOnlyKeys(body, ["kind", "template", "name", "visibility", "accessUntil", "graceSeconds", "ownerSubject", "demoPolicyId", "bundleVersionId", "previewOf"]);
   if (typeof body.kind !== "string" || !ROOM_KINDS.includes(body.kind)) throw new IntegrationRequestError("invalid_request", "kind is required");
+  if (body.kind==="custom" && privateSceneApproval()) {
+    assertOnlyKeys(body,["kind","bundleVersionId","ownerSubject","visibility","accessUntil","name","graceSeconds"]);
+    if (body.visibility!=="private" || typeof body.ownerSubject!=="string" || !SUBJECT_PATTERN.test(body.ownerSubject) ||
+        typeof body.bundleVersionId!=="string" || !UUID_PATTERN.test(body.bundleVersionId) ||
+        typeof body.name!=="string" || !body.name.length || body.name.length>80) throw new IntegrationRequestError("invalid_request","A private custom room needs its approved version and owner");
+    return {kind:"custom" as const,bundleVersionId:body.bundleVersionId,name:body.name,ownerSubject:body.ownerSubject,visibility:"private" as const,
+      personal:true,accessUntil:parseTimestamp(body.accessUntil,"accessUntil"),graceSeconds:parseGraceSeconds(body.graceSeconds??0),demoPolicy:null};
+  }
   if (body.kind !== "reference" && body.kind !== "demo-instance") throw new IntegrationRequestError("invalid_request", `kind ${body.kind} is not supported by this platform version`);
   if (body.bundleVersionId !== undefined || body.previewOf !== undefined) {
     throw new IntegrationRequestError("invalid_request", `A ${body.kind} room takes no bundleVersionId or previewOf`);
@@ -456,6 +468,20 @@ export function createIntegrationRoutes(context: IntegrationRoutesContext) {
       if (existing?.managed) return created(existing);
       // Checked here, not while parsing: a replay after accessUntil must still return the recorded result.
       if (Date.parse(parsed.accessUntil) <= Date.now()) throw new IntegrationRequestError("invalid_request", "accessUntil must be in the future");
+      if (parsed.kind==="custom") {
+        const approval=privateSceneApproval();
+        const version=await storage.getPrivateSceneVersion(tenantId,parsed.bundleVersionId);
+        if (!approval || !version || tenantId!==approval.tenantId || parsed.ownerSubject!==approval.ownerSubject ||
+            version.bundleId!==approval.bundleId || version.version!==approval.version || version.archiveSha256!==approval.archiveSha256) throw new IntegrationRequestError("invalid_request","Version is not approved for this owner and tenant");
+        try { return created(await storage.createManagedRoom({roomId,tenantId,name:parsed.name},{
+          managedBy:principal.principal,kind:"custom",customVersion:version,ownerSubject:parsed.ownerSubject,
+          accessUntil:parsed.accessUntil,graceSeconds:parsed.graceSeconds,operationId:operation.operationId
+        })); }
+        catch (e) {
+          if (e instanceof Error && ["managed_room_exists","private_version_already_bound"].includes(e.message)) throw new IntegrationRequestError("bundle_version_conflict","This version already has an assigned room");
+          throw e;
+        }
+      }
       if (parsed.demoPolicy && Date.parse(parsed.accessUntil) > Date.now() + parsed.demoPolicy.absoluteLifetimeSeconds * 1000 + DEMO_LIFETIME_SKEW_MS) {
         throw new IntegrationRequestError("invalid_request", "accessUntil exceeds the demo policy lifetime", 400, { absoluteLifetimeSeconds: parsed.demoPolicy.absoluteLifetimeSeconds });
       }
@@ -549,6 +575,7 @@ export function createIntegrationRoutes(context: IntegrationRoutesContext) {
     if (room.roomType === "personal" && (parsed.role === "guest" || parsed.subject !== room.managed?.ownerSubject)) {
       throw new IntegrationRequestError("invalid_request", parsed.role === "guest" ? "A personal room admits no guests" : "A personal room admits only its owner");
     }
+    if (room.managed?.kind==="custom" && !room.managed.publishedVersionId) throw new IntegrationRequestError("invalid_request","The assigned version has not been published");
     const secret = context.stateSecret?.();
     const runtimeBaseUrl = process.env.RUNTIME_BASE_URL;
     if (!secret || !grantEntryUrl(runtimeBaseUrl, roomId, "probe")) {
@@ -609,6 +636,51 @@ export function createIntegrationRoutes(context: IntegrationRoutesContext) {
   }
 
   async function route(request: IncomingMessage, response: ServerResponse, method: string, url: URL, storage: Storage, requestId: string): Promise<void> {
+    const importing=/^\/integration\/v1\/tenants\/(pt_[0-9A-HJKMNP-TV-Z]{26})\/bundles\/([a-z0-9-]{1,64})\/versions$/.exec(url.pathname);
+    const publishing=/^\/integration\/v1\/tenants\/(pt_[0-9A-HJKMNP-TV-Z]{26})\/rooms\/([a-f0-9-]{36})\/publish$/.exec(url.pathname);
+    if ((importing || publishing) && method==="POST") {
+      const principal=await authenticate(request,storage,importing?"importBundleVersion":"publishVersion");
+      const tenantId=(importing??publishing)![1]!, approval=privateSceneApproval();
+      await requireTenant(storage,principal,tenantId);
+      if (!approval || tenantId!==approval.tenantId) throw new IntegrationRequestError("forbidden_scope","No addressed delivery for this tenant");
+      const idempotencyKey=requireIdempotencyKey(request);
+      if (importing) {
+        if (importing[2]!==approval.bundleId) throw new IntegrationRequestError("forbidden_scope","Bundle is not approved for import");
+        const contentType=request.headers["content-type"]??"";
+        if (!contentType.startsWith("multipart/form-data;")) throw new IntegrationRequestError("invalid_request","Expected multipart bundle and version");
+        let archive: Buffer;
+        try {
+          const raw=await readRequestBuffer(request,51*1024*1024);
+          const form=await new Response(new Uint8Array(raw),{headers:{"content-type":contentType}}).formData();
+          const file=form.get("bundle");
+          if (!(file instanceof Blob) || form.get("version")!==approval.version || form.getAll("bundle").length!==1 || form.getAll("version").length!==1) throw new Error();
+          archive=Buffer.from(await file.arrayBuffer());
+        } catch { throw new IntegrationRequestError("invalid_request","Expected the configured ZIP and version"); }
+        if (privateSceneHash(archive)!==approval.archiveSha256) throw new IntegrationRequestError("bundle_version_conflict","ZIP does not match the accepted digest");
+        return runOperation(response,storage,{principal,idempotencyKey,kind:"bundle.import",resourceType:"bundle-version",resourceId:randomUUID(),requestId,
+          requestHash:integrationRequestHash("POST",url.pathname,{version:approval.version,archive:approval.archiveSha256})},async op=>{
+          const v=await preparePrivateScene(approval,archive,op.resourceId!,privateSceneStore());
+          const registered=await storage.registerPrivateSceneVersion(v);
+          if (!registered || registered.archiveSha256!==approval.archiveSha256) throw new IntegrationRequestError("bundle_version_conflict","Version already has different bytes");
+          const {archiveSha256: _privateApproval,...publicRecord}=registered;
+          return {status:201,body:publicRecord};
+        });
+      }
+      const roomId=publishing![2]!, room=await requireRoom(storage,principal,tenantId,roomId), body=await readJsonBody(request);
+      if (!isPlainObject(body)) throw new IntegrationRequestError("invalid_request","Expected initial publish");
+      assertOnlyKeys(body,["bundleVersionId","expectedPublishedVersionId"]);
+      if (room.managed?.kind!=="custom" || room.managed.ownerSubject!==approval.ownerSubject || body.bundleVersionId!==room.managed.bundleVersionId ||
+          body.expectedPublishedVersionId!==null) throw new IntegrationRequestError("published_version_mismatch","Only an initial publication of the assigned version is supported");
+      const versionId=room.managed.bundleVersionId!;
+      const version=await storage.getPrivateSceneVersion(tenantId,versionId);
+      if (!version || version.archiveSha256!==approval.archiveSha256 || version.bundleId!==approval.bundleId || version.version!==approval.version)
+        throw new IntegrationRequestError("forbidden_scope","Version is not approved for publication");
+      return runOperation(response,storage,{principal,idempotencyKey,kind:"room.publish",resourceType:"room",resourceId:roomId,requestId,
+        requestHash:integrationRequestHash("POST",url.pathname,body)},async op=>{
+        if (!await storage.publishInitialPrivateScene(roomId,versionId,op.operationId)) throw new IntegrationRequestError("published_version_mismatch","Room is not awaiting first publication");
+        return {status:200,body:serializeManagedRoom(await requireRoom(storage,principal,tenantId,roomId))};
+      });
+    }
     const tenantMatch = url.pathname.match(/^\/integration\/v1\/tenants\/([^/]+)(?:\/(usage)|\/rooms(?:\/([^/]+)(?:\/(access|close|grants)(?:\/([^/]+)\/(revoke))?)?)?)?$/);
     const operationMatch = url.pathname.match(/^\/integration\/v1\/operations(?:\/([^/]+))?$/);
     if (tenantMatch) {
