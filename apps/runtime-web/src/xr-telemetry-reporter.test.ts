@@ -117,6 +117,13 @@ test("missing right source falls back to the first, and non-array profiles/axes 
   assert.equal(h.requests[0]!.payload.xrTurnCandidates.rightSecondaryX, 0);
 });
 
+test("unused null XR axis slots cannot stop animation or shift the thumbstick indices", (t) => {
+  const h = harness(t); h.setTime(300);
+  h.runtime.reportXrTelemetry(frame([source("right", [null, null, .42, -.85])]));
+  assert.deepEqual(h.requests[0]!.payload.xrRawInputs[0]!.axes, [0, 0, .42, -.85]);
+  assert.equal(h.requests[0]!.payload.xrTurnCandidates.rightSecondaryX, .42);
+});
+
 test("synthetic inputs take precedence even during a real session and retain unrounded raw axes", (t) => {
   const h = harness(t, false); h.context.syntheticXrState = { triggerPressed: true, axes: { turnX: 0.123456, turnY: -0.987654 } };
   h.setTime(16); h.runtime.reportXrTelemetry(frame([source("right", [9, 9])]));
