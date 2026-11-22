@@ -5,7 +5,7 @@ import * as THREE from "three";
 import type { RuntimeFrameContext } from "../input/runtime-frame-context.js";
 import type { SceneBundleSeatAnchor } from "../scene-bundle.js";
 import { createInteractionRayView, type InteractionRayDebugState } from "./interaction-ray-view.js";
-import { updateInteractionRayState, type RuntimeInteractionFrameInput } from "./interaction-frame.js";
+import { resolveInteractionTargetForRay, updateInteractionRayState, type RuntimeInteractionFrameInput } from "./interaction-frame.js";
 
 function frameContext(input: { source?: "desktop" | "xr"; aimRay?: boolean } = {}): RuntimeFrameContext {
   const source = input.source ?? "desktop";
@@ -126,4 +126,21 @@ test("updateInteractionRayState clears visuals and refreshes seat markers when n
   assert.equal(state.targetKind, "none");
   assert.deepEqual(telemetry, ["ray_off"]);
   assert.deepEqual(markerVisualTimes, [12.5]);
+});
+test("authored floors limit both seat hits and destinations; a landing displays the hit but teleports to the linked floor", () => {
+  const lower = { y: 0, minX: -1, maxX: 1, minZ: -1, maxZ: 1 };
+  const upper = { ...lower, y: 4 }, destination = { x: .5, y: 4, z: -.5 };
+  const ray = new THREE.Ray(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, -1, 0));
+  const below = { ...seatAnchor("other"), position: { x: 0, y: -1, z: 0 } };
+  const input = { ray, seatAnchors: [below], seatAnchorMap: new Map([[below.id, below]]),
+    seatMarkerHitMeshes: [], raycaster: new THREE.Raycaster(), teleportFloorY: 0,
+    floorAreas: [lower, upper], pickFloorLink: (r: THREE.Ray, y: number) => r.origin.x === 0 && y === 0 ? { kind: "floor" as const, point: new THREE.Vector3(), destination } : null };
+  const link = resolveInteractionTargetForRay(input);
+  assert.equal(link.kind, "floor");
+  if (link.kind === "floor") { assert.deepEqual(link.point.toArray(), [0, 0, 0]); assert.deepEqual(link.destination, destination); }
+  ray.origin.set(3, 1, 0);
+  assert.equal(resolveInteractionTargetForRay(input).kind, "none");
+  ray.origin.set(0, 5, 0);
+  const level = resolveInteractionTargetForRay({ ...input, teleportFloorY: 4 });
+  assert.ok(level.kind === "floor" && level.point.y === 4 && !level.destination);
 });

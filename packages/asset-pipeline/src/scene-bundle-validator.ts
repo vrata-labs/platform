@@ -1,4 +1,5 @@
 import { constants as fsConstants } from "node:fs";
+import { isFloorPoint, isSceneFloorAreas, isSceneFloorLinks, isWalkablePoint } from "@vrata/shared-types";
 import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
@@ -546,6 +547,13 @@ function validateManifestShape(input: unknown, issues: SceneBundleValidationIssu
       if (input.anchors.teleportFloorY !== undefined && !isFiniteNumber(input.anchors.teleportFloorY)) {
         issues.push(issue("error", "scene.json#/anchors/teleportFloorY", "invalid_scene_bundle_teleport_floor_y", "teleportFloorY must be a finite number."));
       }
+      const areas = input.anchors.floorAreas;
+      if (areas !== undefined && !isSceneFloorAreas(areas)) {
+        issues.push(issue("error", "scene.json#/anchors/floorAreas", "invalid_scene_bundle_floor_areas", "Provide finite walkable rectangles, with both ends of each link on a walkable floor."));
+      }
+      if (input.anchors.floorLinks !== undefined && (!isSceneFloorAreas(areas) || !isSceneFloorLinks(input.anchors.floorLinks, areas))) {
+        issues.push(issue("error", "scene.json#/anchors/floorLinks", "invalid_scene_bundle_floor_links", "Each link needs a source floor, an unambiguous model node and a walkable destination."));
+      }
       if (input.anchors.seatAnchors !== undefined) {
         if (!Array.isArray(input.anchors.seatAnchors)) {
           issues.push(issue("error", "scene.json#/anchors/seatAnchors", "invalid_scene_bundle_seat_anchors", "seatAnchors must be an array when provided."));
@@ -565,6 +573,14 @@ function validateManifestShape(input: unknown, issues: SceneBundleValidationIssu
               seatIds.add(seatAnchor.id);
             }
             validatePosition(issues, seatAnchor.position, `${path}/position`);
+            if (seatAnchor.exit !== undefined) validatePosition(issues, seatAnchor.exit, `${path}/exit`);
+            if (isSceneFloorAreas(areas) && (!isFloorPoint(seatAnchor.exit) || !isFloorPoint(seatAnchor.position)
+              || Math.abs(seatAnchor.position.y - seatAnchor.exit.y) >= 0.01 || !isWalkablePoint(areas, seatAnchor.exit))) {
+              issues.push(issue("error", `${path}/exit`, "invalid_scene_bundle_floor_seat_exit", "Provide a walkable exit on the chair's floor."));
+            }
+            if (seatAnchor.eyeHeight !== undefined && (!isFiniteNumber(seatAnchor.eyeHeight) || seatAnchor.eyeHeight <= 0)) {
+              issues.push(issue("error", `${path}/eyeHeight`, "invalid_scene_bundle_seat_eye_height", "eyeHeight above the cushion must be positive."));
+            }
             if (!isFiniteNumber(seatAnchor.yaw)) {
               issues.push(issue("error", `${path}/yaw`, "invalid_scene_bundle_seat_anchor_yaw", "yaw must be a finite number."));
             }

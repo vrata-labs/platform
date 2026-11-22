@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import type { SceneFloorArea } from "@vrata/shared-types";
 
 import type { LocalAvatarHandFrameResult, XrSpatialLike } from "../avatar/avatar-xr-hands.js";
 import type { RuntimeFrameContext } from "../input/runtime-frame-context.js";
@@ -15,6 +16,8 @@ import {
   type InteractionRayView
 } from "./interaction-ray-view.js";
 import { isSeatMarkerBlocked, resolveInteractionTargetFromRay, type InteractionTarget } from "./interaction-targets.js";
+
+import type { FloorLinkPicker } from "./floor-link-picker.js";
 
 interface Vector3Like {
   x: number;
@@ -48,6 +51,8 @@ export interface RuntimeInteractionTargetInput {
   raycaster: THREE.Raycaster;
   seatAnchors: SceneBundleSeatAnchor[];
   teleportFloorY: number;
+  floorAreas?: SceneFloorArea[];
+  pickFloorLink?: FloorLinkPicker;
   maxDistance?: number;
 }
 
@@ -57,6 +62,8 @@ export interface RuntimeInteractionFrameInput extends RuntimeInteractionRayInput
   seatAnchorMap: ReadonlyMap<string, SceneBundleSeatAnchor>;
   seatAnchors: SceneBundleSeatAnchor[];
   teleportFloorY: number;
+  floorAreas?: SceneFloorArea[];
+  pickFloorLink?: FloorLinkPicker;
   maxDistance?: number;
   view: InteractionRayView;
   state: InteractionRayDebugState;
@@ -86,8 +93,9 @@ export function resolveRuntimeInteractionRay(input: RuntimeInteractionRayInput):
 }
 
 export function resolveInteractionTargetForRay(input: RuntimeInteractionTargetInput): InteractionTarget {
+  const sameFloor = (a?: SceneBundleSeatAnchor) => a !== undefined && Math.abs(a.position.y - input.teleportFloorY) < 0.01;
   const forcedSeatAnchor = input.forcedSeatId ? input.seatAnchorMap.get(input.forcedSeatId) ?? null : null;
-  if (forcedSeatAnchor) {
+  if (forcedSeatAnchor && (!input.floorAreas || sameFloor(forcedSeatAnchor))) {
     if (isSeatMarkerBlocked(forcedSeatAnchor.id, input.seatMarkerHitMeshes)) return { kind: "none" };
     return {
       kind: "seat",
@@ -101,15 +109,19 @@ export function resolveInteractionTargetForRay(input: RuntimeInteractionTargetIn
     };
   }
 
-  return resolveInteractionTargetFromRay({
+  const target = resolveInteractionTargetFromRay({
     ray: input.ray,
-    seatMarkerHitMeshes: input.seatMarkerHitMeshes,
+    seatMarkerHitMeshes: input.floorAreas ? input.seatMarkerHitMeshes.filter(m => sameFloor(input.seatAnchorMap.get(m.userData.seatAnchorId))) : input.seatMarkerHitMeshes,
     seatAnchorMap: input.seatAnchorMap,
     raycaster: input.raycaster,
-    seatAnchors: input.seatAnchors,
+    seatAnchors: input.floorAreas ? input.seatAnchors.filter(sameFloor) : input.seatAnchors,
+    floorAreas: input.floorAreas,
     teleportFloorY: input.teleportFloorY,
     maxDistance: input.maxDistance
   });
+  const link = input.pickFloorLink?.(input.ray, input.teleportFloorY, input.maxDistance ?? 20);
+  if (link && (target.kind !== "seat" || link.point.distanceToSquared(input.ray.origin) < target.point.distanceToSquared(input.ray.origin))) return link;
+  return target;
 }
 
 function updateSeatMarkers(input: RuntimeInteractionFrameInput): void {
@@ -131,12 +143,14 @@ export function updateInteractionRayState(input: RuntimeInteractionFrameInput): 
 
   const target = resolveInteractionTargetForRay({
     ray: resolvedRay.ray,
+    pickFloorLink: input.pickFloorLink,
     forcedSeatId: input.forcedSeatId,
     seatMarkerHitMeshes: input.seatMarkerHitMeshes,
     seatAnchorMap: input.seatAnchorMap,
     raycaster: input.raycaster,
     seatAnchors: input.seatAnchors,
     teleportFloorY: input.teleportFloorY,
+    floorAreas: input.floorAreas,
     maxDistance: input.maxDistance
   });
   const mode = input.frameContext.source === "xr" ? "xr-right-stick" : "cursor";
@@ -161,7 +175,5 @@ export function updateInteractionRayState(input: RuntimeInteractionFrameInput): 
     debug: resolvedRay.debug,
     markTelemetry: input.markTelemetry
   });
-  return target.kind === "seat"
-    ? { kind: "seat", point: target.point, seatId: target.seatAnchor.id, seatAnchor: target.seatAnchor }
-    : { kind: "floor", point: target.point };
+  return target;
 }

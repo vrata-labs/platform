@@ -1,10 +1,11 @@
 import * as THREE from "three";
+import { isWalkablePoint, type SceneFloorArea, type FloorPoint } from "@vrata/shared-types";
 
 import type { SceneBundleSeatAnchor } from "../scene-bundle.js";
 
 export type InteractionTarget =
   | { kind: "none" }
-  | { kind: "floor"; point: THREE.Vector3 }
+  | { kind: "floor"; point: THREE.Vector3; destination?: FloorPoint }
   | { kind: "seat"; point: THREE.Vector3; seatId: string; seatAnchor: SceneBundleSeatAnchor };
 
 export interface SeatMarkerTarget {
@@ -52,6 +53,7 @@ export function resolveInteractionTarget(input: {
   ray: THREE.Ray;
   seatAnchors: SceneBundleSeatAnchor[];
   teleportFloorY: number;
+  floorAreas?: SceneFloorArea[];
   maxDistance?: number;
 }): InteractionTarget {
   const maxDistance = input.maxDistance ?? 20;
@@ -85,6 +87,9 @@ export function resolveInteractionTarget(input: {
   if (!floorPoint || floorPoint.distanceTo(input.ray.origin) > maxDistance) {
     return { kind: "none" };
   }
+  if (input.floorAreas) {
+    if (input.ray.direction.y >= 0 || !isWalkablePoint(input.floorAreas, floorPoint)) return { kind: "none" };
+  }
   return {
     kind: "floor",
     point: floorPoint
@@ -98,6 +103,7 @@ export function resolveInteractionTargetFromRay(input: {
   raycaster: THREE.Raycaster;
   seatAnchors: SceneBundleSeatAnchor[];
   teleportFloorY: number;
+  floorAreas?: SceneFloorArea[];
   maxDistance?: number;
 }): InteractionTarget {
   const marker = resolveSeatMarkerTarget(input);

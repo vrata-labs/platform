@@ -160,7 +160,10 @@ import { createAvatarLipsyncDriver, sampleAvatarLipsyncLevel, updateAvatarLipsyn
 import { createAvatarOutboundPublisher, type AvatarOutboundPayload } from "./avatar/avatar-publish.js";
 import { createRemoteAvatarRuntime } from "./avatar/remote-avatar-runtime.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
-import { NON_XR_CAMERA_HEIGHT, resolveLocalSeatRootPosition } from "./local/seat-pose.js";
+import { NON_XR_CAMERA_HEIGHT } from "./local/seat-pose.js";
+import { createSeatView } from "./local/seat-view.js";
+import { createFloorLinkPicker } from "./interaction/floor-link-picker.js";
+import { isWalkablePoint, type SceneFloorArea, type SceneFloorLink } from "@vrata/shared-types";
 import { resolveAvatarViewProfile } from "./avatar/avatar-visibility.js";
 import { createSyntheticLocalAvatarHandFrame, resolveLocalAvatarHandFrame, type LocalAvatarHandFrameResult } from "./avatar/avatar-xr-hands.js";
 import { resolveAvatarXrInput } from "./avatar/avatar-xr-input.js";
@@ -525,6 +528,7 @@ if (navigator.mediaDevices?.addEventListener) {
 }
 
 const scene = new THREE.Scene();
+
 scene.fog = new THREE.Fog(0x08111f, 12, 50);
 let defaultSceneFog = scene.fog;
 
@@ -539,6 +543,7 @@ sceneHost.append(renderer.domElement);
 
 const player = new THREE.Group();
 const pitch = new THREE.Group();
+const seatView = createSeatView(camera, pitch);
 pitch.add(camera);
 player.add(pitch);
 scene.add(player);
@@ -787,6 +792,15 @@ let forcedTestInteractionRay: THREE.Ray | null = null;
 let forcedTestInteractionSeatId: string | null = null;
 let forcedTestSeatId: string | null = null;
 let sceneTeleportFloorY = 0;
+let sceneFloorAreas: SceneFloorArea[] | undefined;
+let pickFloorLink: ReturnType<typeof createFloorLinkPicker>;
+let lastStandingFloorY = 0;
+let pendingStandingExit: Vector3Like | undefined;
+
+function interactionFloorY(): number {
+  if (!sceneFloorAreas) return sceneTeleportFloorY;
+  return sceneSeatAnchorMap.get(getCurrentSeatId() ?? "")?.position.y ?? lastStandingFloorY;
+}
 let sceneSeatAnchors: SceneBundleSeatAnchor[] = [];
 let sceneSeatAnchorMap = createSeatAnchorReadModel([]).anchorMap;
 // The scene's entry point is the safe place to stand after leaving a seat.
@@ -2035,7 +2049,11 @@ function updateSeatMarkerVisuals(timeSeconds: number): void {
   });
 }
 
-function setSceneSeatAnchors(anchors: SceneBundleSeatAnchor[], teleportFloorY = 0): void {
+function setSceneSeatAnchors(anchors: SceneBundleSeatAnchor[], teleportFloorY = 0, areas?: SceneFloorArea[], links?: SceneFloorLink[]): void {
+  sceneFloorAreas = areas;
+  pickFloorLink = createFloorLinkPicker(activeSceneBundleRoot, links);
+  lastStandingFloorY = sceneEntryPoint?.y ?? teleportFloorY;
+  pendingStandingExit = undefined;
   const readModel = createSeatAnchorReadModel(anchors, teleportFloorY);
   sceneSeatAnchors = readModel.anchors;
   sceneSeatAnchorMap = readModel.anchorMap;
@@ -2061,6 +2079,8 @@ function setSceneSeatAnchors(anchors: SceneBundleSeatAnchor[], teleportFloorY = 
 }
 
 function releaseCurrentSeatLocally(): void {
+  seatView.reset();
+  pendingStandingExit = undefined;
   forcedTestSeatId = null;
   roomSeatOccupancy = removeParticipantFromSeatOccupancy(roomSeatOccupancy, participantId);
   seatingController.releaseLocal();
@@ -2080,6 +2100,7 @@ function syncSeatStateFromOccupancy(): void {
   roomPluginRuntime.seatingChanged();
   const currentSeatId = getCurrentSeatId();
   if (!currentSeatId) {
+    if (lastAppliedSeatLockId) pendingStandingExit = sceneSeatAnchorMap.get(lastAppliedSeatLockId)?.exit;
     lastAppliedSeatLockId = null;
     return;
   }
@@ -2479,20 +2500,23 @@ function applyYawAroundXrCamera(nextYaw: number): void {
 }
 
 function setPlayerPositionForFloorTeleport(floorPoint: Vector3Like): void {
-  localPoseController.teleportToFloor(floorPoint, sceneTeleportFloorY, "teleport", {
+  lastStandingFloorY = sceneFloorAreas ? floorPoint.y : sceneTeleportFloorY;
+  localPoseController.teleportToFloor(floorPoint, lastStandingFloorY, "teleport", {
     preserveCameraOffset: renderer.xr.isPresenting,
     camera
   });
 }
 
-standUpButton.addEventListener("click", () => {
-  const commands = planStandUp({ seatId: getCurrentSeatId(), exit: sceneEntryPoint });
+function standUpFromCurrentSeat(): void {
+  const seatId = getCurrentSeatId();
+  const commands = planStandUp({ seatId, exit: sceneSeatAnchorMap.get(seatId ?? "")?.exit ?? sceneEntryPoint });
   if (!commands.length) return;
   // An explicit stand is also this tab's refusal of automatic seating after a reload.
   roomPluginSeatOptOut.set(true);
   forcedTestSeatId = null;
   executeRuntimeCommandList(commands);
-});
+}
+standUpButton.addEventListener("click", standUpFromCurrentSeat);
 const roomPluginSeatOptOut = createRoomPluginSeatOptOut((() => { try { return sessionStorage; } catch { return null; } })(), roomId);
 const sceneFrameReadiness = createSceneFrameReadiness();
 const roomPluginBootReady = () => runtimeBootReady && sceneFrameReadiness.ready;
@@ -2521,9 +2545,21 @@ const executeRuntimeCommandList = createRuntimeCommandExecutor({
   syncSeatDebugState,
   releaseLocalSeat: releaseCurrentSeatLocally,
   lockToSeat(position, reason, options) {
+    if (reason === "seat_enter" && sceneSeatAnchorMap.get(getCurrentSeatId() ?? "")?.eyeHeight !== undefined) {
+      localPoseController.setPitch(0, reason);
+    }
     localPoseController.lockToSeat(position, reason, options);
   },
   moveFlatTo(position, reason) {
+    if (sceneFloorAreas) {
+      const target = { ...position, y: lastStandingFloorY };
+      if (renderer.xr.isPresenting) {
+        const eye = camera.getWorldPosition(cameraWorldPosition), rig = localPoseController.getPosition();
+        target.x += eye.x - rig.x;
+        target.z += eye.z - rig.z;
+      }
+      if (!isWalkablePoint(sceneFloorAreas, target)) return;
+    }
     localPoseController.moveFlatTo(position, reason);
   },
   applySnapTurnYaw: applyYawAroundXrCamera,
@@ -2600,7 +2636,9 @@ function getInteractionFrameInput(frameContext: RuntimeFrameContext, options: { 
     seatMarkerHitMeshes: seatMarkerView.hitMeshes,
     seatAnchorMap: sceneSeatAnchorMap,
     seatAnchors: sceneSeatAnchors,
-    teleportFloorY: sceneTeleportFloorY,
+    teleportFloorY: interactionFloorY(),
+    floorAreas: sceneFloorAreas,
+    pickFloorLink,
     maxDistance: 18,
     view: interactionRayView,
     state: debugState.interactionRay,
@@ -5071,7 +5109,7 @@ const mediaSurfaceTestControls = createMediaSurfaceTestControls({
   },
   aimInteractionAtFloor: (x: number, z: number) => {
     forcedTestInteractionSeatId = null;
-    return forceInteractionRayAtWorldPoint(new THREE.Vector3(x, sceneTeleportFloorY, z));
+    return forceInteractionRayAtWorldPoint(new THREE.Vector3(x, interactionFloorY(), z));
   },
   confirmInteraction: () => {
     confirmLatestInteractionTarget();
@@ -5165,6 +5203,10 @@ const mediaSurfaceTestControls = createMediaSurfaceTestControls({
       seatAnchor.position.z
     ));
   },
+  getSceneReviewCamera: () => ({
+    eye: camera.getWorldPosition(new THREE.Vector3()).toArray(),
+    direction: camera.getWorldDirection(new THREE.Vector3()).toArray()
+  }),
   setSceneReviewPose: (pose) => {
     const values = [
       pose.position.x,
@@ -5316,12 +5358,15 @@ async function loadAvailableSpaces(currentRoomId: string): Promise<void> {
 
 function currentPersonalPoseState(): RuntimePersonalState {
   const pose = localPoseController.getPose();
+  const exit = sceneSeatAnchorMap.get(getCurrentSeatId() ?? "")?.exit;
+  const standing = exit ?? (sceneFloorAreas && renderer.xr.isPresenting
+    ? { ...camera.getWorldPosition(cameraWorldPosition), y: lastStandingFloorY } : pose.position);
   return {
     lastPose: {
       position: {
-        x: Number(pose.position.x.toFixed(3)),
-        y: Number(pose.position.y.toFixed(3)),
-        z: Number(pose.position.z.toFixed(3))
+        x: Number(standing.x.toFixed(3)),
+        y: Number(standing.y.toFixed(3)),
+        z: Number(standing.z.toFixed(3))
       },
       yaw: Number(pose.yaw.toFixed(4)),
       pitch: Number(pose.pitch.toFixed(4))
@@ -5338,6 +5383,8 @@ function personalPoseSignature(state: RuntimePersonalState): string {
 function restorePersonalPose(state: RuntimePersonalState): void {
   const pose = state.lastPose;
   if (!pose) return;
+  if (sceneFloorAreas && !isWalkablePoint(sceneFloorAreas, pose.position)) return;
+  lastStandingFloorY = pose.position.y;
   localPoseController.setPose({
     position: pose.position,
     yaw: pose.yaw,
@@ -6579,16 +6626,25 @@ function sampleRuntimeFrameContext(deltaSeconds: number, nowMs: number): Runtime
 }
 
 function createFrameLocomotionHandlers(frameContext: RuntimeFrameContext): FrameLocomotionPipelineHandlers {
+  let seatYaw: number | undefined;
+  let calibrated = false;
   return {
     getYaw: () => localPoseController.getYaw(),
     getPose: () => localPoseController.getPose(),
     getCurrentSeatId,
     getSeatRootPosition: (seatId) => {
       const seatAnchor = sceneSeatAnchorMap.get(seatId);
-      return seatAnchor ? resolveLocalSeatRootPosition(seatAnchor, renderer.xr.isPresenting) : null;
+      if (!seatAnchor) return null;
+      const view = seatView.resolve(seatAnchor, renderer.xr.isPresenting, () => {
+        const xr = frameContext.xr;
+        return xr?.referenceSpace ? xr.frame?.getViewerPose(xr.referenceSpace)?.transform : undefined;
+      });
+      seatYaw = view.yaw;
+      calibrated = view.calibrated;
+      return view.position;
     },
-    getSeatYaw: (seatId) => sceneSeatAnchorMap.get(seatId)?.yaw,
-    getLastAppliedSeatLockId: () => lastAppliedSeatLockId,
+    getSeatYaw: () => seatYaw,
+    getLastAppliedSeatLockId: () => calibrated ? null : lastAppliedSeatLockId,
     getCameraForward: () => {
       const viewForward = camera.getWorldDirection(new THREE.Vector3());
       return { x: viewForward.x, z: viewForward.z };
@@ -6600,6 +6656,11 @@ function createFrameLocomotionHandlers(frameContext: RuntimeFrameContext): Frame
 }
 
 function updateMovement(delta: number, frameContext: RuntimeFrameContext): void {
+  if (!getCurrentSeatId()) {
+    seatView.reset();
+    if (pendingStandingExit) setPlayerPositionForFloorTeleport(pendingStandingExit);
+  }
+  pendingStandingExit = undefined;
   executeFrameLocomotionPipeline({
     frameContext,
     deltaSeconds: delta,
@@ -7781,7 +7842,9 @@ renderer.domElement.addEventListener("click", (event) => {
     seatAnchorMap: sceneSeatAnchorMap,
     raycaster: interactionRaycaster,
     seatAnchors: sceneSeatAnchors,
-    teleportFloorY: sceneTeleportFloorY,
+    teleportFloorY: interactionFloorY(),
+    floorAreas: sceneFloorAreas,
+    pickFloorLink,
     maxDistance: 18,
     state: debugState.interactionRay,
     mode: "cursor",
@@ -8067,6 +8130,8 @@ renderer.setAnimationLoop(() => {
 
 /** The XR menu for this frame; true when it owns the controller ray, so no seat or floor target is resolved. */
 function updateXrMenu(frameContext: RuntimeFrameContext): boolean {
+  const seated = getCurrentSeatId() !== null;
+  xrMenuView.setSeated(seated);
   let ray: THREE.Ray | null = null;
   let hit: ReturnType<typeof resolveXrMenuHit> = null;
   if (xrMenuState.open) {
@@ -8074,6 +8139,7 @@ function updateXrMenu(frameContext: RuntimeFrameContext): boolean {
     hit = ray ? resolveXrMenuHit(ray, interactionRaycaster, xrMenuView.buttons) : null;
   }
   const step = stepXrMenu(xrMenuState, {
+    seated,
     presenting: frameContext.source === "xr",
     menuPressed: frameContext.xr?.menuPressed ?? false,
     confirm: frameContext.intents.confirmInteraction,
@@ -8103,7 +8169,9 @@ function updateXrMenu(frameContext: RuntimeFrameContext): boolean {
 
 function executeXrMenuCommand(command: XrMenuCommand): void {
   debugState.xrMenu.lastCommand = command.type;
-  if (command.type === "end_xr_session") {
+  if (command.type === "stand") {
+    standUpFromCurrentSeat();
+  } else if (command.type === "end_xr_session") {
     // Back to the screen only: the session ends, the room, media and presence stay.
     void currentXrSession?.end().catch(() => undefined);
   } else if (command.type === "leave_space") {
@@ -8354,7 +8422,8 @@ async function main(): Promise<void> {
     });
     activeSceneBundleRoot = sceneResult.activeSceneBundleRoot;
     if (activeSceneBundleRoot) sceneFrameReadiness.sceneAttached();
-    setSceneSeatAnchors(sceneResult.sceneManifest?.anchors?.seatAnchors ?? [], sceneResult.sceneManifest?.anchors?.teleportFloorY ?? 0);
+    const anchors = sceneResult.sceneManifest?.anchors;
+    setSceneSeatAnchors(anchors?.seatAnchors ?? [], anchors?.teleportFloorY ?? 0, anchors?.floorAreas, anchors?.floorLinks);
     configureRuntimeMediaSurfaces(sceneResult.sceneManifest?.mediaSurfaces);
     syncSeatStateFromOccupancy();
     effectiveCleanSceneMode = sceneResult.effectiveCleanSceneMode;
@@ -8452,6 +8521,8 @@ async function main(): Promise<void> {
   vrButton = createControlledVrButton();
   renderer.xr.addEventListener("sessionstart", () => {
     currentXrSession = renderer.xr.getSession();
+    seatView.reset();
+    lastAppliedSeatLockId = null;
     pointerActive = false;
     mobileTouchActive = false;
     mobileTouchVector.x = 0;
@@ -8459,7 +8530,7 @@ async function main(): Promise<void> {
     pointerHoveringScene = false;
     localPoseController.setPitch(0, "xr_session_start");
     if (!getCurrentSeatId()) {
-      localPoseController.alignFloorY(sceneTeleportFloorY, "xr_session_start");
+      localPoseController.alignFloorY(interactionFloorY(), "xr_session_start");
     }
     clearInteractionVisuals();
     latestMode = "vr";
@@ -8471,6 +8542,8 @@ async function main(): Promise<void> {
   });
   renderer.xr.addEventListener("sessionend", () => {
     currentXrSession = null;
+    seatView.reset();
+    lastAppliedSeatLockId = null;
     pointerActive = false;
     clearInteractionVisuals();
     latestMode = presenceXrMockEnabled ? "vr" : resolveJoinMode(navigator.userAgent);

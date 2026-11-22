@@ -1,3 +1,5 @@
+import { isFloorPoint, isSceneFloorAreas, isSceneFloorLinks, type SceneFloorLink, isWalkablePoint, type FloorPoint, type SceneFloorArea } from "@vrata/shared-types";
+
 export interface SceneBundleSpawnPoint {
   id: string;
   position: {
@@ -20,6 +22,9 @@ export interface SceneBundleSeatAnchor {
   yaw: number;
   seatHeight: number;
   radius: number;
+  /** Floor contact for an explicit stand; eyeHeight is measured from cushion. */
+  exit?: FloorPoint;
+  eyeHeight?: number;
   label?: string;
 }
 
@@ -77,6 +82,8 @@ export interface SceneBundleManifest {
   spawnPoints: SceneBundleSpawnPoint[];
   anchors?: {
     teleportFloorY?: number;
+    floorAreas?: SceneFloorArea[];
+    floorLinks?: SceneFloorLink[];
     seatAnchors: SceneBundleSeatAnchor[];
   };
   mediaSurfaces?: SceneBundleMediaSurface[];
@@ -172,6 +179,10 @@ function parseSeatAnchor(input: unknown, index: number): SceneBundleSeatAnchor {
   if (!Number.isFinite(radius) || radius <= 0) {
     throw new Error(`invalid_scene_bundle_seat_anchor_radius:${index}`);
   }
+  if (payload.exit !== undefined && !isFloorPoint(payload.exit)) throw new Error(`invalid_scene_bundle_seat_exit:${index}`);
+  if (payload.eyeHeight !== undefined && (!isFiniteNumber(payload.eyeHeight) || payload.eyeHeight <= 0)) {
+    throw new Error(`invalid_scene_bundle_seat_eye_height:${index}`);
+  }
 
   return {
     id: assertString(payload.id, `invalid_scene_bundle_seat_anchor_id:${index}`),
@@ -183,6 +194,8 @@ function parseSeatAnchor(input: unknown, index: number): SceneBundleSeatAnchor {
     yaw: payload.yaw,
     seatHeight: payload.seatHeight,
     radius,
+    ...(payload.exit === undefined ? {} : { exit: payload.exit }),
+    ...(payload.eyeHeight === undefined ? {} : { eyeHeight: payload.eyeHeight }),
     label: payload.label === undefined ? undefined : assertString(payload.label, `invalid_scene_bundle_seat_anchor_label:${index}`)
   };
 }
@@ -405,6 +418,19 @@ export function parseSceneBundleManifest(input: unknown): SceneBundleManifest {
         throw new Error("invalid_scene_bundle_teleport_floor_y");
       }
       parsedAnchors.teleportFloorY = anchors.teleportFloorY;
+    }
+    if (anchors.floorAreas !== undefined) {
+      if (!isSceneFloorAreas(anchors.floorAreas)) throw new Error("invalid_scene_bundle_floor_areas");
+      parsedAnchors.floorAreas = anchors.floorAreas;
+      for (const seat of parsedAnchors.seatAnchors) {
+        if (!seat.exit || Math.abs(seat.exit.y - seat.position.y) >= 0.01 || !isWalkablePoint(anchors.floorAreas, seat.exit)) {
+          throw new Error(`invalid_scene_bundle_floor_seat_exit:${seat.id}`);
+        }
+      }
+    }
+    if (anchors.floorLinks !== undefined) {
+      if (!isSceneFloorLinks(anchors.floorLinks, parsedAnchors.floorAreas ?? [])) throw new Error("invalid_scene_bundle_floor_links");
+      parsedAnchors.floorLinks = anchors.floorLinks;
     }
     manifest.anchors = parsedAnchors;
   }

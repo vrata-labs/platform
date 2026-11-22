@@ -85,6 +85,29 @@ Optional fields:
 - `attributions`: optional source credit records displayed in the runtime HUD
 - `notes`: free-form export notes
 
+### Walkable levels and seats
+
+Without `anchors.floorAreas`, teleport uses the existing single `teleportFloorY`
+plane. A multilevel scene opts into explicit standing footprints in world metres:
+
+- `anchors.floorAreas`: horizontal rectangles `{y, minX, maxX, minZ, maxZ}`.
+  Use the clear footprint for the standing user's centre, leaving room for the
+  body, furniture and the edge of a landing. Place the spawn inside that footprint.
+- `anchors.floorLinks`: optional `{fromY, node, destination: {x,y,z}}` entries.
+  `node` names a unique source node in the exported GLB. Point at and select
+  its visible geometry with the mouse or XR controller to change levels.
+  The same stair node can take users up or down, depending on `fromY`.
+  The ray reticle stays on the selected geometry; the destination is a declared
+  walkable point, not the intersection with a stair riser.
+- A seat anchor's `position.y` identifies the floor and `seatHeight` is the
+  cushion height above it. `yaw` is the seated camera heading (radians, looking
+  down local -Z). `eyeHeight`, when specified, is the upright eye above the
+  cushion in metres; XR aligns the tracked eye at entry, then permits natural
+  head motion. Omission preserves existing XR seating.
+- `exit: {x,y,z}` on each multilevel seat is a clear standing position on
+  that seat's floor. **Stand up** (also in the XR menu) releases the seat and
+  moves there; legacy seats without an exit use the room's entry point.
+
 ### `baked-pbr-v1` material transport
 
 `renderProfile: "baked-pbr-v1"` combines baked diffuse lighting with standard glTF
