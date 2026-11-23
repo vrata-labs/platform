@@ -158,6 +158,19 @@ test("private custom room: pinned scene loads for the same owner on two devices 
           )
           .toEqual(["loaded", JSON.parse(manifest).label, true]);
         await assertPrivateClip({ page, request, roomId: id, origin, artifact, first: i === 0, adminToken: fixture.adminToken, sound: !!sound });
+        if (!archive) {
+          const isOn = () => page.evaluate(() => (window as any).__VRATA_DEBUG__.sceneEffects
+            .find((effect: { id: string }) => effect.id === "light")?.playing);
+          await expect.poll(isOn).toBe(i === 0);
+          const canvas = await page.locator("#scene canvas").boundingBox();
+          expect(canvas).not.toBeNull();
+          const { x, y, width, height } = canvas!;
+          const center = [x + width / 2, y + height / 2] as const;
+          await page.mouse.move(...center);
+          await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__.interactionRay.targetKind)).toBe("effect-switch");
+          await page.mouse.click(...center);
+          await expect.poll(isOn).toBe(i !== 0);
+        }
         people.push(await page.evaluate(() => (window as any).__VRATA_DEBUG__.participantId));
         expect(await page.evaluate(() => JSON.stringify((window as any).__VRATA_DEBUG__.sceneDebug).includes("/c/"))).toBe(false);
       } finally {

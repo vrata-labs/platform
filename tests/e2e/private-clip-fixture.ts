@@ -19,23 +19,42 @@ export async function privateClipFixture() {
       sound: sound ? { path: sound, bytes: await readFile(resolve(dir, sound)) } : undefined,
     };
   }
-  const meshData = Buffer.from(new Float32Array([-1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 2, 0, 0, 0, 2, 0, 0]).buffer);
+  const meshData = Buffer.from(new Float32Array([-1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0, 0, 1, 0, .5, 1]).buffer);
+  const pixel = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==", "base64");
+  const data = Buffer.concat([meshData, pixel], Math.ceil((meshData.length + pixel.length) / 4) * 4);
   const gltf = {
     asset: { version: "2.0" },
     scene: 0,
-    scenes: [{ nodes: [0] }],
-    nodes: [{ name: "mover", mesh: 0 }],
-    meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
-    buffers: [{ byteLength: meshData.length }],
+    scenes: [{ nodes: [0, 1, 3] }],
+    nodes: [
+      { name: "mover", mesh: 0 },
+      { name: "switch-mount", mesh: 0, translation: [0, 1.5, 1], scale: [.3, .3, .3], children: [2] },
+      { name: "switch-handle", mesh: 0, translation: [.2, .2, .1], scale: [.4, .4, .4] },
+      { name: "glow", mesh: 1, translation: [-1, 1, 0] }
+    ],
+    meshes: [
+      { primitives: [{ attributes: { POSITION: 0 } }] },
+      { primitives: [{ attributes: { POSITION: 0, TEXCOORD_0: 3 }, material: 0 }] }
+    ],
+    images: [{ mimeType: "image/png", bufferView: 4 }],
+    textures: [{ source: 0 }],
+    materials: [{
+      pbrMetallicRoughness: { baseColorTexture: { index: 0 } },
+      emissiveTexture: { index: 0 }, emissiveFactor: [1, .5, .1]
+    }],
+    buffers: [{ byteLength: meshData.length + pixel.length }],
     bufferViews: [
       { buffer: 0, byteLength: 36 },
       { buffer: 0, byteOffset: 36, byteLength: 8 },
       { buffer: 0, byteOffset: 44, byteLength: 24 },
+      { buffer: 0, byteOffset: 68, byteLength: 24 },
+      { buffer: 0, byteOffset: meshData.length, byteLength: pixel.length }
     ],
     accessors: [
       { bufferView: 0, componentType: 5126, count: 3, type: "VEC3", min: [-1, 0, 0], max: [1, 1, 0] },
       { bufferView: 1, componentType: 5126, count: 2, type: "SCALAR", min: [0], max: [2] },
       { bufferView: 2, componentType: 5126, count: 2, type: "VEC3" },
+      { bufferView: 3, componentType: 5126, count: 3, type: "VEC2" }
     ],
     animations: [
       {
@@ -47,12 +66,12 @@ export async function privateClipFixture() {
   };
   const text = JSON.stringify(gltf),
     chunk = Buffer.from(text.padEnd(Math.ceil(text.length / 4) * 4, " "));
-  const model = Buffer.alloc(28 + chunk.length + meshData.length);
+  const model = Buffer.alloc(28 + chunk.length + data.length);
   [0x46546c67, 2, model.length, chunk.length, 0x4e4f534a].forEach((v, i) => model.writeUInt32LE(v, i * 4));
   chunk.copy(model, 20);
-  model.writeUInt32LE(meshData.length, 20 + chunk.length);
+  model.writeUInt32LE(data.length, 20 + chunk.length);
   model.writeUInt32LE(0x004e4942, 24 + chunk.length);
-  meshData.copy(model, 28 + chunk.length);
+  data.copy(model, 28 + chunk.length);
   const rate = 24_000, audio = Buffer.alloc(44 + rate * 2);
   audio.write("RIFF", 0); audio.writeUInt32LE(audio.length - 8, 4);
   audio.write("WAVEfmt ", 8); audio.writeUInt32LE(16, 16);
@@ -73,6 +92,9 @@ export async function privateClipFixture() {
     sceneEffects: [{
       id: "move", kind: "clip-loop", root: "mover", clips: ["glide"],
       audio: { path: sound.path, sha256: createHash("sha256").update(sound.bytes).digest("hex"), gain: 0.2, nearM: 1, farM: 8 }
+    }, {
+      id: "light", kind: "sprite-loop", root: "glow", atlas: { columns: 1, rows: 1, cycleSeconds: 1 },
+      switch: { mount: "switch-mount", handle: "switch-handle", offQuaternion: [0, 0, 1, 0], initiallyOn: true }
     }],
   });
   const artifact = Buffer.from(

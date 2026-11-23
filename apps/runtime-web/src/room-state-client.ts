@@ -1,4 +1,4 @@
-import { createDefaultRoomMediaObjectsState, type RoomMediaObjectsState, type RoomPermission, type RoomRole } from "@vrata/shared-types";
+import { createDefaultRoomMediaObjectsState, isSceneEffectSwitchState, type SceneEffectSwitchState, type RoomMediaObjectsState, type RoomPermission, type RoomRole } from "@vrata/shared-types";
 
 import type { PresenceState } from "./index.js";
 import type { AvatarReliableState, CompactPoseFrame } from "./avatar/avatar-types.js";
@@ -12,6 +12,7 @@ export interface RoomStateSnapshot {
   participants: PresenceState[];
   seatOccupancy: Record<string, string>;
   mediaObjects: RoomMediaObjectsState;
+  sceneEffectSwitches?: SceneEffectSwitchState;
   capabilities?: { surfaceStopRevision?: boolean; seatCommandCorrelation?: boolean };
 }
 
@@ -29,6 +30,10 @@ type SendableSocket = Pick<WebSocket, "OPEN" | "readyState" | "send">;
 
 function canSend(socket: SendableSocket): boolean {
   return socket.readyState === socket.OPEN;
+}
+
+export function sendSceneEffectSwitch(client: RoomStateClient, command: { versionId: string; effectId: string; enabled: boolean }): void {
+  if (canSend(client.socket)) client.socket.send(JSON.stringify({ type: "scene_effect_set", ...command }));
 }
 
 export interface RoomStateClientHandlers {
@@ -118,6 +123,7 @@ export function connectRoomState(
           participants: payload.room.participants,
           seatOccupancy: payload.room.seatOccupancy ?? {},
           mediaObjects: payload.room.mediaObjects ?? createDefaultRoomMediaObjectsState(payload.room.roomId),
+          ...(isSceneEffectSwitchState(payload.room.sceneEffectSwitches) ? { sceneEffectSwitches: payload.room.sceneEffectSwitches } : {}),
           ...(payload.capabilities?.surfaceStopRevision === 1 || payload.capabilities?.seatCommandCorrelation === 1 ? { capabilities: {
             ...(payload.capabilities.surfaceStopRevision === 1 ? { surfaceStopRevision: true } : {}),
             ...(payload.capabilities.seatCommandCorrelation === 1 ? { seatCommandCorrelation: true } : {}) } } : {})
