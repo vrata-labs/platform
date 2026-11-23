@@ -188,7 +188,7 @@ function parseZipEntries(buffer: Buffer): ZipEntry[] {
   return entries;
 }
 
-function readZipEntry(buffer: Buffer, entry: ZipEntry): Buffer {
+function readZipEntry(buffer: Buffer, entry: ZipEntry, maxOutputLength?: number): Buffer {
   if (buffer.readUInt32LE(entry.localHeaderOffset) !== 0x04034b50) {
     throw new Error("invalid_zip_local_header");
   }
@@ -200,7 +200,7 @@ function readZipEntry(buffer: Buffer, entry: ZipEntry): Buffer {
     return compressedData;
   }
   if (entry.compressionMethod === 8) {
-    return inflateRawSync(compressedData);
+    return inflateRawSync(compressedData, maxOutputLength ? { maxOutputLength } : {});
   }
   throw new Error(`unsupported_zip_compression:${entry.compressionMethod}`);
 }
@@ -401,6 +401,35 @@ export async function extractSceneBundleZipToTemp(zipPath: string): Promise<{ ro
     await rm(root, { recursive: true, force: true });
     throw error;
   }
+}
+
+/** Approved two-file delivery: no export sources, external images or caller-chosen storage paths. */
+export function unpackPersonalScene(zip: Buffer): { manifest: Buffer; model: Buffer } {
+  const limits = { "scene.json": 1024 * 1024, "scene.glb": defaultMaxMainAssetBytes } as const;
+  if (zip.byteLength > defaultMaxBundleBytes) throw new Error("private_scene_archive_size");
+  const entries = parseZipEntries(zip);
+  if (entries.length !== 2 || !Object.keys(limits).every(path => entries.some(entry => entry.name === path))) {
+    throw new Error("private_scene_expected_files");
+  }
+  const read = (path: keyof typeof limits) => {
+    const entry = entries.find(entry => entry.name === path)!;
+    if (entry.uncompressedSize < 1 || entry.uncompressedSize > limits[path]) throw new Error("private_scene_file_size");
+    const content = readZipEntry(zip, entry, entry.uncompressedSize);
+    if (content.length !== entry.uncompressedSize) throw new Error("private_scene_file_size");
+    return content;
+  };
+  const manifest = read("scene.json"), model = read("scene.glb");
+  const meta: unknown = JSON.parse(manifest.toString("utf8"));
+  if (!isRecord(meta) || meta.glbPath !== "scene.glb" || (meta.materialOverrides !== undefined &&
+      (!Array.isArray(meta.materialOverrides) || meta.materialOverrides.some(value => !isRecord(value) || value.mapPath !== undefined)))) {
+    throw new Error("private_scene_must_be_self_contained");
+  }
+  const glb = parseGlbJson(model);
+  if (!isRecord(glb) || ![glb.buffers, glb.images].every(list => list === undefined ||
+      Array.isArray(list) && list.every(entry => isRecord(entry) && entry.uri === undefined))) {
+    throw new Error("private_scene_must_be_self_contained");
+  }
+  return { manifest, model };
 }
 
 function pushRequiredStringIssue(issues: SceneBundleValidationIssue[], manifest: Record<string, unknown>, key: string): string | null {

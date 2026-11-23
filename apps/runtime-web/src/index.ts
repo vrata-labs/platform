@@ -16,6 +16,7 @@ interface RoomManifest {
     url: string;
     integrity?: SceneBundleIntegrity;
   };
+  privateScene?: {bundleVersionId:string;contentHash:string;integrity:SceneBundleIntegrity};
   realtime: {
     roomStateUrl: string;
   };
@@ -387,6 +388,7 @@ export interface RuntimeBootResult {
   sceneReleaseId?: string;
   sceneIntegrity?: SceneBundleIntegrity;
   sceneBundleUrl?: string;
+  privateScene?: {bundleVersionId:string;contentHash:string};
   roomStateUrl: string;
   theme: {
     primaryColor: string;
@@ -574,7 +576,9 @@ export async function bootRuntime(
       sceneReleaseId: manifest.templateSnapshot.assetLock?.sceneReleaseId
     } : {}),
     ...(manifest.sceneBundle?.integrity ? { sceneIntegrity: manifest.sceneBundle.integrity } : {}),
-    sceneBundleUrl: manifest.sceneBundle?.url,
+    sceneBundleUrl: manifest.privateScene ? new URL(`/api/rooms/${encodeURIComponent(roomId)}/delivery-descriptor`,apiBaseUrl).href : manifest.sceneBundle?.url,
+    ...(manifest.privateScene ? {privateScene:{bundleVersionId:manifest.privateScene.bundleVersionId,contentHash:manifest.privateScene.contentHash},
+      sceneIntegrity:manifest.privateScene.integrity} : {}),
     roomStateUrl: manifest.realtime.roomStateUrl,
     theme: manifest.theme,
     assets: manifest.assets,

@@ -1,5 +1,6 @@
 import type { RoomTemplateCatalogRecord, RoomTemplateSnapshotV1, RoomTemplateVersionSnapshotV1 } from "@vrata/shared-types";
 import type { SceneBundleCreateInput, SceneBundleRecord } from "./scene-bundle-storage.js";
+import type { PrivateSceneVersion } from "./private-scene-release.js";
 import type { ReferenceCatalogState, TemplateCatalogPointer } from "@vrata/templates";
 
 export interface TenantRecord {
@@ -181,7 +182,7 @@ export interface RoomRecord {
   managed?: ManagedRoomState;
 }
 
-export type ManagedRoomKind = "reference" | "demo-instance";
+export type ManagedRoomKind = "reference" | "demo-instance" | "custom";
 
 export type ManagedRoomStatus = "active" | "paused" | "closed";
 
@@ -194,6 +195,9 @@ export interface ManagedRoomFeatures {
 
 // Access terms of a room created through the integration API; only integration storage methods write them.
 export interface ManagedRoomState {
+  bundleVersionId?: string;
+  publishedVersionId?: string;
+  bundleContentHash?: string;
   managedBy: string;
   kind: ManagedRoomKind;
   status: ManagedRoomStatus;
@@ -215,6 +219,7 @@ export interface ManagedRoomState {
 }
 
 export interface ManagedRoomCreateInput {
+  customVersion?: PrivateSceneVersion;
   managedBy: string;
   kind: ManagedRoomKind;
   accessUntil: string;
@@ -359,6 +364,9 @@ export interface IntegrationOperationOutcome {
 }
 
 export interface IntegrationStore {
+  registerPrivateSceneVersion(version: PrivateSceneVersion): Promise<PrivateSceneVersion | null>;
+  getPrivateSceneVersion(tenantId: string, versionId: string): Promise<PrivateSceneVersion | null>;
+  publishInitialPrivateScene(roomId: string, versionId: string, operationId:string): Promise<boolean>;
   getIntegrationTenant(tenantId: string): Promise<IntegrationTenantRecord | null>;
   upsertIntegrationTenant(input: { tenantId: string; managedBy: string; displayName: string }): Promise<IntegrationTenantRecord | "tenant_mismatch">;
   createManagedRoom(input: Partial<RoomRecord>, managed: ManagedRoomCreateInput): Promise<RoomRecord>;

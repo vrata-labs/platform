@@ -2231,6 +2231,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   const requestId = attachRequestId(request, response);
   metrics.requestsTotal += 1;
   const method = request.method ?? "GET";
+  if (request.url?.startsWith("/c/")) {
+    try { await servePrivateAsset(request,response,await storagePromise,getStateTokenSecret()); }
+    catch { response.writeHead(503,{"cache-control":"private, no-store"});response.end(); }
+    return;
+  }
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `localhost:${apiPort}`}`);
   // Before storage, plugin, session, boundary or room lookups; preflight keeps its CORS response.
   if (method !== "OPTIONS") assertVirtualDataPath(url.pathname);
@@ -3895,10 +3900,29 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  const descriptorMatch=url.pathname.match(/^\/api\/rooms\/([^/]+)\/delivery-descriptor$/);
+  if (method==="POST" && descriptorMatch) {
+    const session=v2SessionsByRequest.get(request),actor=resolveControlPlaneActor(request);
+    if (!session || !actor.ok || actor.actor.actorType!=="room-session" || !session.isOwner) return json(response,403,{error:"forbidden"});
+    const {room,identity}=session, m=room.managed, provenance=identity.provenance;
+    if (room.roomId!==descriptorMatch[1] || m?.kind!=="custom" || !m.publishedVersionId) return json(response,404,{error:"room_not_found"});
+    if (provenance.kind!=="grant" || !("subject" in provenance) || provenance.subject!==m.ownerSubject) return json(response,403,{error:"forbidden"});
+    const version=await storage.getPrivateSceneVersion(room.tenantId,m.publishedVersionId);
+    const grant=await storage.getManagedRoomGrant(provenance.grantId);
+    if (!version || !grant || grant.revokedAt || grant.roomId!==room.roomId) return json(response,403,{error:"forbidden"});
+    await runGuardedRoomEffect(storage,actor.actor,room,"room.join",async scoped=>{
+      const current=await scoped.getRoom(room.roomId);
+      const result=current && servesPrivateVersion(current,version) && privateDescriptor(current,version,grant.grantId,session.expiresAtSeconds,getStateTokenSecret());
+      scoped.releaseResponse(()=>result ? json(response,200,result) : json(response,403,{error:"forbidden"}));
+    },{ownerOnly:true});
+    return;
+  }
   const manifestMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/manifest$/);
   if (method === "GET" && manifestMatch) {
     const roomId = decodeURIComponent(manifestMatch[1]);
     const room = await storage.getRoom(roomId);
+    if (room?.managed?.kind==="custom" && v2SessionsByRequest.get(request)?.isOwner!==true)
+      return json(response,404,{error:"room_not_found"});
     if (room && isRoomDisabled(room) && !canManageDisabledRoom(request)) return json(response, 403, { error: "room_access_denied", reason: "room_disabled" });
     if (room && !(await canReadRoomDetails(request, room))) return json(response, 404, { error: "room_not_found" });
     const manifest = await buildManifest(roomId, request, room);
@@ -4473,3 +4497,4 @@ if (process.env.NODE_ENV !== "test" && process.env.VRATA_DISABLE_AUTOSTART !== "
   validateProductionApiEnv();
   startApiServer();
 }
+import { privateDescriptor, servePrivateAsset, servesPrivateVersion } from "./private-scene-delivery.js";

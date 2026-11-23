@@ -59,6 +59,27 @@ export async function ensureIntegrationStorageSchema(client: PoolClient): Promis
     `);
   await client.query(`create index if not exists integration_assertions_expires_idx on integration_assertions (expires_at)`);
   await client.query(`create index if not exists integration_rooms_tenant_idx on integration_rooms (tenant_id)`);
+  await client.query(`
+    create table if not exists integration_private_versions (
+      tenant_id text not null references integration_tenants(tenant_id),
+      bundle_id text not null,
+      version text not null,
+      version_id uuid not null,
+      record jsonb not null,
+      primary key(tenant_id, version_id),
+      unique(tenant_id, bundle_id, version)
+    );
+    create table if not exists integration_private_room_versions (
+      room_id text primary key references integration_rooms(room_id),
+      tenant_id text not null,
+      version_id uuid not null,
+      content_hash text not null,
+      published boolean not null default false,
+      publish_operation text,
+      unique(tenant_id, version_id),
+      foreign key(tenant_id, version_id) references integration_private_versions(tenant_id, version_id)
+    )
+  `);
   // Demo instances, grants, close and media epochs (T08). A close also moves access_until to the close time,
   // so a build that does not know the closed status still treats the room as expired.
   await client.query(`

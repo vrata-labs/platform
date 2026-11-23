@@ -8,7 +8,7 @@ import { sanitizeRoomVisibility } from "./room-input.js";
 import { isRoomDisabled } from "./room-session-control.js";
 import { referenceTemplateContract } from "@vrata/templates";
 
-export function createRoomManifestBuilder(storagePromise: Promise<Pick<Storage, "getRoom" | "getTemplateVersion" | "listAssets">>) {
+export function createRoomManifestBuilder(storagePromise: Promise<Pick<Storage, "getRoom" | "getTemplateVersion" | "listAssets"> & Partial<Pick<Storage,"getPrivateSceneVersion">>>) {
   async function buildManifest(roomId: string, request?: IncomingMessage, checkedRoom?: RoomRecord | null): Promise<RoomManifest> {
     const storage = await storagePromise;
     // An explicit snapshot (including null) must be the same one whose access
@@ -21,6 +21,9 @@ export function createRoomManifestBuilder(storagePromise: Promise<Pick<Storage, 
     }
     const roomAssets = (await storage.listAssets()).filter((asset) => room.assetIds.includes(asset.assetId));
     const contract = referenceTemplateContract(room.templateSnapshot);
+    const privateVersion=room.managed?.kind==="custom" && room.managed.publishedVersionId ?
+      await storage.getPrivateSceneVersion?.(room.tenantId,room.managed.publishedVersionId) : null;
+    const sceneFile=privateVersion?.files.find(f=>f.path==="scene.json"), modelFile=privateVersion?.files.find(f=>f.path==="scene.glb");
     return {
       schemaVersion: 1,
       tenantId: room.tenantId,
@@ -30,6 +33,8 @@ export function createRoomManifestBuilder(storagePromise: Promise<Pick<Storage, 
       template: room.templateId,
       templateVersion: room.templateVersion,
       templateSnapshot: room.templateSnapshot,
+      ...(privateVersion && sceneFile && modelFile ? {privateScene:{bundleVersionId:privateVersion.bundleVersionId,contentHash:privateVersion.contentHash,
+        integrity:{manifestSha256:sceneFile.sha256,assetSha256:modelFile.sha256}}} : {}),
       sceneBundle: room.sceneBundleUrl ? { url: room.sceneBundleUrl, ...(contract ? { integrity: { manifestSha256: contract.assetLock.sceneManifest.sha256, assetSha256: contract.assetLock.sceneAsset.sha256 } } : {}) } : undefined,
       realtime: {
         roomStateUrl: getDefaultRoomStateUrl(request)
