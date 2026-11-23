@@ -5,6 +5,7 @@ import { expectedReferenceCatalog, getTemplateVersion as getSeedTemplateVersion,
 import type { RoomTemplateStatus, RoomTemplateVersionSnapshotV1 } from "@vrata/shared-types";
 
 import type { SceneBundleCreateInput, SceneBundleRecord } from "./scene-bundle-storage.js";
+import type { PrivateSceneVersion } from "./private-scene-release.js";
 import {
   bindRoomTemplateMetadata,
   defaultAvatarConfig,
@@ -172,6 +173,15 @@ const defaultTemplates: TemplateRecord[] = seedTemplateDefinitions.map((definiti
   currentVersion: definition.version,
   status: definition.status
 }));
+// A storage-format parent for the room FK and rollback readers, never a selectable reference template.
+const customFormat: RoomTemplateVersionSnapshotV1 = { schemaVersion:1, templateId:"managed-personal-import", version:"1.0.0", label:"Private custom room", assetSlots:[] };
+function customRoomMetadata(input: Partial<RoomRecord>, managed: ManagedRoomCreateInput) {
+  if (managed.kind !== "custom" || !managed.customVersion || !managed.ownerSubject || !input.roomId || !input.name ||
+      input.tenantId !== managed.customVersion.tenantId || input.sceneBundleUrl !== undefined || input.templateId !== undefined) throw new Error("invalid_custom_binding");
+  return bindRoomTemplateMetadata({roomId:input.roomId,tenantId:input.tenantId,templateId:customFormat.templateId,name:input.name,
+    roomType:"personal",ownerParticipantId:null,status:"active",visibility:"private",guestAllowed:false,features:{voice:true,spatialAudio:true,screenShare:false},
+    assetIds:[],theme:{primaryColor:"#5fc8ff",accentColor:"#163354"},avatarConfig:defaultAvatarConfig(),sessionControl:defaultSessionControl(),personalState:{}},customFormat);
+}
 const defaultTemplateVersions = seedTemplateDefinitions.map((definition) => {
   const snapshot = getSeedTemplateVersion(definition.id, definition.version);
   if (!snapshot) throw new Error(`missing_seed_template_version:${definition.id}@${definition.version}`);
@@ -453,6 +463,24 @@ export class MemoryStorage implements Storage {
   private integrationTenants = new Map<string, IntegrationTenantRecord>();
   private integrationOperations = new MemoryIntegrationOperations();
   private managedRooms = new MemoryManagedRooms(this.rooms);
+  private privateVersions = new Map<string, PrivateSceneVersion>();
+  async registerPrivateSceneVersion(v: PrivateSceneVersion) {
+    const existing = [...this.privateVersions.values()].find(x=> x.tenantId===v.tenantId && x.bundleId===v.bundleId && x.version===v.version);
+    if (existing) return existing.contentHash===v.contentHash ? structuredClone(existing) : null;
+    this.privateVersions.set(v.bundleVersionId,structuredClone(v)); return structuredClone(v);
+  }
+  async getPrivateSceneVersion(tenantId:string,id:string) {
+    const v=this.privateVersions.get(id); return v?.tenantId===tenantId ? structuredClone(v) : null;
+  }
+  private privatePublications = new Map<string,string>();
+  async publishInitialPrivateScene(roomId:string,id:string,op:string) {
+    const m=this.rooms.get(roomId)?.managed;
+    if (!m || m.status!=="active" || m.bundleVersionId!==id) return false;
+    if (m.publishedVersionId) return this.privatePublications.get(roomId)===op;
+    this.privatePublications.set(roomId,op);
+    m.publishedVersionId=id;
+    return true;
+  }
 
   private sceneBundleKey(bundleId: string, version: string): string {
     return `${bundleId}::${version}`;
@@ -1056,12 +1084,19 @@ export class MemoryStorage implements Storage {
   async createManagedRoom(input: Partial<RoomRecord>, managed: ManagedRoomCreateInput): Promise<RoomRecord> {
     if (input.roomId && this.rooms.has(input.roomId)) throw new Error("managed_room_exists");
     // A managed personal room is owned by managed.ownerSubject through grants, never by a participant id string.
-    const room = this.createRoomSync(input, { allowUnownedPersonal: managed.ownerSubject != null });
+    const room = managed.kind==="custom" ? customRoomMetadata(input,managed) : this.createRoomSync(input, { allowUnownedPersonal: managed.ownerSubject != null });
+    if (managed.kind==="custom") {
+      const v=this.privateVersions.get(managed.customVersion!.bundleVersionId);
+      if (!v || v.tenantId!==input.tenantId || [...this.rooms.values()].some(r=>r.managed?.bundleVersionId===v.bundleVersionId)) throw new Error("private_version_already_bound");
+      this.rooms.set(room.roomId,room);
+      this.mediaIncarnations.set(room.roomId,crypto.randomUUID().replaceAll("-",""));
+    }
     const timestamp = new Date().toISOString();
     const stored = this.rooms.get(room.roomId)!;
     stored.managed = {
       managedBy: managed.managedBy,
       kind: managed.kind,
+      ...(managed.customVersion ? { bundleVersionId:managed.customVersion.bundleVersionId,bundleContentHash:managed.customVersion.contentHash } : {}),
       status: "active",
       accessUntil: managed.accessUntil,
       graceSeconds: managed.graceSeconds,
@@ -1130,7 +1165,8 @@ const MANAGED_ROOM_COLUMNS_SQL = `ir.managed_by, ir.kind as managed_kind, ir.sta
              ir.last_operation_id as managed_last_operation_id, ir.created_at as managed_created_at, ir.updated_at as managed_updated_at,
              ir.access_epoch::text as managed_access_epoch, ir.closed_at as managed_closed_at, ir.close_reason as managed_close_reason,
              ir.demo_policy_id as managed_demo_policy_id, ir.max_participants as managed_max_participants,
-             ir.idle_timeout_seconds as managed_idle_timeout_seconds, ir.features as managed_features`;
+             ir.idle_timeout_seconds as managed_idle_timeout_seconds, ir.features as managed_features,
+             pv.version_id::text as private_version_id,pv.content_hash as private_content_hash,pv.published as private_published`;
 
 function isUniqueViolation(error: unknown): boolean {
   return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "23505";
@@ -1677,6 +1713,7 @@ export class PostgresStorage implements Storage {
       from rooms r
       left join templates t on t.template_id = r.template_id
       left join integration_rooms ir on ir.room_id = r.room_id
+      left join integration_private_room_versions pv on pv.room_id = ir.room_id
       left join template_versions tv on tv.template_id = r.template_id and tv.version = coalesce(r.template_version, t.current_version)
       order by r.room_id
     `);
@@ -1694,6 +1731,7 @@ export class PostgresStorage implements Storage {
       from rooms r
       left join templates t on t.template_id = r.template_id
       left join integration_rooms ir on ir.room_id = r.room_id
+      left join integration_private_room_versions pv on pv.room_id = ir.room_id
       left join template_versions tv on tv.template_id = r.template_id and tv.version = coalesce(r.template_version, t.current_version)
       where r.room_id = $1
     `, [roomId]);
@@ -2439,13 +2477,46 @@ export class PostgresStorage implements Storage {
       return (await this.getIntegrationTenant(input.tenantId))!;
     }
   }
+  async registerPrivateSceneVersion(v: PrivateSceneVersion) {
+    const {rows}=await this.pool.query(`insert into integration_private_versions(tenant_id,bundle_id,version,version_id,record)
+      values ($1,$2,$3,$4,$5::jsonb) on conflict (tenant_id,bundle_id,version) do nothing returning record`,
+      [v.tenantId,v.bundleId,v.version,v.bundleVersionId,JSON.stringify(v)]);
+    if (rows[0]) return rows[0].record as PrivateSceneVersion;
+    const existing=await this.pool.query("select record from integration_private_versions where tenant_id=$1 and bundle_id=$2 and version=$3",[v.tenantId,v.bundleId,v.version]);
+    const record=existing.rows[0]?.record as PrivateSceneVersion|undefined;
+    return record?.contentHash===v.contentHash ? record : null;
+  }
+  async getPrivateSceneVersion(tenantId:string,id:string) {
+    return (await this.pool.query("select record from integration_private_versions where tenant_id=$1 and version_id=$2",[tenantId,id])).rows[0]?.record as PrivateSceneVersion ?? null;
+  }
+  async publishInitialPrivateScene(roomId:string,id:string,op:string) {
+    const result=await this.pool.query(`update integration_private_room_versions p set published=true,publish_operation=$3 from integration_rooms r
+      where p.room_id=r.room_id and r.status='active' and p.room_id=$1 and p.version_id=$2 and (not p.published or p.publish_operation=$3)`,[roomId,id,op]);
+    return result.rowCount===1;
+  }
+  private async insertPrivateRoom(client:PoolClient,input:Partial<RoomRecord>,managed:ManagedRoomCreateInput) {
+    const r=customRoomMetadata(input,managed);
+    // This parent is deliberately not active in the public catalogue. Custom room creation is authorized
+    // against a tenant version, not by selecting or overriding any template from that catalogue.
+    await client.query(`insert into templates(template_id,label,asset_slots,status) values($1,$2,'[]','deprecated') on conflict do nothing`,[r.templateId,customFormat.label]);
+    await this.ensureTemplateVersion(client,customFormat);
+    await client.query("update templates set current_version=$2 where template_id=$1 and current_version is null",[r.templateId,r.templateVersion]);
+    const result=await client.query(`insert into rooms(room_id,tenant_id,template_id,template_version,template_snapshot,name,room_type,visibility,
+      guest_allowed,features,asset_ids,theme,avatar_config,session_control,personal_state)
+      select $1,$2,$3,$4,$5,$6,'personal','private',false,$7,'[]',$8,$9,$10,'{}'
+      from integration_private_versions v join templates t on t.template_id=$3
+      where v.tenant_id=$2 and v.version_id=$11 and t.status='deprecated' and t.current_version=$4`,
+      [r.roomId,r.tenantId,r.templateId,r.templateVersion,r.templateSnapshot,r.name,r.features,r.theme,r.avatarConfig,r.sessionControl,managed.customVersion!.bundleVersionId]);
+    if (result.rowCount!==1) throw new Error("invalid_custom_binding");
+    return r;
+  }
   async createManagedRoom(input: Partial<RoomRecord>, managed: ManagedRoomCreateInput): Promise<RoomRecord> {
     const client = await this.pool.connect();
     let roomId: string;
     try {
       await client.query("begin");
       // A managed personal room is owned by managed.ownerSubject through grants, never by a participant id string.
-      const room = await this.insertRoom(input, client, { allowUnownedPersonal: managed.ownerSubject != null });
+      const room = managed.kind==="custom" ? await this.insertPrivateRoom(client,input,managed) : await this.insertRoom(input, client, { allowUnownedPersonal: managed.ownerSubject != null });
       roomId = room.roomId;
       await client.query(
         `insert into integration_rooms (room_id, tenant_id, managed_by, kind, status, access_until, grace_seconds, revision, owner_subject, last_operation_id,
@@ -2454,6 +2525,8 @@ export class PostgresStorage implements Storage {
         [room.roomId, room.tenantId, managed.managedBy, managed.kind, managed.accessUntil, managed.graceSeconds, managed.ownerSubject ?? null, managed.operationId,
           managed.demoPolicyId ?? null, managed.maxParticipants ?? null, managed.idleTimeoutSeconds ?? null, managed.features ? JSON.stringify(managed.features) : null]
       );
+      if (managed.customVersion) await client.query(`insert into integration_private_room_versions(room_id,tenant_id,version_id,content_hash)
+        values($1,$2,$3,$4)`,[roomId,room.tenantId,managed.customVersion.bundleVersionId,managed.customVersion.contentHash]);
       await client.query("commit");
     } catch (error) {
       await client.query("rollback").catch(() => undefined);

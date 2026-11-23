@@ -10,6 +10,7 @@ import { disposeSceneObject } from "./scene-dispose.js";
 import { applyBakedLightMaps } from "./scene-lightmaps.js";
 import type { SceneBundleIntegrity } from "@vrata/shared-types";
 import { assertSelfContainedGlb, verifySceneBytes } from "./scene-integrity.js";
+import type { PrivateSceneFileFetch } from "./private-scene-source.js";
 
 export interface LoadedSceneBundle {
   manifest: SceneBundleManifest;
@@ -103,6 +104,7 @@ async function applyMaterialOverrides(input: {
 
 export async function loadSceneBundle(input: {
   bundleUrl: string;
+  privateFile?: PrivateSceneFileFetch;
   integrity?: SceneBundleIntegrity;
   renderer?: THREE.WebGLRenderer;
   onLoadStage?: (stage: string) => void;
@@ -110,7 +112,8 @@ export async function loadSceneBundle(input: {
 }): Promise<LoadedSceneBundle> {
   const startedAt = performance.now();
   input.onLoadStage?.("manifest_requested");
-  const response = await fetch(input.bundleUrl);
+  if (input.privateFile && !input.integrity) throw new Error("private_scene_integrity_required");
+  const response = input.privateFile ? await input.privateFile("scene.json") : await fetch(input.bundleUrl);
   if (!response.ok) {
     throw new Error(`failed_to_load_scene_bundle_manifest:${response.status}`);
   }
@@ -127,7 +130,9 @@ export async function loadSceneBundle(input: {
   input.onLoadStage?.("manifest_loaded");
   const group = new THREE.Group();
   group.name = `scene-bundle:${manifest.sceneId}`;
-  const sceneAssetUrl = resolveSceneAssetUrl(response.url, manifest.glbPath);
+  if (input.privateFile && manifest.glbPath!=="scene.glb") throw new Error("private_scene_expected_glb");
+  const logicalBase=input.privateFile ? input.bundleUrl : response.url;
+  const sceneAssetUrl = resolveSceneAssetUrl(logicalBase, manifest.glbPath);
   if (input.integrity && !/[.]glb$/i.test(sceneAssetUrl)) throw new Error("verified_scene_requires_glb");
   const missingAssets = new Set<string>();
   input.onLoadStage?.("asset_load_started");
@@ -151,7 +156,7 @@ export async function loadSceneBundle(input: {
     let gltf;
     if (/[.]glb$/i.test(sceneAssetUrl)) {
       input.onLoadStage?.("asset_response_requested");
-      const assetResponse = await fetch(sceneAssetUrl);
+      const assetResponse = input.privateFile ? await input.privateFile("scene.glb") : await fetch(sceneAssetUrl);
       if (!assetResponse.ok) {
         throw new Error(`failed_to_load_scene_asset:${assetResponse.status}`);
       }
@@ -188,7 +193,7 @@ export async function loadSceneBundle(input: {
   await applyMaterialOverrides({
     root: group,
     manifest,
-    bundleUrl: response.url
+    bundleUrl: logicalBase
   });
   input.onLoadStage?.("material_overrides_applied");
 

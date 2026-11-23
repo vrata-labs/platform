@@ -4,6 +4,7 @@ import { inspectSceneObject, type SceneDiagnosticsSnapshot } from "./scene-debug
 import type { SceneBundleManifest, SceneBundleRenderProfile, SceneBundleSpawnPoint } from "./scene-bundle.js";
 import { disposeSceneObject } from "./scene-dispose.js";
 import { loadSceneBundle } from "./scene-loader.js";
+import type { PrivateSceneFileFetch } from "./private-scene-source.js";
 import type { RoomTemplateSurface, SceneBundleIntegrity } from "@vrata/shared-types";
 import { assertTemplateSceneSurfaces } from "./template-layout.js";
 
@@ -29,6 +30,7 @@ export async function startSceneBundleSession(input: {
   camera: THREE.Camera;
   renderer?: THREE.WebGLRenderer;
   bundleUrl: string;
+  privateFile?: PrivateSceneFileFetch;
   integrity?: SceneBundleIntegrity;
   requiredSurfaces?: RoomTemplateSurface[];
   requestedCleanSceneMode: boolean;
@@ -46,6 +48,7 @@ export async function startSceneBundleSession(input: {
   try {
     const loadedScene = await (input.loadSceneBundleImpl ?? loadSceneBundle)({
       bundleUrl: input.bundleUrl,
+      ...(input.privateFile ? {privateFile:input.privateFile} : {}),
       ...(input.integrity ? { integrity: input.integrity } : {}),
       renderer: input.renderer,
       onLoadStage(stage) {

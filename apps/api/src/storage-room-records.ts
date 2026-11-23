@@ -251,6 +251,9 @@ export function mapRoomRow(row: {
 
 // Columns of the left-joined integration_rooms row (see MANAGED_ROOM_COLUMNS_SQL in storage.ts).
 export interface ManagedRoomRow {
+  private_version_id?: string | null;
+  private_content_hash?: string | null;
+  private_published?: boolean;
   managed_by?: string | null;
   managed_kind?: ManagedRoomKind | null;
   managed_status?: ManagedRoomStatus | null;
@@ -272,6 +275,8 @@ export interface ManagedRoomRow {
 
 export function mapManagedRoomState(row: ManagedRoomRow): ManagedRoomState {
   return {
+    ...(row.private_version_id ? {bundleVersionId:row.private_version_id, bundleContentHash:row.private_content_hash!,
+      ...(row.private_published ? {publishedVersionId:row.private_version_id} : {})} : {}),
     managedBy: row.managed_by!,
     kind: row.managed_kind ?? "reference",
     status: row.managed_status === "paused" || row.managed_status === "closed" ? row.managed_status : "active",
