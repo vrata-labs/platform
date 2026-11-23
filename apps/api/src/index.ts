@@ -2485,9 +2485,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       authEpoch: session.identity.authEpoch, sessionId: session.sessionId,
       expiresAtSeconds: session.expiresAtSeconds, authorityRevision: session.authority.revision,
       role: session.role, permissions: session.permissions,
+      ...(room.managed?.kind === "custom" ? { sceneEffectVersionId: room.managed.publishedVersionId } : {}),
       ...(payload.includeSceneContext === true ? {
         sceneMediaSurfaces: context?.surfaces
           ?? await loadSceneMediaSurfaces(room.sceneBundleUrl, `http://127.0.0.1:${request.socket.localPort ?? process.env.API_PORT ?? "4000"}`),
+        sceneEffectSwitches: await privateSceneSwitchDefaults(storage, room),
         ...(context ? { roomTemplate: context } : {})
       } : {})
     });
@@ -4497,4 +4499,4 @@ if (process.env.NODE_ENV !== "test" && process.env.VRATA_DISABLE_AUTOSTART !== "
   validateProductionApiEnv();
   startApiServer();
 }
-import { privateDescriptor, servePrivateAsset, servesPrivateVersion } from "./private-scene-delivery.js";
+import { privateDescriptor, privateSceneSwitchDefaults, servePrivateAsset, servesPrivateVersion } from "./private-scene-delivery.js";

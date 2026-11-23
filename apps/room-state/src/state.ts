@@ -65,6 +65,7 @@ export interface RoomState {
   seatOccupancy: SeatOccupancyState;
   mediaObjects: RoomMediaObjectsState;
   roomTemplate?: RoomTemplateSessionContext;
+  sceneEffectSwitches?: import("@vrata/shared-types").SceneEffectSwitchState;
 }
 
 export interface SeatClaimResult {
@@ -85,6 +86,8 @@ export interface ParticipantAccessState {
   permissions?: RoomPermission[];
   sceneMediaSurfaces?: SceneMediaSurfaceDefinition[];
   roomTemplate?: RoomTemplateSessionContext;
+  sceneEffectVersionId?: string | null;
+  sceneEffectSwitches?: import("@vrata/shared-types").SceneEffectSwitchState;
 }
 
 export interface CreateMediaObjectInput {
@@ -2068,6 +2071,7 @@ export function serializeRoomState(state: RoomState): RoomState {
     roomId: state.roomId,
     participants: state.participants.map((item) => ({ ...item })),
     seatOccupancy: { ...state.seatOccupancy },
+    ...(state.sceneEffectSwitches ? { sceneEffectSwitches: state.sceneEffectSwitches } : {}),
     mediaObjects
   };
 }

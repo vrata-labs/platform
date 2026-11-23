@@ -58,6 +58,7 @@ export const EN = {
 
   "audio.heading": "Audio",
   "audio.join": "Join Audio",
+  "audio.sceneSounds": "Scene sounds",
   "audio.joinMuted": "Join Audio Muted",
   "audio.leave": "Leave Audio",
   "audio.mute": "Mute",
@@ -220,6 +221,7 @@ export const RU: Record<MessageKey, string> = {
 
   "audio.heading": "Звук",
   "audio.join": "Подключить звук",
+  "audio.sceneSounds": "Звуки сцены",
   "audio.joinMuted": "Подключить звук без микрофона",
   "audio.leave": "Отключить звук",
   "audio.mute": "Выключить микрофон",

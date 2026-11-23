@@ -59,6 +59,7 @@ import { createMediaActionBarrier } from "./media/media-action-barrier.js";
 import { planBaseMedia } from "./media/media-token-error.js";
 import { createMediaParticipantResolver, planRemoteMicrophones, sameMicrophoneOwner } from "./media/media-participant.js";
 import { createRoomIdentityTab } from "./identity-session-tab.js";
+import { createSceneSwitchRuntime } from "./interaction/scene-switch-runtime.js";
 import { redeemRoomRecovery } from "./identity-recovery.js";
 import { probeDocumentMedia } from "./document-media-probe.js";
 import { createRuntimeDebugState } from "./runtime-debug-state.js";
@@ -74,6 +75,7 @@ import {
   sendAvatarPoseFrame,
   sendAvatarReliableState,
   sendParticipantUpdate,
+  sendSceneEffectSwitch,
   type RoomStateClient,
   type RoomStateSnapshot,
   type SurfaceCommandResult
@@ -489,6 +491,7 @@ const stopRemoteBrowserButton = mustElement<HTMLButtonElement>("#stop-remote-bro
 const remoteBrowserStatusEl = mustElement<HTMLDivElement>("#remote-browser-status");
 const micSelect = mustElement<HTMLSelectElement>("#mic-select");
 const speakerSelect = mustElement<HTMLSelectElement>("#speaker-select");
+const sceneSoundsButton = mustElement<HTMLButtonElement>("#scene-sounds");
 const joinMutedCheckbox = mustElement<HTMLInputElement>("#join-muted");
 const micLevelFill = mustElement<HTMLDivElement>("#mic-level-fill");
 const speakerLevelFill = mustElement<HTMLDivElement>("#speaker-level-fill");
@@ -780,6 +783,12 @@ let syntheticXrState: {
   rayVisible: boolean;
 } | null = null;
 let activeSceneBundleRoot: THREE.Object3D | null = null;
+let activeSceneEffects: import("./scene-effects.js").SceneEffects | undefined;
+const sceneSwitches = createSceneSwitchRuntime({
+  canActivate: () => !sessionControlBlocked && roomStateConnected && debugState.access.role === "host",
+  send: command => { if (roomStateClient) sendSceneEffectSwitch(roomStateClient, command); }
+});
+let sceneSoundsRequested = false;
 let avatarSandboxRegistry: ReturnType<typeof createAvatarRegistry> | null = null;
 let localAvatarController: LocalAvatarController | null = null;
 let localBodyMesh: THREE.Mesh | null = null;
@@ -1847,6 +1856,10 @@ function disableRuntimeForSessionBlock(reason: string): void {
 
 /** Stops everything this tab runs for the room: plugins, room-state, media, surfaces; the scene stays. */
 function stopRoomSession(mediaReason: string, commandReason: string): void {
+  sceneSoundsRequested = false;
+  activeSceneEffects?.setAudio();
+  sceneSoundsButton.disabled = true;
+  sceneSoundsButton.setAttribute("aria-pressed", "false");
   roomPluginTokenBound.clear();
   try { roomPluginRuntime.stop(); if (roomPluginAuthorReady) roomPluginAuthor.stop(); } catch { /* Plugin cleanup must not prevent the core session block. */ }
   sessionControlPoller.stop();
@@ -2445,6 +2458,7 @@ function handleRoomSnapshot(snapshot: RoomStateSnapshot): void {
   roomStateServerOffsetMs = snapshot.serverTimeMs - Date.now();
   roomSeatOccupancy = { ...(snapshot.seatOccupancy ?? {}) };
   roomMediaObjects = snapshot.mediaObjects;
+  sceneSwitches.update(snapshot.sceneEffectSwitches);
   surfaceStopRevisionSupported = snapshot.capabilities?.surfaceStopRevision === true;
   seatCommandCorrelationSupported = snapshot.capabilities?.seatCommandCorrelation === true;
   roomStateOccupancySeen = true;
@@ -2607,6 +2621,7 @@ const executeRuntimeCommandList = createRuntimeCommandExecutor({
 const interactionTargetPerformer = createInteractionTargetPerformer({
   planner: interactionCommandPlanner,
   executeCommands: executeRuntimeCommandList,
+  activateEffectSwitch: sceneSwitches.activate,
   getContext: () => ({
     currentSeatId: getCurrentSeatId(),
     pendingSeatId: getPendingSeatId(),
@@ -2640,6 +2655,7 @@ function getInteractionFrameInput(frameContext: RuntimeFrameContext, options: { 
     teleportFloorY: interactionFloorY(),
     floorAreas: sceneFloorAreas,
     pickFloorLink,
+    pickEffectSwitch: sceneSwitches.pick,
     maxDistance: 18,
     view: interactionRayView,
     state: debugState.interactionRay,
@@ -3693,6 +3709,33 @@ async function resumeAudioContext(): Promise<void> {
   }
 }
 
+function syncSceneSounds(): void {
+  const canPlay = sceneSoundsRequested && !sessionControlBlocked &&
+    (document.visibilityState !== "hidden" || renderer.xr.isPresenting) && audioContext?.state === "running";
+  activeSceneEffects?.setAudio(canPlay && audioContext ? { context: audioContext, camera } : undefined);
+  sceneSoundsButton.setAttribute("aria-pressed", String(sceneSoundsRequested));
+}
+
+sceneSoundsButton.addEventListener("click", async () => {
+  if (sessionControlBlocked || !activeSceneEffects?.hasAudio()) return;
+  sceneSoundsRequested = !sceneSoundsRequested;
+  if (sceneSoundsRequested) {
+    try {
+      await resumeAudioContext();
+      await selectSceneSoundOutput();
+    } catch {
+      sceneSoundsRequested = false;
+    }
+  }
+  syncSceneSounds();
+});
+document.addEventListener("visibilitychange", syncSceneSounds);
+
+async function selectSceneSoundOutput(): Promise<void> {
+  const context = audioContext as (AudioContext & { setSinkId?: (device: string) => Promise<void> }) | null;
+  await context?.setSinkId?.(preferredSpeakerDeviceId).catch(() => undefined);
+}
+
 function createAudioAnalyser(context: AudioContext): {
   analyser: AnalyserNode;
   sampleBuffer: Uint8Array;
@@ -4468,6 +4511,10 @@ const roomPluginSeatChoice = createRoomPluginSeatChoiceView({ root: document.que
   checkbox: document.querySelector<HTMLInputElement>("#room-plugin-seat-choice-input")!, optOut: roomPluginSeatOptOut,
   veto: () => roomPluginSeats.manualIntent() });
 const roomPluginRuntime = new RoomPluginController({ apiBaseUrl, roomId,
+  sceneEffects: {
+    set: (owner, id, enabled, live) => activeSceneEffects?.set(owner, id, enabled, live) ?? false,
+    retire: owner => activeSceneEffects?.retire(owner)
+  },
   context: () => ({ active: activeIdentityProtocolVersion === 2 && !sessionControlBlocked && !runtimeSessionGate.reason,
     ready: roomPluginBootReady(), online: navigator.onLine, visible: document.visibilityState !== "hidden",
     connection: roomStateConnected ? "connected" : "reconnecting" }),
@@ -4487,6 +4534,7 @@ const roomPluginRuntime = new RoomPluginController({ apiBaseUrl, roomId,
   }
 });
 Object.defineProperty(debugState, "plugins", { enumerable: true, get: () => ({ ...roomPluginRuntime.diagnostics(), seating: roomPluginSeats.diagnostics() }) });
+Object.defineProperty(debugState, "sceneEffects", { enumerable: true, get: () => activeSceneEffects?.diagnostics() ?? [] });
 Object.defineProperty(debugState, "sceneFirstFrameAtMs", { enumerable: true, get: () => sceneFrameReadiness.firstFrameAtMs });
 Object.defineProperty(debugState, "mediaLifecycle", { enumerable: true, get: () => mediaLifecycle.snapshot() });
 const roomPluginAuthorPanel = createRoomPluginAuthorPanel({ document,
@@ -7371,6 +7419,7 @@ speakerSelect.addEventListener("change", () => {
   preferredSpeakerDeviceId = speakerSelect.value || "default";
   localStorage.setItem("vrata.audiooutput", preferredSpeakerDeviceId);
   updateAudioDeviceStatus(`Selected speaker: ${speakerSelect.selectedOptions[0]?.textContent ?? "default"}`);
+  if (sceneSoundsRequested && !livekitRoom) void selectSceneSoundOutput();
   if (!livekitRoom || mediaRoomTransitionInFlight || !supportsAudioOutputSelection()) {
     return;
   }
@@ -7846,6 +7895,7 @@ renderer.domElement.addEventListener("click", (event) => {
     teleportFloorY: interactionFloorY(),
     floorAreas: sceneFloorAreas,
     pickFloorLink,
+    pickEffectSwitch: sceneSwitches.pick,
     maxDistance: 18,
     state: debugState.interactionRay,
     mode: "cursor",
@@ -7986,6 +8036,8 @@ window.addEventListener("resize", () => {
 });
 
 window.addEventListener("beforeunload", () => {
+  activeSceneEffects?.dispose();
+  sceneSwitches.bind(undefined);
   if (!sessionControlBlocked) void removePresence(apiBaseUrl, roomId, participantId, roomStateAccessToken).catch(() => undefined);
   detachVideoTrack();
   for (const surfaceId of Array.from(mediaSurfaceViews.keys())) {
@@ -8034,6 +8086,7 @@ function notifyRoomPluginBootReady(): void {
 
 renderer.setAnimationLoop(() => {
   const delta = clock.getDelta();
+  activeSceneEffects?.tick(delta);
   const nowMs = Date.now();
   const frameContext = sampleRuntimeFrameContext(delta, nowMs);
   lastRuntimeFrameContext = frameContext;
@@ -8423,6 +8476,11 @@ async function main(): Promise<void> {
       setFallbackEnvironmentVisible
     });
     activeSceneBundleRoot = sceneResult.activeSceneBundleRoot;
+    activeSceneEffects?.dispose();
+    activeSceneEffects = sceneResult.effects;
+    sceneSwitches.bind(activeSceneEffects, boot.privateScene?.bundleVersionId);
+    sceneSoundsButton.hidden = !activeSceneEffects?.hasAudio();
+    syncSceneSounds();
     if (activeSceneBundleRoot) sceneFrameReadiness.sceneAttached();
     const anchors = sceneResult.sceneManifest?.anchors;
     setSceneSeatAnchors(anchors?.seatAnchors ?? [], anchors?.teleportFloorY ?? 0, anchors?.floorAreas, anchors?.floorLinks);

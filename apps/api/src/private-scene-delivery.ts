@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { isSceneAudioPath, isSceneEffectSwitchState } from "@vrata/shared-types";
 import type { RoomRecord, Storage } from "./storage-contracts.js";
 import { getManagedAccessBlockReason, managedRoomCutoffMs } from "./room-session-control.js";
 import { privateSceneApproval, privateSceneStore, readPrivateSceneFile, type PrivateSceneVersion } from "./private-scene-release.js";
@@ -61,6 +62,14 @@ export function servesPrivateVersion(room: RoomRecord | null, version: PrivateSc
     !getManagedAccessBlockReason(room)
   );
 }
+
+export async function privateSceneSwitchDefaults(storage: Storage, room: RoomRecord) {
+  if (room.managed?.kind !== "custom" || !room.managed.publishedVersionId) return;
+  const v = await storage.getPrivateSceneVersion(room.tenantId, room.managed.publishedVersionId);
+  if (!v || !servesPrivateVersion(room, v)) return;
+  const state = { versionId: v.bundleVersionId, switches: v.effectSwitches };
+  return isSceneEffectSwitchState(state) && state.switches.length ? state : undefined;
+}
 export function privateDescriptor(
   room: RoomRecord,
   version: PrivateSceneVersion,
@@ -112,7 +121,9 @@ export async function servePrivateAsset(req: IncomingMessage, res: ServerRespons
     if (!asset || !app || req.headers.host !== asset.host || !["GET", "HEAD"].includes(req.method ?? "")) return deny();
     if (req.headers.origin && req.headers.origin !== new URL(app).origin) return deny();
     res.setHeader("access-control-allow-origin", new URL(app).origin);
-    const match = /^\/c\/([A-Za-z0-9_-]{43,2048})\/(scene\.json|scene\.glb)$/.exec(req.url ?? "");
+    const match = /^\/c\/([A-Za-z0-9_-]{43,2048})\/(.{1,74})$/.exec(req.url ?? "");
+    const path = match?.[2];
+    if (path !== "scene.json" && path !== "scene.glb" && !isSceneAudioPath(path)) return deny(403);
     const scope = match && decode(match[1]!, secret);
     if (!scope) return deny(403);
     const [room, v, g] = await Promise.all([
@@ -131,7 +142,7 @@ export async function servePrivateAsset(req: IncomingMessage, res: ServerRespons
       g.roomId !== scope.room
     )
       return deny(403);
-    const file = v.files.find((f) => f.path === match![2]);
+    const file = v.files.find((f) => f.path === path);
     if (!file) return deny();
     const bytes = req.method === "HEAD" ? null : await readPrivateSceneFile(v, file, privateSceneStore());
     if (scope.exp <= Date.now()) return deny(403);

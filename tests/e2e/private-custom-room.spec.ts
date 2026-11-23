@@ -4,58 +4,29 @@ import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { startReferenceTemplateFixture } from "./reference-template-fixture.js";
+import { assertPrivateClip, privateClipFixture } from "./private-clip-fixture.js";
 
 test.use({ trace: "off", screenshot: "off", video: "off" });
-test("private custom room: the same owner can reload after a guarded scene replacement and rollback", async ({
+test("private custom room: same owner can reopen, update and roll back a protected scene", async ({
   browser,
   request
 }) => {
-  test.setTimeout(200_000);
+  test.setTimeout(240_000);
   const load = (p: string) => import(pathToFileURL(resolve(`apps/api/dist/${p}.js`)).href);
   const { createStoredZip } = await load("stored-zip");
   const { createIntegrationTestKey, integrationKeysEnv, signIntegrationAssertion } = await load("testing/integration-assertions");
   const key = createIntegrationTestKey();
   const tenant = "pt_01JBQ7Z8K3M4N5P6Q7R8S9T0VW",
     subject = "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VW";
-  const meshData = Buffer.from(new Float32Array([-1, 0, 0, 1, 0, 0, 0, 1, 0]).buffer);
-  const gltf = {
-    asset: { version: "2.0" },
-    scene: 0,
-    scenes: [{ nodes: [0] }],
-    nodes: [{ mesh: 0 }],
-    meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
-    buffers: [{ byteLength: meshData.length }],
-    bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: meshData.length }],
-    accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: "VEC3", min: [-1, 0, 0], max: [1, 1, 0] }]
-  };
-  const text = JSON.stringify(gltf),
-    chunk = Buffer.from(text.padEnd(Math.ceil(text.length / 4) * 4, " "));
-  const model = Buffer.alloc(28 + chunk.length + meshData.length);
-  [0x46546c67, 2, model.length, chunk.length, 0x4e4f534a].forEach((v, i) => model.writeUInt32LE(v, i * 4));
-  chunk.copy(model, 20);
-  model.writeUInt32LE(meshData.length, 20 + chunk.length);
-  model.writeUInt32LE(0x004e4942, 24 + chunk.length);
-  meshData.copy(model, 28 + chunk.length);
-  const manifest = JSON.stringify({
-    schemaVersion: 1,
-    sceneId: "private-fixture",
-    label: "Private fixture",
-    source: "test",
-    glbPath: "scene.glb",
-    spawnPoints: [{ id: "main", position: { x: 0, y: 0, z: 3 }, yaw: 0 }],
-    bounds: { width: 5, height: 4, depth: 5 }
-  });
-  const zip: Buffer = createStoredZip([
-    { name: "scene.json", content: manifest },
-    { name: "scene.glb", content: model }
+  const { model, manifest, artifact, archive, sound } = await privateClipFixture();
+  const authored = JSON.parse(manifest);
+  const pack = (scene: string): Buffer => createStoredZip([
+    { name: "scene.json", content: scene },
+    { name: "scene.glb", content: model },
+    ...(sound ? [{ name: sound.path, content: sound.bytes }] : [])
   ]);
+  const zip: Buffer = archive ?? pack(manifest);
   const digest = createHash("sha256").update(zip).digest("hex");
-  const nextLabel = "Private fixture updated";
-  const nextZip: Buffer = createStoredZip([
-    { name: "scene.json", content: JSON.stringify({ ...JSON.parse(manifest), label: nextLabel }) },
-    { name: "scene.glb", content: model }
-  ]);
-  const nextDigest = createHash("sha256").update(nextZip).digest("hex");
   const approval = (version: string, archiveSha256: string) =>
     JSON.stringify({ tenantId: tenant, ownerSubject: subject, bundleId: "mine", version, archiveSha256 });
   const files = new Map<string, Buffer>();
@@ -99,7 +70,7 @@ test("private custom room: the same owner can reload after a guarded scene repla
         VRATA_PRIVATE_SCENE_S3_SECRET: randomUUID()
       })
     });
-    const origin = fixture.origin,
+    const { origin, adminToken } = fixture,
       prefix = `${origin}/integration/v1/tenants/${tenant}`;
     const headers = (id = randomUUID()) => ({ authorization: `Bearer ${signIntegrationAssertion(key)}`, "idempotency-key": id });
     const op = (path: string, data: unknown, id?: string) => request.post(prefix + path, { data, headers: headers(id) });
@@ -113,7 +84,7 @@ test("private custom room: the same owner can reload after a guarded scene repla
     expect(imported.status(), await imported.text()).toBe(201);
     const v = await imported.json();
     expect((await (await upload()).json()).bundleVersionId).toBe(v.bundleVersionId);
-    expect(files.size).toBe(2);
+    expect(files.size).toBe(sound ? 3 : 2);
     const result = await op("/rooms", {
       kind: "custom",
       name: "Private fixture",
@@ -138,18 +109,35 @@ test("private custom room: the same owner can reload after a guarded scene repla
     expect([403, 404, 409]).toContain(anonManifest.status());
     expect((await anonManifest.text()).includes(v.contentHash)).toBe(false);
     expect((await request.get(s3Url + [...files.keys()][0])).status()).toBe(403);
-    let lastAsset = "",
-      lastGrant = "";
-    const visit = async (label: string) => {
+    const visit = async (label: string, effectVisit?: number) => {
       const client = await browser.newContext();
       try {
         const grant = await permit(subject);
         expect(grant.status()).toBe(201);
         const page = await client.newPage();
+        if (sound && effectVisit !== undefined) await page.addInitScript(() => {
+          const probe = { analysers: [] as AnalyserNode[], microphoneRequests: 0 };
+          (window as any).__scenePlaybackProbe = probe;
+          const connect = AudioNode.prototype.connect;
+          AudioNode.prototype.connect = function(this: AudioNode, destination: unknown, ...args: unknown[]) {
+            if (this instanceof GainNode && destination instanceof AudioDestinationNode) {
+              const a = this.context.createAnalyser();
+              Reflect.apply(connect, this, [a]);
+              probe.analysers.push(a);
+            }
+            return Reflect.apply(connect, this, [destination, ...args]);
+          } as typeof AudioNode.prototype.connect;
+          const mic = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+          navigator.mediaDevices.getUserMedia = constraints => {
+            if (constraints?.audio) probe.microphoneRequests++;
+            return mic(constraints);
+          };
+        });
         const issued = await grant.json();
-        lastGrant = issued.grantId;
+        let asset = "", audio = "";
         page.on("response", (r) => {
-          if (r.url().includes("/c/") && r.url().endsWith("/scene.glb") && r.status() === 200) lastAsset = r.url();
+          if (r.url().includes("/c/") && r.url().endsWith("/scene.glb") && r.status() === 200) asset = r.url();
+          if (sound && r.url().includes("/c/") && r.url().endsWith(`/${sound.path}`) && r.status() === 200) audio = r.url();
         });
         await page.goto(issued.entryUrl);
         await page.locator("#guest-name-input").fill("Recipient");
@@ -164,45 +152,82 @@ test("private custom room: the same owner can reload after a guarded scene repla
             { timeout: 60_000 }
           )
           .toEqual(["loaded", label, true]);
+        if (effectVisit !== undefined) {
+          await assertPrivateClip({ page, request, roomId: id, origin, artifact, first: effectVisit === 0, adminToken, sound: !!sound });
+        }
+        if (!archive && effectVisit !== undefined) {
+          const isOn = () => page.evaluate(() => (window as any).__VRATA_DEBUG__.sceneEffects
+            .find((effect: { id: string }) => effect.id === "light")?.playing);
+          await expect.poll(isOn).toBe(effectVisit === 0);
+          const canvas = await page.locator("#scene canvas").boundingBox();
+          expect(canvas).not.toBeNull();
+          const { x, y, width, height } = canvas!;
+          const center = [x + width / 2, y + height / 2] as const;
+          await page.mouse.move(...center);
+          await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__.interactionRay.targetKind)).toBe("effect-switch");
+          await page.mouse.click(...center);
+          await expect.poll(isOn).toBe(effectVisit !== 0);
+        }
         expect(await page.evaluate(() => JSON.stringify((window as any).__VRATA_DEBUG__.sceneDebug).includes("/c/"))).toBe(false);
-        return await page.evaluate(() => (window as any).__VRATA_DEBUG__.participantId);
+        expect(asset).not.toBe("");
+        const person = await page.evaluate(() => (window as any).__VRATA_DEBUG__.participantId);
+        return { person, asset, audio, grantId: issued.grantId };
       } finally {
         await client.close();
       }
     };
-    const person = await visit("Private fixture");
-    expect(!!person).toBe(true);
-    expect(await visit("Private fixture")).toBe(person);
-    expect(!!lastAsset).toBe(true);
-    const head = await request.head(lastAsset);
+    const first = await visit(authored.label, 0);
+    expect(first.person).toBeTruthy();
+    const original = await visit(authored.label, 1);
+    expect(original.person).toBe(first.person);
+    const head = await request.head(original.asset);
     expect(head.status()).toBe(200);
     expect(head.headers()["cache-control"]).toBe("private, no-store");
-    const earlierAsset = lastAsset;
-    await fixture.restartApi({ VRATA_PRIVATE_SCENE_APPROVAL: approval("v2", nextDigest) });
-    expect((await upload("v2", zip)).status()).toBe(409);
-    const next = await upload("v2", nextZip);
-    expect(next.status(), await next.text()).toBe(201);
-    const updated = await next.json();
-    expect((await op(path + "/publish", { bundleVersionId: updated.bundleVersionId, expectedPublishedVersionId: randomUUID() })).status()).toBe(412);
-    expect((await request.head(earlierAsset)).status()).toBe(200);
-    const replacement = { bundleVersionId: updated.bundleVersionId, expectedPublishedVersionId: v.bundleVersionId };
-    const apply = randomUUID();
-    const replaced = await op(path + "/publish", replacement, apply);
-    expect(replaced.status(),await replaced.text()).toBe(200);
-    expect(await replaced.json()).toMatchObject({ roomId:id, ownerSubject:subject, publishedVersionId:updated.bundleVersionId, scene:{contentHash:updated.contentHash} });
-    expect((await op(path + "/publish", replacement, apply)).status()).toBe(200);
-    expect((await op(path + "/publish", replacement)).status()).toBe(412);
-    expect((await request.head(earlierAsset)).status()).toBe(403);
-    expect(await visit(nextLabel)).toBe(person);
-    const replacedAsset = lastAsset;
-    await fixture.restartApi({ VRATA_PRIVATE_SCENE_APPROVAL: approval("v1", digest) });
-    const rollback = await op(path + "/publish", {bundleVersionId:v.bundleVersionId,expectedPublishedVersionId:updated.bundleVersionId});
-    expect(rollback.status(),await rollback.text()).toBe(200);
-    expect((await rollback.json()).publishedVersionId).toBe(v.bundleVersionId);
-    expect((await request.head(replacedAsset)).status()).toBe(403);
-    expect(await visit("Private fixture")).toBe(person);
-    expect((await op(path + `/grants/${lastGrant}/revoke`, { reason: "review complete" })).status()).toBe(200);
-    expect((await request.head(lastAsset)).status()).toBe(403);
+    if (sound) {
+      expect(original.audio).not.toBe("");
+      const header = await request.head(original.audio);
+      expect(header.status()).toBe(200);
+      expect(header.headers()["content-type"]).toBe("audio/wav");
+      expect(header.headers()["cache-control"]).toBe("private, no-store");
+      expect((await request.get(new URL(`/${sound.path}`, original.audio).href)).status()).toBe(404);
+    }
+    let current = original;
+    if (!archive) {
+      const nextLabel = "Private fixture updated";
+      const nextZip = pack(JSON.stringify({ ...authored, label: nextLabel }));
+      await fixture.restartApi({ VRATA_PRIVATE_SCENE_APPROVAL: approval("v2", createHash("sha256").update(nextZip).digest("hex")) });
+      expect((await upload("v2", zip)).status()).toBe(409);
+      const next = await upload("v2", nextZip);
+      expect(next.status(), await next.text()).toBe(201);
+      const updated = await next.json();
+      const replacement = { bundleVersionId: updated.bundleVersionId, expectedPublishedVersionId: v.bundleVersionId };
+      expect((await op(path + "/publish", { ...replacement, expectedPublishedVersionId: randomUUID() })).status()).toBe(412);
+      expect((await request.head(original.asset)).status()).toBe(200);
+      const apply = randomUUID();
+      const replaced = await op(path + "/publish", replacement, apply);
+      expect(replaced.status(), await replaced.text()).toBe(200);
+      expect(await replaced.json()).toMatchObject({
+        roomId: id, ownerSubject: subject, publishedVersionId: updated.bundleVersionId, scene: { contentHash: updated.contentHash }
+      });
+      expect((await op(path + "/publish", replacement, apply)).status()).toBe(200);
+      expect((await op(path + "/publish", replacement)).status()).toBe(412);
+      expect((await request.head(original.asset)).status()).toBe(403);
+      if (sound) expect((await request.head(original.audio)).status()).toBe(403);
+      const nextVisit = await visit(nextLabel);
+      expect(nextVisit.person).toBe(first.person);
+      await fixture.restartApi({ VRATA_PRIVATE_SCENE_APPROVAL: approval("v1", digest) });
+      const restored = await op(path + "/publish", { bundleVersionId: v.bundleVersionId, expectedPublishedVersionId: updated.bundleVersionId });
+      expect(restored.status(), await restored.text()).toBe(200);
+      expect((await restored.json()).publishedVersionId).toBe(v.bundleVersionId);
+      expect((await request.head(nextVisit.asset)).status()).toBe(403);
+      current = await visit(authored.label);
+      expect(current.person).toBe(first.person);
+    }
+    const currentAudio = sound ? new URL(sound.path, current.asset).href : undefined;
+    if (currentAudio) expect((await request.head(currentAudio)).status()).toBe(200);
+    expect((await op(path + `/grants/${current.grantId}/revoke`, { reason: "review complete" })).status()).toBe(200);
+    expect((await request.head(current.asset)).status()).toBe(403);
+    if (currentAudio) expect((await request.head(currentAudio)).status()).toBe(403);
   } finally {
     await fixture?.close();
     await new Promise<void>((done) => s3.close(() => done()));

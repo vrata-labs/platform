@@ -8,11 +8,13 @@ import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.j
 import { parseSceneBundleManifest, pickSceneSpawnPoint, resolveSceneAssetUrl, type SceneBundleManifest, type SceneBundleSpawnPoint } from "./scene-bundle.js";
 import { disposeSceneObject } from "./scene-dispose.js";
 import { applyBakedLightMaps } from "./scene-lightmaps.js";
-import type { SceneBundleIntegrity } from "@vrata/shared-types";
+import { SceneEffects } from "./scene-effects.js";
+import { isSceneAudioWav, SCENE_AUDIO_MAX_BYTES, type SceneBundleIntegrity } from "@vrata/shared-types";
 import { assertSelfContainedGlb, verifySceneBytes } from "./scene-integrity.js";
 import type { PrivateSceneFileFetch } from "./private-scene-source.js";
 
 export interface LoadedSceneBundle {
+  effects?: SceneEffects;
   manifest: SceneBundleManifest;
   group: THREE.Group;
   spawnPointApplied: boolean;
@@ -135,6 +137,7 @@ export async function loadSceneBundle(input: {
   const sceneAssetUrl = resolveSceneAssetUrl(logicalBase, manifest.glbPath);
   if (input.integrity && !/[.]glb$/i.test(sceneAssetUrl)) throw new Error("verified_scene_requires_glb");
   const missingAssets = new Set<string>();
+  let effects: SceneEffects | undefined;
   input.onLoadStage?.("asset_load_started");
   if (/[.]fbx$/i.test(sceneAssetUrl)) {
     if (manifest.renderProfile === "baked-pbr-v1") {
@@ -183,6 +186,29 @@ export async function loadSceneBundle(input: {
           throw new Error("missing_baked_lightmaps");
         }
       }
+      if (manifest.sceneEffects?.length) effects = new SceneEffects(gltf.scene, gltf.animations, manifest.sceneEffects, async (sound, signal) => {
+        const audio = input.privateFile ? await input.privateFile(sound.path, signal) :
+          await fetch(resolveSceneAssetUrl(logicalBase, sound.path), { signal, redirect: "error", credentials: "omit", referrerPolicy: "no-referrer" });
+        const reader = audio.body?.getReader();
+        try {
+          if (!audio.ok || !reader || Number(audio.headers.get("content-length")) > SCENE_AUDIO_MAX_BYTES) throw new Error("scene_audio_unavailable");
+          const buffer = new Uint8Array(SCENE_AUDIO_MAX_BYTES);
+          let length = 0;
+          for (;;) {
+            const {done, value} = await reader.read();
+            if (done) break;
+            if (length + value.length > buffer.length) throw new Error("scene_audio_too_large");
+            buffer.set(value, length);
+            length += value.length;
+          }
+          const bytes = buffer.slice(0, length);
+          if (!isSceneAudioWav(bytes)) throw new Error("invalid_scene_audio");
+          await verifySceneBytes(bytes.buffer, sound.sha256, "audio");
+          return bytes.buffer;
+        } finally {
+          if (reader) void reader.cancel().catch(() => undefined);
+        }
+      });
       group.add(gltf.scene);
     } catch (error) {
       disposeSceneObject(gltf.scene);
@@ -200,6 +226,7 @@ export async function loadSceneBundle(input: {
   const spawnPoint = pickSceneSpawnPoint(manifest);
 
   return {
+    effects,
     manifest,
     group,
     spawnPointApplied: false,

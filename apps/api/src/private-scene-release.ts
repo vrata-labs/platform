@@ -1,17 +1,18 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { unpackPersonalScene, validateSceneBundlePath } from "@vrata/asset-pipeline";
+import { isSceneEffects, type SceneAudioPath, type SceneEffectSwitchState } from "@vrata/shared-types";
 import type { DocumentUploadStorage } from "./upload-storage-config.js";
 import { readPrivateUploadedObject, writeDocumentObject } from "./uploaded-object-storage.js";
 
 export const privateSceneHash = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
 export type PrivateSceneFile = {
-  path: "scene.json" | "scene.glb";
+  path: "scene.json" | "scene.glb" | SceneAudioPath;
   sha256: string;
   sizeBytes: number;
-  contentType: "application/json" | "model/gltf-binary";
+  contentType: "application/json" | "model/gltf-binary" | "audio/wav";
 };
 export interface PrivateSceneVersion {
   archiveSha256: string;
@@ -22,6 +23,7 @@ export interface PrivateSceneVersion {
   contentHash: string;
   sizeBytes: number;
   files: PrivateSceneFile[];
+  effectSwitches?: SceneEffectSwitchState["switches"];
   state: "candidate";
   createdAt: string;
   validation: { issues: Array<{ severity: "warning"; code: string; path: string }> };
@@ -85,21 +87,27 @@ export async function preparePrivateScene(
   store: DocumentUploadStorage
 ): Promise<PrivateSceneVersion> {
   if (privateSceneHash(archive) !== approval.archiveSha256) throw new Error("private_scene_release_not_approved");
-  const { manifest, model } = unpackPersonalScene(archive);
+  const { manifest, model, audio } = unpackPersonalScene(archive);
+  const effects: unknown = JSON.parse(manifest.toString()).sceneEffects;
+  const effectSwitches = isSceneEffects(effects) ? effects.flatMap(effect =>
+    effect.kind === "sprite-loop" ? [{ id: effect.id, enabled: effect.switch.initiallyOn }] : []) : [];
+  const assets = [
+    ["scene.json", manifest, "application/json"],
+    ["scene.glb", model, "model/gltf-binary"],
+    ...[...audio].map(([path, bytes]) => [path, bytes, "audio/wav"] as const)
+  ] as const;
   const dir = await mkdtemp(join(tmpdir(), "vrata-private-scene-"));
   let validation;
   try {
-    await Promise.all([writeFile(join(dir, "scene.json"), manifest), writeFile(join(dir, "scene.glb"), model)]);
+    if (audio.size) await mkdir(join(dir, "audio"));
+    await Promise.all(assets.map(([path, bytes]) => writeFile(join(dir, path), bytes)));
     validation = await validateSceneBundlePath(dir);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
   if (!validation.ok) throw new Error("private_scene_validation_failed");
   const files: PrivateSceneFile[] = [];
-  for (const [path, bytes, contentType] of [
-    ["scene.json", manifest, "application/json"],
-    ["scene.glb", model, "model/gltf-binary"]
-  ] as const) {
+  for (const [path, bytes, contentType] of assets) {
     const sha256 = privateSceneHash(bytes),
       key = objectKey(approval.tenantId, sha256);
     try {
@@ -122,8 +130,9 @@ export async function preparePrivateScene(
     bundleVersionId: versionId,
     archiveSha256: approval.archiveSha256,
     contentHash: `sha256:${privateSceneHash(JSON.stringify(files))}`,
-    sizeBytes: manifest.length + model.length,
+    sizeBytes: files.reduce((sum, file) => sum + file.sizeBytes, 0),
     files,
+    ...(effectSwitches.length ? { effectSwitches } : {}),
     state: "candidate",
     createdAt: new Date().toISOString(),
     validation: {

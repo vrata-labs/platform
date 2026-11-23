@@ -4,7 +4,8 @@ export const ROOM_PLUGIN_SDK_API_VERSION = 1 as const;
 export const ROOM_PLUGIN_CAPABILITIES = Object.freeze([
   "seating.claimSelfOnEntry",
   "seating.cancelPendingOwnClaim",
-  "status.set"
+  "status.set",
+  "scene.effects.setEnabled"
 ] as const);
 
 export type RoomPluginCapability = (typeof ROOM_PLUGIN_CAPABILITIES)[number];
@@ -117,6 +118,7 @@ export type RoomPluginEvent =
   | { sdkApiVersion: 1; type: "lifecycle.dispose"; reason: RoomPluginDisposeReason };
 
 export type RoomPluginRequest =
+  | { sdkApiVersion: 1; requestId: string; operation: "scene.effects.setEnabled"; payload: { effectId: string; enabled: boolean } }
   | { sdkApiVersion: 1; requestId: string; operation: "seating.claimSelfOnEntry"; payload: { seatId: string } }
   | { sdkApiVersion: 1; requestId: string; operation: "seating.cancelPendingOwnClaim"; payload: Record<string, never> }
   | { sdkApiVersion: 1; requestId: string; operation: "status.set"; payload: { text: string } };
@@ -133,6 +135,7 @@ export type RoomPluginResponse =
 
 /** VM bridge facade: all operations are serialized, capability-checked broker requests. */
 export interface RoomPluginApi {
+  scene: { effects: { setEnabled(effectId: string, enabled: boolean): Promise<void> } };
   seating: {
     claimSelfOnEntry(seatId: string): Promise<RoomPluginSeatClaimResult>;
     cancelPendingOwnClaim(): Promise<void>;
