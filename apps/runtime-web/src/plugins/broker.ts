@@ -22,6 +22,7 @@ export function createRoomPluginBroker(input: {
   status(text: string): void;
   /** Absent when the room-state server cannot correlate claims: seating then stays capability-denied. */
   seating?: RoomPluginSeatingPort | null;
+  setEffectEnabled?(effectId: string, enabled: boolean): boolean;
   clock?: () => number;
 }) {
   const clock = input.clock ?? (() => performance.now());
@@ -49,6 +50,11 @@ export function createRoomPluginBroker(input: {
     if (requestTimes.length >= ROOM_PLUGIN_LIMITS.requestsPerSecond
       || request.operation === "status.set" && statusTimes.length >= ROOM_PLUGIN_LIMITS.statusUpdatesPerSecond) return denied("quota-exceeded");
     requestTimes.push(now);
+    if (request.operation === "scene.effects.setEnabled") {
+      if (!canCommit() || signal.aborted || !input.available() || !input.proof() || !input.lease.isCurrent(permit)) return denied("lease-expired");
+      if (!input.setEffectEnabled?.(request.payload.effectId, request.payload.enabled)) return denied("capability-denied");
+      return { sdkApiVersion: 1, requestId: request.requestId, ok: true, result: null };
+    }
     if (request.operation !== "status.set") {
       // Never simulate seating: without the platform adapter the capability stays denied.
       const seating = input.seating;

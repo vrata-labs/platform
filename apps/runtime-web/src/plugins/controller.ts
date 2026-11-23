@@ -98,6 +98,10 @@ export class RoomPluginController {
     render(rows: readonly RoomPluginStatusRow[]): void;
     identityRequired?(reason: IdentityRequirementReason): void;
     seating?: RoomPluginSeatingHost;
+    sceneEffects?: {
+      set(owner: string, id: string, enabled: boolean, live: () => boolean): boolean;
+      retire(owner: string): void;
+    };
     clock?: () => number; timers?: SessionControlPollerTimers;
     http?: ReturnType<typeof createRoomPluginHttp>;
   }) {
@@ -286,10 +290,14 @@ export class RoomPluginController {
       }
       if (!current() || !this.available() || !this.lease.permit(entry.binding)) return;
       entry.name = artifact.manifest.displayName;
+      const owner = ownerOf(entry);
+      signal.addEventListener("abort", () => this.input.sceneEffects?.retire(owner), { once: true });
+      const effectLive = () => current() && entry.state === "running" && this.available() && this.lease.diagnostics().remainingMs > 0;
       const dispatch = createRoomPluginBroker({ binding: entry.binding, lease: this.lease, clock: this.clock,
         currentBinding: () => current() && (entry.state === "loading" || entry.state === "running") ? entry.binding : null,
         available: () => current() && this.available(), proof: this.input.proof,
         seating: seatingCapable(entry.binding) && this.input.seating?.supported() ? this.input.seating.port(ownerOf(entry)) : null,
+        setEffectEnabled: (id, enabled) => this.input.sceneEffects?.set(owner, id, enabled, effectLive) ?? false,
         status: text => { entry.text = text; if (!this.render()) throw new RoomPluginRuntimeError("host-unavailable"); } });
       const instance = await this.input.start(artifact.entry, config, entry.binding.approvedCapabilities, dispatch, signal);
       if (!current() || !this.available() || !this.lease.permit(entry.binding)) { instance.terminate(); return; }
@@ -393,6 +401,7 @@ export class RoomPluginController {
       starting: entry.starting, fetchPending: Boolean(this.request), leaseValid: Boolean(this.lease.permit(entry.binding)),
       remainingLeaseMs: this.lease.diagnostics().remainingMs, failure });
     try { this.input.seating?.retire(ownerOf(entry)); } catch { /* The core seat barrier owns recovery. */ }
+    this.input.sceneEffects?.retire(ownerOf(entry));
   }
   private failEntry(entry: Entry, code: Failure, reason: RetirementReason): void {
     this.retireSeating(entry, reason, code);

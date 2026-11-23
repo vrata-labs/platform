@@ -28,6 +28,19 @@ Writes are paused while the browser is offline and the list is re-read when the 
 
 ## Limits
 
+### Embedded scene animation
+
+SDK package 0.3.0 adds `scene.effects.setEnabled`. A scene bundle can declare
+`sceneEffects: [{ "id": "flight", "kind": "clip-loop", "root": "carrier", "clips": ["flight-path", "spin"] }]`.
+The root and clips must exist inside its GLB. Clip tracks can animate only a
+position, quaternion or scale inside that subtree. The model stays hidden until
+an approved room behavior calls `await context.sdk.scene.effects.setEnabled("flight", true)`.
+Passing `false` withdraws that behavior's request. Another active binding can
+still request the same effect. On expiry, removal or loss of session authority,
+playback stops unless another live binding requests it. Every client plays
+locally; phase is not synchronized. Neither a URL nor a node handle crosses the
+plugin boundary. Unknown effect IDs are rejected.
+
 At most 10 stored packages and 10 MiB per room, 2 enabled behaviors at once, 1 MiB per package. A version number cannot be reused with different contents; publish a new version instead.
 
 ## API

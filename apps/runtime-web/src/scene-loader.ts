@@ -8,11 +8,13 @@ import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.j
 import { parseSceneBundleManifest, pickSceneSpawnPoint, resolveSceneAssetUrl, type SceneBundleManifest, type SceneBundleSpawnPoint } from "./scene-bundle.js";
 import { disposeSceneObject } from "./scene-dispose.js";
 import { applyBakedLightMaps } from "./scene-lightmaps.js";
+import { SceneEffects } from "./scene-effects.js";
 import type { SceneBundleIntegrity } from "@vrata/shared-types";
 import { assertSelfContainedGlb, verifySceneBytes } from "./scene-integrity.js";
 import type { PrivateSceneFileFetch } from "./private-scene-source.js";
 
 export interface LoadedSceneBundle {
+  effects?: SceneEffects;
   manifest: SceneBundleManifest;
   group: THREE.Group;
   spawnPointApplied: boolean;
@@ -135,6 +137,7 @@ export async function loadSceneBundle(input: {
   const sceneAssetUrl = resolveSceneAssetUrl(logicalBase, manifest.glbPath);
   if (input.integrity && !/[.]glb$/i.test(sceneAssetUrl)) throw new Error("verified_scene_requires_glb");
   const missingAssets = new Set<string>();
+  let effects: SceneEffects | undefined;
   input.onLoadStage?.("asset_load_started");
   if (/[.]fbx$/i.test(sceneAssetUrl)) {
     if (manifest.renderProfile === "baked-pbr-v1") {
@@ -183,6 +186,7 @@ export async function loadSceneBundle(input: {
           throw new Error("missing_baked_lightmaps");
         }
       }
+      if (manifest.sceneEffects?.length) effects = new SceneEffects(gltf.scene, gltf.animations, manifest.sceneEffects);
       group.add(gltf.scene);
     } catch (error) {
       disposeSceneObject(gltf.scene);
@@ -200,6 +204,7 @@ export async function loadSceneBundle(input: {
   const spawnPoint = pickSceneSpawnPoint(manifest);
 
   return {
+    effects,
     manifest,
     group,
     spawnPointApplied: false,

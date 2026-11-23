@@ -1,5 +1,6 @@
 import { constants as fsConstants } from "node:fs";
 import { isFloorPoint, isSceneFloorAreas, isSceneFloorLinks, isWalkablePoint } from "@vrata/shared-types";
+import { isSceneClipEffects } from "@vrata/shared-types";
 import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
@@ -508,6 +509,9 @@ function validateManifestShape(input: unknown, issues: SceneBundleValidationIssu
 
   if (input.renderMode !== undefined && input.renderMode !== "default" && input.renderMode !== "clean") {
     issues.push(issue("error", "scene.json#/renderMode", "invalid_scene_bundle_render_mode", "renderMode must be default or clean."));
+  }
+  if (input.sceneEffects !== undefined && (!isSceneClipEffects(input.sceneEffects) || !String(input.glbPath).endsWith(".glb"))) {
+    issues.push(issue("error", "scene.json#/sceneEffects", "invalid_scene_effects", "Effects must bind named clips in the bundle GLB."));
   }
   if (input.renderProfile !== undefined && input.renderProfile !== "neutral-pbr" && input.renderProfile !== "baked-pbr-v1") {
     issues.push(issue("error", "scene.json#/renderProfile", "invalid_scene_bundle_render_profile", "renderProfile must be neutral-pbr or baked-pbr-v1 when provided."));

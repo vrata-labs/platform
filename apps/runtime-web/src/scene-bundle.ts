@@ -1,4 +1,4 @@
-import { isFloorPoint, isSceneFloorAreas, isSceneFloorLinks, type SceneFloorLink, isWalkablePoint, type FloorPoint, type SceneFloorArea } from "@vrata/shared-types";
+import { isFloorPoint, isSceneClipEffects, isSceneFloorAreas, isSceneFloorLinks, type SceneClipEffect, type SceneFloorLink, isWalkablePoint, type FloorPoint, type SceneFloorArea } from "@vrata/shared-types";
 
 export interface SceneBundleSpawnPoint {
   id: string;
@@ -72,6 +72,7 @@ export interface SceneBundleAttribution {
 }
 
 export interface SceneBundleManifest {
+  sceneEffects?: SceneClipEffect[];
   schemaVersion: 1;
   sceneId: string;
   label: string;
@@ -396,6 +397,10 @@ export function parseSceneBundleManifest(input: unknown): SceneBundleManifest {
       throw new Error("invalid_scene_bundle_render_mode");
     }
     manifest.renderMode = payload.renderMode;
+  }
+  if (payload.sceneEffects !== undefined) {
+    if (!isSceneClipEffects(payload.sceneEffects) || !manifest.glbPath.endsWith(".glb")) throw new Error("invalid_scene_effects");
+    manifest.sceneEffects = payload.sceneEffects;
   }
   if (payload.renderProfile !== undefined) {
     if (payload.renderProfile !== "neutral-pbr" && payload.renderProfile !== "baked-pbr-v1") {

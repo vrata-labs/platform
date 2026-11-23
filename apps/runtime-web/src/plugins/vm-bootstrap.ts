@@ -149,7 +149,8 @@ export const VM_BOOTSTRAP = `(() => {
       const seating = record(["claimSelfOnEntry", seatId => request("seating.claimSelfOnEntry", { seatId }),
         "cancelPendingOwnClaim", () => request("seating.cancelPendingOwnClaim", {})]);
       const status = record(["set", text => request("status.set", { text })]);
-      facade = record(["config", config, "sdk", record(["seating", seating, "status", status])]);
+      const effects = record(["setEnabled", (effectId, enabled) => request("scene.effects.setEnabled", { effectId, enabled })]);
+      facade = record(["config", config, "sdk", record(["seating", seating, "status", status, "scene", record(["effects", effects])])]);
     },
     bind(namespace) {
       if (typeof namespace !== "object" || namespace === null) fail("invalid_lifecycle");

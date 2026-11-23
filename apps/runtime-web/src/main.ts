@@ -780,6 +780,7 @@ let syntheticXrState: {
   rayVisible: boolean;
 } | null = null;
 let activeSceneBundleRoot: THREE.Object3D | null = null;
+let activeSceneEffects: import("./scene-effects.js").SceneEffects | undefined;
 let avatarSandboxRegistry: ReturnType<typeof createAvatarRegistry> | null = null;
 let localAvatarController: LocalAvatarController | null = null;
 let localBodyMesh: THREE.Mesh | null = null;
@@ -4468,6 +4469,10 @@ const roomPluginSeatChoice = createRoomPluginSeatChoiceView({ root: document.que
   checkbox: document.querySelector<HTMLInputElement>("#room-plugin-seat-choice-input")!, optOut: roomPluginSeatOptOut,
   veto: () => roomPluginSeats.manualIntent() });
 const roomPluginRuntime = new RoomPluginController({ apiBaseUrl, roomId,
+  sceneEffects: {
+    set: (owner, id, enabled, live) => activeSceneEffects?.set(owner, id, enabled, live) ?? false,
+    retire: owner => activeSceneEffects?.retire(owner)
+  },
   context: () => ({ active: activeIdentityProtocolVersion === 2 && !sessionControlBlocked && !runtimeSessionGate.reason,
     ready: roomPluginBootReady(), online: navigator.onLine, visible: document.visibilityState !== "hidden",
     connection: roomStateConnected ? "connected" : "reconnecting" }),
@@ -4487,6 +4492,7 @@ const roomPluginRuntime = new RoomPluginController({ apiBaseUrl, roomId,
   }
 });
 Object.defineProperty(debugState, "plugins", { enumerable: true, get: () => ({ ...roomPluginRuntime.diagnostics(), seating: roomPluginSeats.diagnostics() }) });
+Object.defineProperty(debugState, "sceneEffects", { enumerable: true, get: () => activeSceneEffects?.diagnostics() ?? [] });
 Object.defineProperty(debugState, "sceneFirstFrameAtMs", { enumerable: true, get: () => sceneFrameReadiness.firstFrameAtMs });
 Object.defineProperty(debugState, "mediaLifecycle", { enumerable: true, get: () => mediaLifecycle.snapshot() });
 const roomPluginAuthorPanel = createRoomPluginAuthorPanel({ document,
@@ -7986,6 +7992,7 @@ window.addEventListener("resize", () => {
 });
 
 window.addEventListener("beforeunload", () => {
+  activeSceneEffects?.dispose();
   if (!sessionControlBlocked) void removePresence(apiBaseUrl, roomId, participantId, roomStateAccessToken).catch(() => undefined);
   detachVideoTrack();
   for (const surfaceId of Array.from(mediaSurfaceViews.keys())) {
@@ -8034,6 +8041,7 @@ function notifyRoomPluginBootReady(): void {
 
 renderer.setAnimationLoop(() => {
   const delta = clock.getDelta();
+  activeSceneEffects?.tick(delta);
   const nowMs = Date.now();
   const frameContext = sampleRuntimeFrameContext(delta, nowMs);
   lastRuntimeFrameContext = frameContext;
@@ -8423,6 +8431,8 @@ async function main(): Promise<void> {
       setFallbackEnvironmentVisible
     });
     activeSceneBundleRoot = sceneResult.activeSceneBundleRoot;
+    activeSceneEffects?.dispose();
+    activeSceneEffects = sceneResult.effects;
     if (activeSceneBundleRoot) sceneFrameReadiness.sceneAttached();
     const anchors = sceneResult.sceneManifest?.anchors;
     setSceneSeatAnchors(anchors?.seatAnchors ?? [], anchors?.teleportFloorY ?? 0, anchors?.floorAreas, anchors?.floorLinks);

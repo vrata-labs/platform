@@ -127,11 +127,13 @@ The complete flat capability allowlist is:
 | `seating.claimSelfOnEntry` | `{ seatId }` | One arrival permission; real seat; current own session; one claim in-flight |
 | `seating.cancelPendingOwnClaim` | `{}` | Only own pending claim; cannot release confirmed seating |
 | `status.set` | `{ text }` | Plain text, 512 UTF-8 bytes, at most 2 updates/second |
+| `scene.effects.setEnabled` | `{ effectId, enabled }` | Request or withdraw a declared effect for this binding; no node handles, URLs or guest-supplied clips |
 
 Requests have exactly `{ sdkApiVersion, requestId, operation, payload }`.
 Request/seat identifiers are nonempty, control-free and <=128 UTF-8 bytes.
 The VM facade exposes `context.sdk.seating.claimSelfOnEntry(seatId)`,
-`cancelPendingOwnClaim()` and `context.sdk.status.set(text)` as promises.
+`cancelPendingOwnClaim()`, `context.sdk.status.set(text)` and
+`context.sdk.scene.effects.setEnabled(effectId, enabled)` as promises.
 `RoomPluginResponse` describes success/denial; results contain no server IDs.
 There is no claim on behalf of another participant or arbitrary movement API.
 
@@ -246,7 +248,7 @@ credentials. Public registry dependencies are pinned: Acorn 8.18.0 and esbuild
 0.25.12, including esbuild's platform-specific executable.
 
 ```sh
-npm install --ignore-scripts /absolute/path/to/vrata-room-plugin-sdk-0.2.0.tgz
+npm install --ignore-scripts /absolute/path/to/vrata-room-plugin-sdk-0.3.0.tgz
 ./node_modules/.bin/vrata-room-plugin bundle --entry src/entry.ts --out entry.bundle.mjs
 ./node_modules/.bin/vrata-room-plugin pack --manifest manifest.json --entry entry.bundle.mjs --out example.vrata-plugin.json
 ./node_modules/.bin/vrata-room-plugin validate example.vrata-plugin.json
@@ -334,8 +336,8 @@ the real pnpm tarball's manifest and exported files to enforce this contract.
 
 Copy either `examples/welcome-status` or `examples/auto-seat` to a fresh directory
 outside the monorepo. Download/copy the verified SDK tarball into that project as
-`vrata-room-plugin-sdk-0.2.0.tgz` **before install**. Both manifests depend on
-`file:./vrata-room-plugin-sdk-0.2.0.tgz`, so a missing tarball fails locally instead
+`vrata-room-plugin-sdk-0.3.0.tgz` **before install**. Both manifests depend on
+`file:./vrata-room-plugin-sdk-0.3.0.tgz`, so a missing tarball fails locally instead
 of querying the registry for an unrelated SDK package. Then run from that project:
 
 ```sh

@@ -26,6 +26,11 @@ function checkRequest(value: RoomPluginJson): RoomPluginRequest {
   identifier(request.requestId, "$.requestId", "invalid_request");
   const payload = roomPluginRecord(request.payload, "$.payload", "invalid_request");
   switch (request.operation) {
+    case "scene.effects.setEnabled":
+      roomPluginFields(payload, ["effectId", "enabled"], [], "$.payload");
+      if (typeof payload.effectId !== "string" || !/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(payload.effectId)
+        || typeof payload.enabled !== "boolean") fail("invalid_request", "$.payload");
+      break;
     case "seating.claimSelfOnEntry":
       roomPluginFields(payload, ["seatId"], [], "$.payload");
       identifier(payload.seatId, "$.payload.seatId", "invalid_request");
