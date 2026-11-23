@@ -77,6 +77,7 @@ export interface RuntimeTestApi {
     rayDirection: { x: number; y: number; z: number };
     axes?: { moveX?: number; moveY?: number; turnX?: number; turnY?: number };
     triggerPressed?: boolean;
+    gripPressed?: boolean;
     menuPressed?: boolean;
     rayVisible?: boolean;
   } | null) => boolean;

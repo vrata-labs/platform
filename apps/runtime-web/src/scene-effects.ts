@@ -1,6 +1,7 @@
 import { AnimationClip, AnimationMixer, Mesh, Object3D, Quaternion, Raycaster, type Ray } from "three";
 import type { SceneEffect, SceneEffectSwitchState } from "@vrata/shared-types";
 import { SceneEffectSound, type LoadSceneEffectSound } from "./scene-effect-audio.js";
+import { bindHeldSceneProp, type HeldPropFrame, type HeldSceneProp } from "./scene-held-prop.js";
 import { collectSpriteMeshes, createSceneSpriteAnimator } from "./scene-sprite-effect.js";
 
 interface ClipBinding {
@@ -22,6 +23,7 @@ interface ClipBinding {
  * Validate all bindings before changing visibility. */
 export class SceneEffects {
   private readonly bindings = new Map<string, ClipBinding>();
+  private readonly heldProps: HeldSceneProp[] = [];
   private readonly raycaster = new Raycaster();
   private readonly occluders: Mesh[];
   private audio?: { context: AudioContext; camera: Object3D };
@@ -41,7 +43,12 @@ export class SceneEffects {
     const effectRoots = [...roots].map(namedNode);
     const staticMounts: Object3D[] = [];
     const installSprites: Array<() => void> = [];
+    const installHeldProps: Array<() => HeldSceneProp> = [];
     for (const spec of specs) {
+      if (spec.kind === "held-prop") {
+        installHeldProps.push(bindHeldSceneProp(scene, spec, namedNode, loadSound));
+        continue;
+      }
       const root = namedNode(spec.root),
         members = new Set<string>(),
         duplicate = new Set<string>();
@@ -96,6 +103,7 @@ export class SceneEffects {
       node instanceof Mesh && ![...effectRoots, ...staticMounts].some(root => contains(root, node)) &&
       (Array.isArray(node.material) ? node.material.every(m => !m.transparent) : !node.material.transparent)) : [];
     for (const install of installSprites) install();
+    for (const install of installHeldProps) this.heldProps.push(install());
     for (const { node } of this.bindings.values()) node.visible = false;
   }
   set(owner: string, id: string, enabled: boolean, live: () => boolean): boolean {
@@ -134,9 +142,17 @@ export class SceneEffects {
     }
     return nearest && picker.intersectObjects(this.occluders, false)[0] ? undefined : nearest;
   }
-  hasAudio(): boolean { return [...this.bindings.values()].some(b => b.sound); }
+  hasAudio(): boolean { return [...this.bindings.values()].some(b => b.sound) || this.heldProps.some(prop => prop.hasAudio); }
+  hasHeldProps(): boolean { return this.heldProps.length > 0; }
+  updateHeldProps(frame: HeldPropFrame): void {
+    for (const prop of this.heldProps) {
+      prop.update(frame);
+      prop.tick(frame.nowMs, this.audio);
+    }
+  }
   setAudio(input?: { context: AudioContext; camera: Object3D }): void {
     this.audio = input;
+    for (const prop of this.heldProps) prop.audioChanged(!!input);
     for (const e of this.bindings.values()) {
       if (input) e.sound?.allowRetry();
       else e.sound?.stop();
@@ -170,7 +186,7 @@ export class SceneEffects {
     }
   }
   diagnostics() {
-    return Array.from(this.bindings, ([id, e]) => ({
+    const loops = Array.from(this.bindings, ([id, e]) => ({
       id,
       playing: e.playing,
       position: e.node.position.toArray(),
@@ -179,9 +195,11 @@ export class SceneEffects {
         handle: e.control.handle.quaternion.toArray() } } : {}),
       audio: e.sound?.diagnostics(),
     }));
+    return [...loops, ...this.heldProps.map(prop => prop.diagnostics())];
   }
   dispose(): void {
     this.audio = undefined;
+    for (const prop of this.heldProps.splice(0)) prop.dispose();
     for (const e of this.bindings.values()) {
       e.sound?.dispose();
       e.sprite?.dispose();
