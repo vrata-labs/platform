@@ -192,10 +192,19 @@ export async function assertPrivateClip(options: {
   if (options.sound) {
     if (!(await audioButton.isVisible())) await page.locator("#meeting-nav-audio").click();
     await expect(audioButton).toHaveAttribute("aria-pressed", "false");
+    await expect(audioButton).toHaveAccessibleName(/^(Scene sounds|Звуки сцены)$/);
+    const off = audioButton.locator('[data-scene-sounds-state="off"]');
+    const on = audioButton.locator('[data-scene-sounds-state="on"]');
+    await expect(off).toBeVisible();
+    await expect(on).toBeHidden();
     expect((await audio()).playing).toBe(false);
     await audioButton.click();
+    await expect(on).toBeVisible();
+    await expect(off).toBeHidden();
     await expect.poll(audio, { timeout: 35_000 }).toEqual({ playing: true, audible: true, microphoneRequests: 0 });
     await audioButton.click();
+    await expect(off).toBeVisible();
+    await expect(on).toBeHidden();
     await expect.poll(async () => (await audio()).playing).toBe(false);
     expect((await state()).playing).toBe(true);
     await audioButton.click();
