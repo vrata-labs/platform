@@ -489,6 +489,7 @@ const stopRemoteBrowserButton = mustElement<HTMLButtonElement>("#stop-remote-bro
 const remoteBrowserStatusEl = mustElement<HTMLDivElement>("#remote-browser-status");
 const micSelect = mustElement<HTMLSelectElement>("#mic-select");
 const speakerSelect = mustElement<HTMLSelectElement>("#speaker-select");
+const sceneSoundsButton = mustElement<HTMLButtonElement>("#scene-sounds");
 const joinMutedCheckbox = mustElement<HTMLInputElement>("#join-muted");
 const micLevelFill = mustElement<HTMLDivElement>("#mic-level-fill");
 const speakerLevelFill = mustElement<HTMLDivElement>("#speaker-level-fill");
@@ -781,6 +782,7 @@ let syntheticXrState: {
 } | null = null;
 let activeSceneBundleRoot: THREE.Object3D | null = null;
 let activeSceneEffects: import("./scene-effects.js").SceneEffects | undefined;
+let sceneSoundsRequested = false;
 let avatarSandboxRegistry: ReturnType<typeof createAvatarRegistry> | null = null;
 let localAvatarController: LocalAvatarController | null = null;
 let localBodyMesh: THREE.Mesh | null = null;
@@ -1848,6 +1850,10 @@ function disableRuntimeForSessionBlock(reason: string): void {
 
 /** Stops everything this tab runs for the room: plugins, room-state, media, surfaces; the scene stays. */
 function stopRoomSession(mediaReason: string, commandReason: string): void {
+  sceneSoundsRequested = false;
+  activeSceneEffects?.setAudio();
+  sceneSoundsButton.disabled = true;
+  sceneSoundsButton.setAttribute("aria-pressed", "false");
   roomPluginTokenBound.clear();
   try { roomPluginRuntime.stop(); if (roomPluginAuthorReady) roomPluginAuthor.stop(); } catch { /* Plugin cleanup must not prevent the core session block. */ }
   sessionControlPoller.stop();
@@ -3692,6 +3698,33 @@ async function resumeAudioContext(): Promise<void> {
   if (context.state === "suspended") {
     await context.resume();
   }
+}
+
+function syncSceneSounds(): void {
+  const canPlay = sceneSoundsRequested && !sessionControlBlocked &&
+    (document.visibilityState !== "hidden" || renderer.xr.isPresenting) && audioContext?.state === "running";
+  activeSceneEffects?.setAudio(canPlay && audioContext ? { context: audioContext, camera } : undefined);
+  sceneSoundsButton.setAttribute("aria-pressed", String(sceneSoundsRequested));
+}
+
+sceneSoundsButton.addEventListener("click", async () => {
+  if (sessionControlBlocked || !activeSceneEffects?.hasAudio()) return;
+  sceneSoundsRequested = !sceneSoundsRequested;
+  if (sceneSoundsRequested) {
+    try {
+      await resumeAudioContext();
+      await selectSceneSoundOutput();
+    } catch {
+      sceneSoundsRequested = false;
+    }
+  }
+  syncSceneSounds();
+});
+document.addEventListener("visibilitychange", syncSceneSounds);
+
+async function selectSceneSoundOutput(): Promise<void> {
+  const context = audioContext as (AudioContext & { setSinkId?: (device: string) => Promise<void> }) | null;
+  await context?.setSinkId?.(preferredSpeakerDeviceId).catch(() => undefined);
 }
 
 function createAudioAnalyser(context: AudioContext): {
@@ -7377,6 +7410,7 @@ speakerSelect.addEventListener("change", () => {
   preferredSpeakerDeviceId = speakerSelect.value || "default";
   localStorage.setItem("vrata.audiooutput", preferredSpeakerDeviceId);
   updateAudioDeviceStatus(`Selected speaker: ${speakerSelect.selectedOptions[0]?.textContent ?? "default"}`);
+  if (sceneSoundsRequested && !livekitRoom) void selectSceneSoundOutput();
   if (!livekitRoom || mediaRoomTransitionInFlight || !supportsAudioOutputSelection()) {
     return;
   }
@@ -8433,6 +8467,8 @@ async function main(): Promise<void> {
     activeSceneBundleRoot = sceneResult.activeSceneBundleRoot;
     activeSceneEffects?.dispose();
     activeSceneEffects = sceneResult.effects;
+    sceneSoundsButton.hidden = !activeSceneEffects?.hasAudio();
+    syncSceneSounds();
     if (activeSceneBundleRoot) sceneFrameReadiness.sceneAttached();
     const anchors = sceneResult.sceneManifest?.anchors;
     setSceneSeatAnchors(anchors?.seatAnchors ?? [], anchors?.teleportFloorY ?? 0, anchors?.floorAreas, anchors?.floorLinks);

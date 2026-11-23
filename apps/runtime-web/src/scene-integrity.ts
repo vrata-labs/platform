@@ -1,4 +1,4 @@
-export async function verifySceneBytes(bytes: ArrayBuffer, expectedSha256: string, kind: "manifest" | "asset"): Promise<void> {
+export async function verifySceneBytes(bytes: ArrayBuffer, expectedSha256: string, kind: "manifest" | "asset" | "audio"): Promise<void> {
   if (!/^[a-f0-9]{64}$/.test(expectedSha256)) throw new Error("invalid_scene_integrity");
   if (!globalThis.crypto?.subtle) throw new Error("scene_integrity_crypto_unavailable");
   const digest = await crypto.subtle.digest("SHA-256", bytes);

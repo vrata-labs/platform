@@ -32,6 +32,14 @@ Writes are paused while the browser is offline and the list is re-read when the 
 
 SDK package 0.3.0 adds `scene.effects.setEnabled`. A scene bundle can declare
 `sceneEffects: [{ "id": "flight", "kind": "clip-loop", "root": "carrier", "clips": ["flight-path", "spin"] }]`.
+
+The author can also set `audio: { path, sha256, gain, nearM, farM }` on a clip effect.
+Use a relative `audio/name.wav` path and the lowercase SHA-256 of the file. The
+format is mono 16-bit PCM WAV, 16–48 kHz, at most 16 seconds. `gain` is at most
+0.25; attenuation starts at `nearM` and reaches silence at `farM`. The sound
+follows the effect root and respects the visitor's **Scene sounds** toggle.
+The visitor need not join voice or publish a microphone. The plug-in still
+controls only the declared effect ID, never a file, output device or audio graph.
 The root and clips must exist inside its GLB. Clip tracks can animate only a
 position, quaternion or scale inside that subtree. The model stays hidden until
 an approved room behavior calls `await context.sdk.scene.effects.setEnabled("flight", true)`.

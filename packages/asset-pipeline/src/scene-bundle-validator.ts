@@ -1,6 +1,7 @@
 import { constants as fsConstants } from "node:fs";
+import { createHash } from "node:crypto";
 import { isFloorPoint, isSceneFloorAreas, isSceneFloorLinks, isWalkablePoint } from "@vrata/shared-types";
-import { isSceneClipEffects } from "@vrata/shared-types";
+import { isSceneAudioWav, isSceneClipEffects, SCENE_AUDIO_MAX_BYTES, type SceneAudioPath } from "@vrata/shared-types";
 import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
@@ -404,33 +405,51 @@ export async function extractSceneBundleZipToTemp(zipPath: string): Promise<{ ro
   }
 }
 
-/** Approved two-file delivery: no export sources, external images or caller-chosen storage paths. */
-export function unpackPersonalScene(zip: Buffer): { manifest: Buffer; model: Buffer } {
-  const limits = { "scene.json": 1024 * 1024, "scene.glb": defaultMaxMainAssetBytes } as const;
+const sceneAudioFiles = (manifest: Record<string, unknown>) =>
+  new Map(isSceneClipEffects(manifest.sceneEffects)
+    ? manifest.sceneEffects.flatMap(effect => effect.audio ? [[effect.audio.path, effect.audio.sha256] as const] : [])
+    : []);
+const validSceneAudio = (bytes: Buffer, expected: string) => isSceneAudioWav(bytes) &&
+  createHash("sha256").update(bytes).digest("hex") === expected;
+
+/** Approved delivery: model, manifest and only the bounded sounds declared in the manifest. */
+export function unpackPersonalScene(zip: Buffer): { manifest: Buffer; model: Buffer; audio: Map<SceneAudioPath, Buffer> } {
   if (zip.byteLength > defaultMaxBundleBytes) throw new Error("private_scene_archive_size");
   const entries = parseZipEntries(zip);
-  if (entries.length !== 2 || !Object.keys(limits).every(path => entries.some(entry => entry.name === path))) {
+  if (entries.length < 2 || entries.length > 6 || !["scene.json", "scene.glb"].every(path => entries.some(entry => entry.name === path))) {
     throw new Error("private_scene_expected_files");
   }
-  const read = (path: keyof typeof limits) => {
+  const read = (path: string, limit: number) => {
     const entry = entries.find(entry => entry.name === path)!;
-    if (entry.uncompressedSize < 1 || entry.uncompressedSize > limits[path]) throw new Error("private_scene_file_size");
+    if (entry.uncompressedSize < 1 || entry.uncompressedSize > limit) throw new Error("private_scene_file_size");
     const content = readZipEntry(zip, entry, entry.uncompressedSize);
     if (content.length !== entry.uncompressedSize) throw new Error("private_scene_file_size");
     return content;
   };
-  const manifest = read("scene.json"), model = read("scene.glb");
+  const manifest = read("scene.json", 1024 * 1024);
   const meta: unknown = JSON.parse(manifest.toString("utf8"));
   if (!isRecord(meta) || meta.glbPath !== "scene.glb" || (meta.materialOverrides !== undefined &&
       (!Array.isArray(meta.materialOverrides) || meta.materialOverrides.some(value => !isRecord(value) || value.mapPath !== undefined)))) {
     throw new Error("private_scene_must_be_self_contained");
   }
+  if (meta.sceneEffects !== undefined && !isSceneClipEffects(meta.sceneEffects)) throw new Error("invalid_scene_effects");
+  const expectedAudio = sceneAudioFiles(meta);
+  if (entries.length !== 2 + expectedAudio.size || ![...expectedAudio.keys()].every(path => entries.some(entry => entry.name === path))) {
+    throw new Error("private_scene_expected_files");
+  }
+  const audio = new Map<SceneAudioPath, Buffer>();
+  for (const [path, hash] of expectedAudio) {
+    const bytes = read(path, SCENE_AUDIO_MAX_BYTES);
+    if (!validSceneAudio(bytes, hash)) throw new Error("invalid_scene_audio");
+    audio.set(path, bytes);
+  }
+  const model = read("scene.glb", defaultMaxMainAssetBytes);
   const glb = parseGlbJson(model);
   if (!isRecord(glb) || ![glb.buffers, glb.images].every(list => list === undefined ||
       Array.isArray(list) && list.every(entry => isRecord(entry) && entry.uri === undefined))) {
     throw new Error("private_scene_must_be_self_contained");
   }
-  return { manifest, model };
+  return { manifest, model, audio };
 }
 
 function pushRequiredStringIssue(issues: SceneBundleValidationIssue[], manifest: Record<string, unknown>, key: string): string | null {
@@ -904,6 +923,17 @@ export async function validateSceneBundlePath(inputPath: string, options: SceneB
       }
     } catch {
       issues.push(issue("error", reference.path, reference.code, reference.message));
+    }
+  }
+
+  if (isRecord(manifest)) {
+    for (const [path, hash] of sceneAudioFiles(manifest)) {
+      const asset = join(bundleRoot, path);
+      const info = await stat(asset).catch(() => null);
+      if (!info?.isFile() || info.size > SCENE_AUDIO_MAX_BYTES ||
+        !await readFile(asset).then(bytes => validSceneAudio(bytes, hash), () => false)) {
+        issues.push(issue("error", path, "invalid_scene_audio", "Scene audio must be an existing mono PCM WAV matching the manifest digest and limits."));
+      }
     }
   }
 

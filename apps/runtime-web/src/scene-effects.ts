@@ -1,5 +1,6 @@
 import { AnimationClip, AnimationMixer, Object3D } from "three";
 import type { SceneClipEffect } from "@vrata/shared-types";
+import { SceneEffectSound, type LoadSceneEffectSound } from "./scene-effect-audio.js";
 
 interface ClipBinding {
   node: Object3D;
@@ -7,13 +8,15 @@ interface ClipBinding {
   clips: AnimationClip[];
   owners: Map<string, () => boolean>;
   playing: boolean;
+  sound?: SceneEffectSound;
 }
 
 /** Only the scene author selects clips and nodes. The plugin receives neither.
  * Validate all bindings before changing visibility. */
 export class SceneEffects {
   private readonly bindings = new Map<string, ClipBinding>();
-  constructor(scene: Object3D, animations: AnimationClip[], specs: SceneClipEffect[]) {
+  private audio?: { context: AudioContext; camera: Object3D };
+  constructor(scene: Object3D, animations: AnimationClip[], specs: SceneClipEffect[], loadSound?: LoadSceneEffectSound) {
     const nodes: Object3D[] = [];
     scene.traverse((node) => nodes.push(node));
     const roots = new Set(specs.map((spec) => spec.root));
@@ -51,6 +54,7 @@ export class SceneEffects {
         clips,
         owners: new Map(),
         playing: false,
+        sound: spec.audio && loadSound ? new SceneEffectSound(spec.audio, root, loadSound) : undefined,
       });
     }
     for (const { node } of this.bindings.values()) node.visible = false;
@@ -63,7 +67,18 @@ export class SceneEffects {
     return true;
   }
   retire(owner: string): void {
-    for (const effect of this.bindings.values()) effect.owners.delete(owner);
+    for (const effect of this.bindings.values()) {
+      effect.owners.delete(owner);
+      if (![...effect.owners.values()].some(live => live())) effect.sound?.stop();
+    }
+  }
+  hasAudio(): boolean { return [...this.bindings.values()].some(b => b.sound); }
+  setAudio(input?: { context: AudioContext; camera: Object3D }): void {
+    this.audio = input;
+    for (const e of this.bindings.values()) {
+      if (input) e.sound?.allowRetry();
+      else e.sound?.stop();
+    }
   }
   tick(seconds: number): void {
     for (const e of this.bindings.values()) {
@@ -79,6 +94,7 @@ export class SceneEffects {
         e.playing = e.node.visible = on;
       }
       if (on && Number.isFinite(seconds) && seconds > 0) e.mixer.update(seconds);
+      e.sound?.tick(this.audio, on, e.mixer.existingAction(e.clips[0]!)?.time ?? 0);
     }
   }
   diagnostics() {
@@ -87,10 +103,13 @@ export class SceneEffects {
       playing: e.playing,
       position: e.node.position.toArray(),
       clips: e.clips.map((c) => ({ name: c.name, time: e.mixer.existingAction(c)?.time ?? 0 })),
+      audio: e.sound?.diagnostics(),
     }));
   }
   dispose(): void {
+    this.audio = undefined;
     for (const e of this.bindings.values()) {
+      e.sound?.dispose();
       e.mixer.stopAllAction();
       e.mixer.uncacheRoot(e.node);
       e.node.visible = false;

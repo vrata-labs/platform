@@ -9,7 +9,7 @@ import { parseSceneBundleManifest, pickSceneSpawnPoint, resolveSceneAssetUrl, ty
 import { disposeSceneObject } from "./scene-dispose.js";
 import { applyBakedLightMaps } from "./scene-lightmaps.js";
 import { SceneEffects } from "./scene-effects.js";
-import type { SceneBundleIntegrity } from "@vrata/shared-types";
+import { isSceneAudioWav, SCENE_AUDIO_MAX_BYTES, type SceneBundleIntegrity } from "@vrata/shared-types";
 import { assertSelfContainedGlb, verifySceneBytes } from "./scene-integrity.js";
 import type { PrivateSceneFileFetch } from "./private-scene-source.js";
 
@@ -186,7 +186,29 @@ export async function loadSceneBundle(input: {
           throw new Error("missing_baked_lightmaps");
         }
       }
-      if (manifest.sceneEffects?.length) effects = new SceneEffects(gltf.scene, gltf.animations, manifest.sceneEffects);
+      if (manifest.sceneEffects?.length) effects = new SceneEffects(gltf.scene, gltf.animations, manifest.sceneEffects, async (sound, signal) => {
+        const audio = input.privateFile ? await input.privateFile(sound.path, signal) :
+          await fetch(resolveSceneAssetUrl(logicalBase, sound.path), { signal, redirect: "error", credentials: "omit", referrerPolicy: "no-referrer" });
+        const reader = audio.body?.getReader();
+        try {
+          if (!audio.ok || !reader || Number(audio.headers.get("content-length")) > SCENE_AUDIO_MAX_BYTES) throw new Error("scene_audio_unavailable");
+          const buffer = new Uint8Array(SCENE_AUDIO_MAX_BYTES);
+          let length = 0;
+          for (;;) {
+            const {done, value} = await reader.read();
+            if (done) break;
+            if (length + value.length > buffer.length) throw new Error("scene_audio_too_large");
+            buffer.set(value, length);
+            length += value.length;
+          }
+          const bytes = buffer.slice(0, length);
+          if (!isSceneAudioWav(bytes)) throw new Error("invalid_scene_audio");
+          await verifySceneBytes(bytes.buffer, sound.sha256, "audio");
+          return bytes.buffer;
+        } finally {
+          if (reader) void reader.cancel().catch(() => undefined);
+        }
+      });
       group.add(gltf.scene);
     } catch (error) {
       disposeSceneObject(gltf.scene);

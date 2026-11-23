@@ -1,4 +1,6 @@
-export type PrivateSceneFileFetch = (file: "scene.json" | "scene.glb") => Promise<Response>;
+import { isSceneAudioPath, type SceneAudioPath } from "@vrata/shared-types";
+
+export type PrivateSceneFileFetch = (file: "scene.json" | "scene.glb" | SceneAudioPath, signal?: AbortSignal) => Promise<Response>;
 interface Descriptor {
   roomId: string;
   bundleVersionId: string;
@@ -66,8 +68,10 @@ export function privateSceneSource(
           pending = undefined;
         }));
   }
-  return async (file) => {
+  return async (file, signal) => {
+    if (file !== "scene.json" && file !== "scene.glb" && !isSceneAudioPath(file)) throw new Error("invalid_private_scene_path");
     for (let attempt = 0; attempt < 2; attempt++) {
+      signal?.throwIfAborted();
       const d = await descriptor();
       let r: Response;
       try {
@@ -76,7 +80,8 @@ export function privateSceneSource(
           credentials: "omit",
           redirect: "error",
           cache: "no-store",
-          referrerPolicy: "no-referrer"
+          referrerPolicy: "no-referrer",
+          signal
         });
       } catch {
         throw new Error("private_scene_asset_unreachable");

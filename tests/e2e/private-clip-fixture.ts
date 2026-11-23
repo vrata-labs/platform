@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { readFile } from "node:fs/promises";
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
@@ -9,11 +10,13 @@ export async function privateClipFixture() {
   const dir = process.env.VRATA_LOCAL_CLIP_BUNDLE;
   if (dir) {
     const manifest = await readFile(resolve(dir, "scene.json"), "utf8");
+    const sound = JSON.parse(manifest).sceneEffects?.[0]?.audio?.path as string | undefined;
     return {
       manifest,
       model: await readFile(resolve(dir, "scene.glb")),
       archive: await readFile(resolve(process.env.VRATA_LOCAL_CLIP_ARCHIVE!)),
       artifact: await readFile(resolve(process.env.VRATA_LOCAL_CLIP_PLUGIN!)),
+      sound: sound ? { path: sound, bytes: await readFile(resolve(dir, sound)) } : undefined,
     };
   }
   const meshData = Buffer.from(new Float32Array([-1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 2, 0, 0, 0, 2, 0, 0]).buffer);
@@ -50,6 +53,15 @@ export async function privateClipFixture() {
   model.writeUInt32LE(meshData.length, 20 + chunk.length);
   model.writeUInt32LE(0x004e4942, 24 + chunk.length);
   meshData.copy(model, 28 + chunk.length);
+  const rate = 24_000, audio = Buffer.alloc(44 + rate * 2);
+  audio.write("RIFF", 0); audio.writeUInt32LE(audio.length - 8, 4);
+  audio.write("WAVEfmt ", 8); audio.writeUInt32LE(16, 16);
+  audio.writeUInt16LE(1, 20); audio.writeUInt16LE(1, 22);
+  audio.writeUInt32LE(rate, 24); audio.writeUInt32LE(rate * 2, 28);
+  audio.writeUInt16LE(2, 32); audio.writeUInt16LE(16, 34);
+  audio.write("data", 36); audio.writeUInt32LE(rate * 2, 40);
+  for (let t = 0; t < rate; t++) audio.writeInt16LE(Math.round(10_000 * Math.sin(t / rate * 440 * Math.PI * 2)), 44 + t * 2);
+  const sound = { path: "audio/tone.wav", bytes: audio };
   const manifest = JSON.stringify({
     schemaVersion: 1,
     sceneId: "private-fixture",
@@ -58,7 +70,10 @@ export async function privateClipFixture() {
     glbPath: "scene.glb",
     spawnPoints: [{ id: "main", position: { x: 0, y: 0, z: 3 }, yaw: 0 }],
     bounds: { width: 5, height: 4, depth: 5 },
-    sceneEffects: [{ id: "move", kind: "clip-loop", root: "mover", clips: ["glide"] }],
+    sceneEffects: [{
+      id: "move", kind: "clip-loop", root: "mover", clips: ["glide"],
+      audio: { path: sound.path, sha256: createHash("sha256").update(sound.bytes).digest("hex"), gain: 0.2, nearM: 1, farM: 8 }
+    }],
   });
   const artifact = Buffer.from(
     sdk.createRoomPluginArtifact(
@@ -74,7 +89,7 @@ export async function privateClipFixture() {
       'export function init(c){return c.sdk.scene.effects.setEnabled("move",true);}',
     ).bytes,
   );
-  return { manifest, model, artifact, archive: undefined };
+  return { manifest, model, artifact, archive: undefined, sound };
 }
 
 export async function assertPrivateClip(options: {
@@ -85,6 +100,7 @@ export async function assertPrivateClip(options: {
   origin: string;
   artifact: Buffer;
   first: boolean;
+  sound?: boolean;
   inspect?: (page: Page) => Promise<void>;
 }) {
   const { page, request, roomId, origin, artifact, first } = options,
@@ -140,10 +156,32 @@ export async function assertPrivateClip(options: {
       { timeout: 12_000 },
     )
     .toBe(true);
+  const audioButton = page.locator("#scene-sounds");
+  const audio = () => page.evaluate(() => {
+    const d = (window as any).__VRATA_DEBUG__, probe = (window as any).__scenePlaybackProbe;
+    const audible = probe.analysers.some((a: AnalyserNode) => {
+      const data = new Float32Array(a.fftSize);
+      a.getFloatTimeDomainData(data);
+      return data.some(x => Math.abs(x) > 0.0001);
+    });
+    return { playing: Boolean(d.sceneEffects[0].audio?.playing), audible, microphoneRequests: probe.microphoneRequests };
+  });
+  if (options.sound) {
+    if (!(await audioButton.isVisible())) await page.locator("#meeting-nav-audio").click();
+    await expect(audioButton).toHaveAttribute("aria-pressed", "false");
+    expect((await audio()).playing).toBe(false);
+    await audioButton.click();
+    await expect.poll(audio, { timeout: 35_000 }).toEqual({ playing: true, audible: true, microphoneRequests: 0 });
+    await audioButton.click();
+    await expect.poll(async () => (await audio()).playing).toBe(false);
+    expect((await state()).playing).toBe(true);
+    await audioButton.click();
+    await expect.poll(async () => (await audio()).playing, { timeout: 20_000 }).toBe(true);
+  }
   await options.inspect?.(page);
   if (toggle) {
     await toggle(false);
-    await expect.poll(async () => (await state()).playing, { timeout: 12_000 }).toBe(false);
+    await expect.poll(async () => [(await state()).playing, options.sound ? (await audio()).playing : false], { timeout: 12_000 }).toEqual([false, false]);
     await toggle(true);
     await expect.poll(async () => (await state()).playing, { timeout: 45_000 }).toBe(true);
   }
