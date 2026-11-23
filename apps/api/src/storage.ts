@@ -473,12 +473,18 @@ export class MemoryStorage implements Storage {
     const v=this.privateVersions.get(id); return v?.tenantId===tenantId ? structuredClone(v) : null;
   }
   private privatePublications = new Map<string,string>();
-  async publishInitialPrivateScene(roomId:string,id:string,op:string) {
-    const m=this.rooms.get(roomId)?.managed;
-    if (!m || m.status!=="active" || m.bundleVersionId!==id) return false;
-    if (m.publishedVersionId) return this.privatePublications.get(roomId)===op;
-    this.privatePublications.set(roomId,op);
-    m.publishedVersionId=id;
+  async publishPrivateScene(roomId: string, id: string, expected: string | null, op: string) {
+    const room = this.rooms.get(roomId), m = room?.managed;
+    if (!room || !m || m.kind !== "custom" || m.status !== "active") return false;
+    if (m.publishedVersionId === id && this.privatePublications.get(roomId) === op) return true;
+    const active = this.privateVersions.get(m.bundleVersionId ?? ""), version = this.privateVersions.get(id);
+    if (!active || !version || version.tenantId !== room.tenantId || active.bundleId !== version.bundleId ||
+      (m.publishedVersionId ?? null) !== expected || (expected === null ? m.bundleVersionId !== id : m.bundleVersionId !== expected) ||
+      [...this.rooms.values()].some(other => other.roomId !== roomId && other.managed?.bundleVersionId === id)) return false;
+    this.privatePublications.set(roomId, op);
+    m.bundleVersionId = id;
+    m.bundleContentHash = version.contentHash;
+    m.publishedVersionId = id;
     return true;
   }
 
@@ -2489,10 +2495,26 @@ export class PostgresStorage implements Storage {
   async getPrivateSceneVersion(tenantId:string,id:string) {
     return (await this.pool.query("select record from integration_private_versions where tenant_id=$1 and version_id=$2",[tenantId,id])).rows[0]?.record as PrivateSceneVersion ?? null;
   }
-  async publishInitialPrivateScene(roomId:string,id:string,op:string) {
-    const result=await this.pool.query(`update integration_private_room_versions p set published=true,publish_operation=$3 from integration_rooms r
-      where p.room_id=r.room_id and r.status='active' and p.room_id=$1 and p.version_id=$2 and (not p.published or p.publish_operation=$3)`,[roomId,id,op]);
-    return result.rowCount===1;
+  async publishPrivateScene(roomId: string, id: string, expected: string | null, op: string) {
+    try {
+      const result = await this.pool.query(`with active_room as materialized (
+        select room_id,tenant_id from integration_rooms where room_id=$1 and status='active' and kind='custom' for update
+      )
+      update integration_private_room_versions binding
+        set version_id=next.version_id, content_hash=next.record->>'contentHash', published=true, publish_operation=$4
+      from active_room r, integration_private_versions next, integration_private_versions previous
+      where binding.room_id=r.room_id and next.tenant_id=r.tenant_id and next.version_id=$2
+        and previous.tenant_id=r.tenant_id and previous.version_id=binding.version_id and previous.bundle_id=next.bundle_id
+        and ((binding.published and binding.version_id=$2 and binding.publish_operation=$4)
+          or ($3::uuid is null and not binding.published and binding.version_id=$2)
+          or ($3::uuid is not null and binding.published and binding.version_id=$3))`,
+      [roomId,id,expected,op]);
+      return result.rowCount === 1;
+    } catch (error) {
+      // The binding is unique within the tenant, including concurrent creates.
+      if (isUniqueViolation(error)) return false;
+      throw error;
+    }
   }
   private async insertPrivateRoom(client:PoolClient,input:Partial<RoomRecord>,managed:ManagedRoomCreateInput) {
     const r=customRoomMetadata(input,managed);
