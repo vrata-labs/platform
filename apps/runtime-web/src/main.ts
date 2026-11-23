@@ -8517,7 +8517,8 @@ async function main(): Promise<void> {
   }
 
   await resolveRuntimeXrSupport();
-
+  // A pause or leave during the capability probe has already stopped this session.
+  if (sessionControlBlocked) return;
   vrButton = createControlledVrButton();
   renderer.xr.addEventListener("sessionstart", () => {
     currentXrSession = renderer.xr.getSession();

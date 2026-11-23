@@ -193,17 +193,39 @@ test("a tab without a way back leaves to the left screen, the boot does not ente
 
 test("a room paused by the portal can still be left back to the card", async ({ browser, request }) => {
   test.setTimeout(180_000);
-  const { entryUrl, roomPath } = await demoEntry(request, { kind: "catalog-entry", id: "meeting-room", locale: "ru" });
+  const { entryUrl, roomId, roomPath } = await demoEntry(request, { kind: "catalog-entry", id: "meeting-room", locale: "ru" });
   const context = await portalContext(browser, "ru");
   try {
     const page = await context.newPage();
+    // Pause after entry while the last browser capability check is still pending.
+    // Keep the native result and leave the pre-join check alone.
+    await page.addInitScript(() => {
+      const tab = window as any;
+      const xr = navigator.xr!;
+      const supported = xr.isSessionSupported.bind(xr);
+      xr.isSessionSupported = async mode => {
+        const result = await supported(mode);
+        if (mode === "immersive-vr" && tab.__VRATA_DEBUG__?.sceneDebug?.state === "loaded" && !tab.releaseBootProbe) {
+          await new Promise<void>(resolve => { tab.releaseBootProbe = resolve; });
+        }
+        return result;
+      };
+    });
     await enter(page, entryUrl, "Гость");
     await expect(page.locator("#leave-space")).toBeEnabled({ timeout: 60_000 });
+    await page.waitForFunction(() => typeof (window as any).releaseBootProbe === "function");
     const paused = await integration(request, "PATCH", `${roomPath}/access`, { expectedRevision: 0, status: "paused" });
     expect(paused.status, JSON.stringify(paused.body)).toBe(200);
     await expect(page.locator("#status-line")).toHaveText("Комната на паузе", { timeout: 60_000 });
+    let presenceReadAfterPause = false;
+    page.on("request", req => {
+      if (req.method() === "GET" && new URL(req.url()).pathname === `/api/rooms/${roomId}/presence`) presenceReadAfterPause = true;
+    });
+    await page.evaluate(() => (window as any).releaseBootProbe());
     await page.locator("#leave-space").click();
     await page.waitForURL("https://ru.portal.test/demos/meeting-room");
+    await expect(page.locator("#portal-page")).toBeVisible();
+    expect(presenceReadAfterPause).toBe(false);
   } finally {
     await context.close();
   }
