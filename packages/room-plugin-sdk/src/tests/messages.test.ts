@@ -10,12 +10,21 @@ function error(action: () => unknown, code: RoomPluginValidationErrorCode): void
 const claim = { sdkApiVersion: 1, requestId: "r1", operation: "seating.claimSelfOnEntry", payload: { seatId: "seat-1" } };
 const snapshot = { ownParticipantAlias: "local-alias", arrivalAllowed: true, seats: [{ id: "seat-1", yaw: 0, occupantAlias: null }] };
 
-test("SDK requests expose only own seating operations and bounded plain status", () => {
+test("SDK requests expose own seating operations and bounded plain status", () => {
   assert.equal(validateRoomPluginRequest(claim).operation, "seating.claimSelfOnEntry");
   const status = validateRoomPluginRequest({ sdkApiVersion: 1, requestId: "r2", operation: "status.set", payload: { text: "<b>Plain text</b>" } });
   assert.equal(status.operation, "status.set", "trusted UI must render this with textContent");
   validateRoomPluginRequest({ sdkApiVersion: 1, requestId: "r3", operation: "seating.cancelPendingOwnClaim", payload: {} });
   assert.equal(parseRoomPluginRequest(Buffer.from(JSON.stringify(claim))).requestId, "r1");
+});
+
+test("scene effects accept a declared-ID shape and a boolean, not data or addresses", () => {
+  const command = { ...claim, operation: "scene.effects.setEnabled", payload: { effectId: "window-flight", enabled: true } };
+  assert.equal(validateRoomPluginRequest(command).operation, command.operation);
+  for (const invalid of [{effectId:"https://example.com/flight",enabled:true}, {effectId:"flight",enabled:"yes"}]) {
+    error(() => validateRoomPluginRequest({ ...command, payload:invalid }), "invalid_request");
+  }
+  error(() => validateRoomPluginRequest({ ...command, payload:{ ...command.payload, clip:"other" } }), "unknown_field");
 });
 
 test("plugin cannot inject participant, generation, room, token or arbitrary pose commands", () => {

@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { startReferenceTemplateFixture } from "./reference-template-fixture.js";
+import { assertPrivateClip, privateClipFixture } from "./private-clip-fixture.js";
 
 test.use({ trace: "off", screenshot: "off", video: "off" });
 test("private custom room: pinned scene loads for the same owner on two devices and stays out of public delivery", async ({
@@ -17,37 +18,11 @@ test("private custom room: pinned scene loads for the same owner on two devices 
   const key = createIntegrationTestKey();
   const tenant = "pt_01JBQ7Z8K3M4N5P6Q7R8S9T0VW",
     subject = "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VW";
-  const meshData = Buffer.from(new Float32Array([-1, 0, 0, 1, 0, 0, 0, 1, 0]).buffer);
-  const gltf = {
-    asset: { version: "2.0" },
-    scene: 0,
-    scenes: [{ nodes: [0] }],
-    nodes: [{ mesh: 0 }],
-    meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
-    buffers: [{ byteLength: meshData.length }],
-    bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: meshData.length }],
-    accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: "VEC3", min: [-1, 0, 0], max: [1, 1, 0] }]
-  };
-  const text = JSON.stringify(gltf),
-    chunk = Buffer.from(text.padEnd(Math.ceil(text.length / 4) * 4, " "));
-  const model = Buffer.alloc(28 + chunk.length + meshData.length);
-  [0x46546c67, 2, model.length, chunk.length, 0x4e4f534a].forEach((v, i) => model.writeUInt32LE(v, i * 4));
-  chunk.copy(model, 20);
-  model.writeUInt32LE(meshData.length, 20 + chunk.length);
-  model.writeUInt32LE(0x004e4942, 24 + chunk.length);
-  meshData.copy(model, 28 + chunk.length);
-  const manifest = JSON.stringify({
-    schemaVersion: 1,
-    sceneId: "private-fixture",
-    label: "Private fixture",
-    source: "test",
-    glbPath: "scene.glb",
-    spawnPoints: [{ id: "main", position: { x: 0, y: 0, z: 3 }, yaw: 0 }],
-    bounds: { width: 5, height: 4, depth: 5 }
-  });
-  const zip: Buffer = createStoredZip([
+  const { model, manifest, artifact, archive, sound } = await privateClipFixture();
+  const zip: Buffer = archive ?? createStoredZip([
     { name: "scene.json", content: manifest },
-    { name: "scene.glb", content: model }
+    { name: "scene.glb", content: model },
+    ...(sound ? [{ name: sound.path, content: sound.bytes }] : [])
   ]);
   const digest = createHash("sha256").update(zip).digest("hex");
   const files = new Map<string, Buffer>();
@@ -111,7 +86,7 @@ test("private custom room: pinned scene loads for the same owner on two devices 
     expect(imported.status(), await imported.text()).toBe(201);
     const v = await imported.json();
     expect((await (await upload()).json()).bundleVersionId).toBe(v.bundleVersionId);
-    expect(files.size).toBe(2);
+    expect(files.size).toBe(sound ? 3 : 2);
     const result = await op("/rooms", {
       kind: "custom",
       name: "Private fixture",
@@ -137,7 +112,7 @@ test("private custom room: pinned scene loads for the same owner on two devices 
     expect((await anonManifest.text()).includes(v.contentHash)).toBe(false);
     expect((await request.get(s3Url + [...files.keys()][0])).status()).toBe(403);
     const people = [];
-    let lastAsset = "",
+    let lastAsset = "", lastAudio = "",
       lastGrant = "";
     for (let i = 0; i < 2; i++) {
       const client = await browser.newContext();
@@ -145,10 +120,29 @@ test("private custom room: pinned scene loads for the same owner on two devices 
         const grant = await permit(subject);
         expect(grant.status()).toBe(201);
         const page = await client.newPage();
+        if (sound) await page.addInitScript(() => {
+          const probe = { analysers: [] as AnalyserNode[], microphoneRequests: 0 };
+          (window as any).__scenePlaybackProbe = probe;
+          const connect = AudioNode.prototype.connect;
+          AudioNode.prototype.connect = function(this: AudioNode, destination: unknown, ...args: unknown[]) {
+            if (this instanceof GainNode && destination instanceof AudioDestinationNode) {
+              const a = this.context.createAnalyser();
+              Reflect.apply(connect, this, [a]);
+              probe.analysers.push(a);
+            }
+            return Reflect.apply(connect, this, [destination, ...args]);
+          } as typeof AudioNode.prototype.connect;
+          const mic = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+          navigator.mediaDevices.getUserMedia = constraints => {
+            if (constraints?.audio) probe.microphoneRequests++;
+            return mic(constraints);
+          };
+        });
         const issued = await grant.json();
         lastGrant = issued.grantId;
         page.on("response", (r) => {
           if (r.url().includes("/c/") && r.url().endsWith("/scene.glb") && r.status() === 200) lastAsset = r.url();
+          if (sound && r.url().includes("/c/") && r.url().endsWith(`/${sound.path}`) && r.status() === 200) lastAudio = r.url();
         });
         await page.goto(issued.entryUrl);
         await page.locator("#guest-name-input").fill("Recipient");
@@ -162,7 +156,8 @@ test("private custom room: pinned scene loads for the same owner on two devices 
               }),
             { timeout: 60_000 }
           )
-          .toEqual(["loaded", "Private fixture", true]);
+          .toEqual(["loaded", JSON.parse(manifest).label, true]);
+        await assertPrivateClip({ page, request, roomId: id, origin, artifact, first: i === 0, adminToken: fixture.adminToken, sound: !!sound });
         people.push(await page.evaluate(() => (window as any).__VRATA_DEBUG__.participantId));
         expect(await page.evaluate(() => JSON.stringify((window as any).__VRATA_DEBUG__.sceneDebug).includes("/c/"))).toBe(false);
       } finally {
@@ -174,8 +169,17 @@ test("private custom room: pinned scene loads for the same owner on two devices 
     const head = await request.head(lastAsset);
     expect(head.status()).toBe(200);
     expect(head.headers()["cache-control"]).toBe("private, no-store");
+    if (sound) {
+      expect(!!lastAudio).toBe(true);
+      const header = await request.head(lastAudio);
+      expect(header.status()).toBe(200);
+      expect(header.headers()["content-type"]).toBe("audio/wav");
+      expect(header.headers()["cache-control"]).toBe("private, no-store");
+      expect((await request.get(new URL(`/${sound.path}`, lastAudio).href)).status()).toBe(404);
+    }
     expect((await op(path + `/grants/${lastGrant}/revoke`, { reason: "review complete" })).status()).toBe(200);
     expect((await request.head(lastAsset)).status()).toBe(403);
+    if (sound) expect((await request.head(lastAudio)).status()).toBe(403);
   } finally {
     await fixture?.close();
     await new Promise<void>((done) => s3.close(() => done()));

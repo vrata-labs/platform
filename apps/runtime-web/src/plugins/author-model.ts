@@ -3,6 +3,7 @@ import type { RoomPluginAuthorBinding, RoomPluginAuthorFailure, RoomPluginAuthor
   RoomPluginBindingWrite } from "./author-http.js";
 
 export const ROOM_PLUGIN_CAPABILITY_LABELS: Readonly<Record<RoomPluginCapability, string>> = Object.freeze({
+  "scene.effects.setEnabled": "Enable or stop effects declared by this room scene",
   "status.set": "Show a short labelled status line to people in this room",
   "seating.claimSelfOnEntry": "Try once to seat each person when they enter; people can opt out",
   "seating.cancelPendingOwnClaim": "Cancel that person's own pending automatic seat"

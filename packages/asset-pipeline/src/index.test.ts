@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,7 +8,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
-import { validateSceneBundlePath, validateSceneBundleReference } from "./scene-bundle-validator.js";
+import { unpackPersonalScene, validateSceneBundlePath, validateSceneBundleReference } from "./scene-bundle-validator.js";
 import { validateTemplateScenePair } from "./template-scene-validator.js";
 import { validateAsset, validateAvatarPack } from "./validator.js";
 import type { RoomTemplateSceneContract } from "@vrata/shared-types";
@@ -456,6 +457,38 @@ test("validateSceneBundlePath accepts a valid zip scene bundle", async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("private scene accepts only hashed, declared, bounded PCM audio files", () => {
+  const audio = Buffer.alloc(46);
+  audio.write("RIFF", 0); audio.writeUInt32LE(38, 4);
+  audio.write("WAVEfmt ", 8); audio.writeUInt32LE(16, 16);
+  audio.writeUInt16LE(1, 20); audio.writeUInt16LE(1, 22);
+  audio.writeUInt32LE(24_000, 24); audio.writeUInt32LE(48_000, 28);
+  audio.writeUInt16LE(2, 32); audio.writeUInt16LE(16, 34);
+  audio.write("data", 36); audio.writeUInt32LE(2, 40);
+  const json = Buffer.from('{"asset":{"version":"2.0"}} ');
+  const model = Buffer.alloc(20 + json.length);
+  [0x46546c67, 2, model.length, json.length, 0x4e4f534a].forEach((n, i) => model.writeUInt32LE(n, 4 * i));
+  json.copy(model, 20);
+  const sound = { path: "audio/loop.wav", sha256: createHash("sha256").update(audio).digest("hex"), gain: 0.2, nearM: 1, farM: 20 } as const;
+  const build = (extra: Record<string, string | Buffer>, declaration?: Record<string, unknown>) => createStoredZip({
+    "scene.json": JSON.stringify({ glbPath: "scene.glb", ...(declaration ? {
+      sceneEffects: [{ id: "effect", kind: "clip-loop", root: "object", clips: ["loop"], audio: declaration }]
+    } : {}) }),
+    "scene.glb": model, ...extra
+  });
+  const payload = { [sound.path]: audio };
+  assert.deepEqual(unpackPersonalScene(build({}, undefined)).audio, new Map());
+  assert.deepEqual(unpackPersonalScene(build(payload, sound)).audio.get(sound.path), audio);
+  assert.throws(() => unpackPersonalScene(build(payload)), /private_scene_expected_files/);
+  assert.throws(() => unpackPersonalScene(build({}, sound)), /private_scene_expected_files/);
+  assert.throws(() => unpackPersonalScene(build({ ...payload, "audio/extra.wav": audio }, sound)), /private_scene_expected_files/);
+  assert.throws(() => unpackPersonalScene(build(payload, { ...sound, sha256: "f".repeat(64) })), /invalid_scene_audio/);
+  assert.throws(() => unpackPersonalScene(build(payload, { ...sound, path: "audio/../scene.glb" })), /invalid_scene_effects/);
+  assert.throws(() => unpackPersonalScene(build({ [sound.path]: Buffer.alloc(audio.length) }, { ...sound,
+    sha256: createHash("sha256").update(Buffer.alloc(audio.length)).digest("hex")
+  })), /invalid_scene_audio/);
 });
 
 test("validateSceneBundlePath rejects a missing scene.json", async () => {

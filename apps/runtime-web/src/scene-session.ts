@@ -9,6 +9,7 @@ import type { RoomTemplateSurface, SceneBundleIntegrity } from "@vrata/shared-ty
 import { assertTemplateSceneSurfaces } from "./template-layout.js";
 
 export interface SceneSessionResult {
+  effects?: import("./scene-effects.js").SceneEffects;
   activeSceneBundleRoot: THREE.Object3D | null;
   sceneManifest: SceneBundleManifest | null;
   effectiveCleanSceneMode: boolean;
@@ -112,6 +113,7 @@ export async function startSceneBundleSession(input: {
       });
     }
     return {
+      effects: loadedScene.effects,
       activeSceneBundleRoot: loadedScene.group,
       sceneManifest: loadedScene.manifest,
       effectiveCleanSceneMode,
