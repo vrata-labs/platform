@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import { startReferenceTemplateFixture } from "./reference-template-fixture.js";
 
 test.use({ trace: "off", screenshot: "off", video: "off" });
-test("private custom room: pinned scene loads for the same owner on two devices and stays out of public delivery", async ({
+test("private custom room: the same owner can reload after a guarded scene replacement and rollback", async ({
   browser,
   request
 }) => {
@@ -50,6 +50,14 @@ test("private custom room: pinned scene loads for the same owner on two devices 
     { name: "scene.glb", content: model }
   ]);
   const digest = createHash("sha256").update(zip).digest("hex");
+  const nextLabel = "Private fixture updated";
+  const nextZip: Buffer = createStoredZip([
+    { name: "scene.json", content: JSON.stringify({ ...JSON.parse(manifest), label: nextLabel }) },
+    { name: "scene.glb", content: model }
+  ]);
+  const nextDigest = createHash("sha256").update(nextZip).digest("hex");
+  const approval = (version: string, archiveSha256: string) =>
+    JSON.stringify({ tenantId: tenant, ownerSubject: subject, bundleId: "mine", version, archiveSha256 });
   const files = new Map<string, Buffer>();
   const s3 = createServer(async (req, res) => {
     if (!req.headers.authorization?.startsWith("AWS4-HMAC-SHA256 Credential=fixture/")) {
@@ -84,13 +92,7 @@ test("private custom room: pinned scene loads for the same owner on two devices 
         VRATA_INTEGRATION_KEYS: integrationKeysEnv([key]),
         RUNTIME_BASE_URL: origin,
         VRATA_PRIVATE_ASSET_ORIGIN: origin.replace("127.0.0.1", "localhost"),
-        VRATA_PRIVATE_SCENE_APPROVAL: JSON.stringify({
-          tenantId: tenant,
-          ownerSubject: subject,
-          bundleId: "mine",
-          version: "v1",
-          archiveSha256: digest
-        }),
+        VRATA_PRIVATE_SCENE_APPROVAL: approval("v1", digest),
         VRATA_PRIVATE_SCENE_S3_ENDPOINT: s3Url,
         VRATA_PRIVATE_SCENE_S3_BUCKET: "private-fixture",
         VRATA_PRIVATE_SCENE_S3_ACCESS_KEY: "fixture",
@@ -102,10 +104,10 @@ test("private custom room: pinned scene loads for the same owner on two devices 
     const headers = (id = randomUUID()) => ({ authorization: `Bearer ${signIntegrationAssertion(key)}`, "idempotency-key": id });
     const op = (path: string, data: unknown, id?: string) => request.post(prefix + path, { data, headers: headers(id) });
     expect((await request.put(prefix, { data: { displayName: "Assigned" }, headers: headers() })).status()).toBe(200);
-    const upload = () =>
+    const upload = (version = "v1", buffer = zip) =>
       request.post(prefix + "/bundles/mine/versions", {
         headers: headers(),
-        multipart: { version: "v1", bundle: { name: "approved.zip", mimeType: "application/zip", buffer: zip } }
+        multipart: { version, bundle: { name: "approved.zip", mimeType: "application/zip", buffer } }
       });
     const imported = await upload();
     expect(imported.status(), await imported.text()).toBe(201);
@@ -136,10 +138,9 @@ test("private custom room: pinned scene loads for the same owner on two devices 
     expect([403, 404, 409]).toContain(anonManifest.status());
     expect((await anonManifest.text()).includes(v.contentHash)).toBe(false);
     expect((await request.get(s3Url + [...files.keys()][0])).status()).toBe(403);
-    const people = [];
     let lastAsset = "",
       lastGrant = "";
-    for (let i = 0; i < 2; i++) {
+    const visit = async (label: string) => {
       const client = await browser.newContext();
       try {
         const grant = await permit(subject);
@@ -162,18 +163,44 @@ test("private custom room: pinned scene loads for the same owner on two devices 
               }),
             { timeout: 60_000 }
           )
-          .toEqual(["loaded", "Private fixture", true]);
-        people.push(await page.evaluate(() => (window as any).__VRATA_DEBUG__.participantId));
+          .toEqual(["loaded", label, true]);
         expect(await page.evaluate(() => JSON.stringify((window as any).__VRATA_DEBUG__.sceneDebug).includes("/c/"))).toBe(false);
+        return await page.evaluate(() => (window as any).__VRATA_DEBUG__.participantId);
       } finally {
         await client.close();
       }
-    }
-    expect(people[0] === people[1] && !!people[0]).toBe(true);
+    };
+    const person = await visit("Private fixture");
+    expect(!!person).toBe(true);
+    expect(await visit("Private fixture")).toBe(person);
     expect(!!lastAsset).toBe(true);
     const head = await request.head(lastAsset);
     expect(head.status()).toBe(200);
     expect(head.headers()["cache-control"]).toBe("private, no-store");
+    const earlierAsset = lastAsset;
+    await fixture.restartApi({ VRATA_PRIVATE_SCENE_APPROVAL: approval("v2", nextDigest) });
+    expect((await upload("v2", zip)).status()).toBe(409);
+    const next = await upload("v2", nextZip);
+    expect(next.status(), await next.text()).toBe(201);
+    const updated = await next.json();
+    expect((await op(path + "/publish", { bundleVersionId: updated.bundleVersionId, expectedPublishedVersionId: randomUUID() })).status()).toBe(412);
+    expect((await request.head(earlierAsset)).status()).toBe(200);
+    const replacement = { bundleVersionId: updated.bundleVersionId, expectedPublishedVersionId: v.bundleVersionId };
+    const apply = randomUUID();
+    const replaced = await op(path + "/publish", replacement, apply);
+    expect(replaced.status(),await replaced.text()).toBe(200);
+    expect(await replaced.json()).toMatchObject({ roomId:id, ownerSubject:subject, publishedVersionId:updated.bundleVersionId, scene:{contentHash:updated.contentHash} });
+    expect((await op(path + "/publish", replacement, apply)).status()).toBe(200);
+    expect((await op(path + "/publish", replacement)).status()).toBe(412);
+    expect((await request.head(earlierAsset)).status()).toBe(403);
+    expect(await visit(nextLabel)).toBe(person);
+    const replacedAsset = lastAsset;
+    await fixture.restartApi({ VRATA_PRIVATE_SCENE_APPROVAL: approval("v1", digest) });
+    const rollback = await op(path + "/publish", {bundleVersionId:v.bundleVersionId,expectedPublishedVersionId:updated.bundleVersionId});
+    expect(rollback.status(),await rollback.text()).toBe(200);
+    expect((await rollback.json()).publishedVersionId).toBe(v.bundleVersionId);
+    expect((await request.head(replacedAsset)).status()).toBe(403);
+    expect(await visit("Private fixture")).toBe(person);
     expect((await op(path + `/grants/${lastGrant}/revoke`, { reason: "review complete" })).status()).toBe(200);
     expect((await request.head(lastAsset)).status()).toBe(403);
   } finally {

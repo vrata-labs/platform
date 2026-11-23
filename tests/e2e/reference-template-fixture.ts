@@ -91,8 +91,8 @@ export async function startReferenceTemplateFixture(postgresUrl: string, options
     "SCENE_BUNDLE_S3_PUBLIC_BASE_URL", "SCENE_BUNDLE_S3_ACCESS_KEY_ID", "SCENE_BUNDLE_S3_SECRET_ACCESS_KEY",
     "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"
   ]) delete env[key];
-  const start = (path: string) => {
-    const child = spawn(process.execPath, [path], { cwd: process.cwd(), env, stdio: ["ignore", "pipe", "pipe"] });
+  const start = (path: string, override?: Record<string,string>) => {
+    const child = spawn(process.execPath, [path], { cwd: process.cwd(), env: { ...env, ...override }, stdio: ["ignore", "pipe", "pipe"] });
     for (const stream of [child.stdout, child.stderr]) {
       let pending = "";
       stream?.on("data", bytes => {
@@ -121,14 +121,14 @@ export async function startReferenceTemplateFixture(postgresUrl: string, options
     }
     throw new Error(`reference_fixture_not_ready:${log}`);
   };
-  const restartApi = () => {
+  const restartApi = (override?: Record<string,string>) => {
     const operation = apiOperation.then(async () => {
       if (closing) throw new Error("reference_fixture_closing");
       const previous = apiChild;
       apiChild = undefined;
       if (previous) await stop(previous);
       if (closing) throw new Error("reference_fixture_closing");
-      const next = start("apps/api/dist/index.js");
+      const next = start("apps/api/dist/index.js", override);
       apiChild = next;
       try {
         await ready(`${origin}/health`, next);
