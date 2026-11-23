@@ -246,7 +246,13 @@
           <div id="primary-controls" class="controls">
             <button id="join-audio">Join Audio</button>
             <button id="toggle-mute" disabled>Mute</button>
-            <button id="scene-sounds" type="button" aria-pressed="false" hidden data-i18n="audio.sceneSounds">Scene sounds</button>
+            <button id="scene-sounds" type="button" aria-pressed="false" hidden>
+              <span data-i18n="audio.sceneSounds">Scene sounds</span>
+              <span class="scene-sounds-state" aria-hidden="true">
+                <span data-scene-sounds-state="off" data-i18n="audio.sceneSoundsOff">Off</span>
+                <span data-scene-sounds-state="on" data-i18n="audio.sceneSoundsOn">On</span>
+              </span>
+            </button>
           </div>
           <div class="audio-panel">
             <label for="mic-select" data-i18n="audio.microphone">Microphone</label>
