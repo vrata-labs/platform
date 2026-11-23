@@ -60,6 +60,7 @@ export interface RuntimeTestApi {
   getRemoteBrowserVrKeyboardKeyWorldPosition: (keyId: string) => { x: number; y: number; z: number } | null;
   teleportToFloor: (x: number, z: number) => boolean;
   forceXrInteractionAtSeat: (seatId: string) => boolean;
+  getSceneReviewCamera: () => { eye: number[]; direction: number[] };
   setSceneReviewPose: (pose: {
     position: { x: number; y: number; z: number };
     yaw: number;

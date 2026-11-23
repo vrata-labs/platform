@@ -31,6 +31,8 @@ test("B or Y opens and closes the menu on the press, not while held", () => {
 
 test("the trigger on a button acts; back to screen ends only XR, close only closes", () => {
   const open = [{ menuPressed: true }, {}];
+  assert.deepEqual(run([...open, { confirm: true, hoveredAction: "stand", seated: true }]).commands, ["stand"]);
+  assert.deepEqual(run([...open, { confirm: true, hoveredAction: "stand" }]).commands, []);
   assert.deepEqual(run([...open, { confirm: true, hoveredAction: "to_screen" }]), { state: createXrMenuState(), commands: ["end_xr_session"], opened: [true, false, false] });
   const mic = run([...open, { confirm: true, hoveredAction: "microphone" }]);
   assert.deepEqual([mic.state.open, mic.commands], [true, ["toggle_microphone"]], "the menu stays open after the microphone");

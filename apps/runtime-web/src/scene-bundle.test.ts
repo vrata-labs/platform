@@ -399,3 +399,12 @@ test("parseSceneBundleManifest rejects unsafe attribution URLs", () => {
     /invalid_scene_bundle_attribution_license_url/
   );
 });
+test("floor links and chair exits must end on declared walkable surfaces", () => {
+  const floor = { minX: -1, maxX: 1, minZ: -1, maxZ: 1, y: 2 };
+  const seat = { id: "seat", position: { x: 2, y: 2, z: 0 }, exit: { x: .5, y: 2, z: 0 }, yaw: 0, seatHeight: .4, eyeHeight: .74 };
+  const manifest = { schemaVersion: 1, sceneId: "test", label: "test", source: "test", glbPath: "scene.glb", spawnPoints: [{ id: "main", position: seat.exit }],
+    anchors: { floorAreas: [floor], seatAnchors: [seat] } };
+  assert.equal(parseSceneBundleManifest(manifest).anchors?.seatAnchors[0]?.eyeHeight, .74);
+  assert.throws(() => parseSceneBundleManifest({ ...manifest, anchors: { ...manifest.anchors, floorLinks: [{ node: "Lift", fromY: 2, destination: { x: 0, y: 0, z: 0 } }] } }), /floor_links/);
+  assert.throws(() => parseSceneBundleManifest({ ...manifest, anchors: { ...manifest.anchors, seatAnchors: [{ ...seat, exit: { x: 5, y: 2, z: 0 } }] } }), /seat_exit/);
+});

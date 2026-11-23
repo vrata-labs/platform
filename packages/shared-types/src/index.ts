@@ -56,6 +56,7 @@ export * from "./surface-input.js";
 export * from "./media-objects.js";
 export * from "./room-template.js";
 export * from "./scene-media-surfaces.js";
+export * from "./scene-navigation.js";
 export * from "./template-session-context.js";
 export * from "./identity-upgrade.js";
 export * from "./document-upload-policy.js";

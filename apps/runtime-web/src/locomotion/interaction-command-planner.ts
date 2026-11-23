@@ -45,7 +45,7 @@ export function toRuntimeCommandInteractionTarget(target: InteractionTarget): Ru
   if (target.kind === "floor") {
     return {
       kind: "floor",
-      point: target.point
+      point: target.destination ?? target.point
     };
   }
   return { kind: "none" };

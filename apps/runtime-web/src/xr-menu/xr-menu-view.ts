@@ -15,7 +15,7 @@ export function resolveXrMenuHit(ray: THREE.Ray, raycaster: THREE.Raycaster, but
   for (const hit of raycaster.intersectObjects(buttons as THREE.Object3D[], false)) {
     if (hit.distance > maxDistance) break;
     const action = hit.object.userData.xrMenuAction;
-    if (XR_MENU_ACTIONS.includes(action)) return { action: action as XrMenuAction, distance: hit.distance };
+    if (hit.object.visible && XR_MENU_ACTIONS.includes(action)) return { action: action as XrMenuAction, distance: hit.distance };
   }
   return null;
 }
@@ -76,6 +76,7 @@ export interface XrMenuView {
   buttons: readonly THREE.Object3D[];
   placeInFront(camera: THREE.Camera): void;
   setVisible(visible: boolean): void;
+  setSeated(seated: boolean): void;
   /** World centers of the buttons, for diagnostics and browser tests. */
   buttonCenters(): Record<XrMenuAction, { x: number; y: number; z: number }>;
   render(input: { title: string; labels: Record<XrMenuAction, string>; hovered: XrMenuAction | null; armed: boolean; ray: THREE.Ray | null; hitDistance: number | null }): void;
@@ -86,7 +87,7 @@ export function createXrMenuView(): XrMenuView {
   const group = new THREE.Group();
   group.name = "xr-menu";
   group.visible = false;
-  const rows = XR_MENU_ACTIONS.length;
+  const rows = XR_MENU_ACTIONS.length - 1;
   const panelHeight = TITLE_HEIGHT + rows * (BUTTON_HEIGHT + BUTTON_GAP) + BUTTON_GAP * 2;
   const backdrop = new THREE.Mesh(new THREE.PlaneGeometry(PANEL_WIDTH + 0.03, panelHeight),
     new THREE.MeshBasicMaterial({ color: 0x08111f, transparent: true, opacity: 0.88, depthTest: false }));
@@ -126,6 +127,12 @@ export function createXrMenuView(): XrMenuView {
   return {
     group,
     buttons: [...buttons.values()].map((plane) => plane.mesh),
+    setSeated(seated) {
+      buttons.get("stand")!.mesh.visible = seated;
+      const extra = seated ? BUTTON_HEIGHT + BUTTON_GAP : 0;
+      backdrop.scale.y = 1 + extra / panelHeight;
+      backdrop.position.y = -extra / 2;
+    },
     placeInFront(camera) {
       const head = camera.getWorldPosition(new THREE.Vector3());
       const placement = resolveXrMenuPlacement(head, camera.getWorldDirection(new THREE.Vector3()));

@@ -66,7 +66,9 @@ export function createXrTelemetryReporter(context: XrTelemetryContext) {
           profiles: Array.isArray(source.profiles) ? [...source.profiles] : [],
           button0Pressed: Boolean(source.gamepad?.buttons?.[0]?.pressed),
           button1Pressed: Boolean(source.gamepad?.buttons?.[1]?.pressed),
-          axes: Array.isArray(source.gamepad?.axes) ? source.gamepad.axes.map((value) => Number(value.toFixed(3))) : []
+          // Some XR controllers expose null for unused axis slots. Keep the
+          // indices of the real thumbstick; diagnostics must not abort the frame.
+          axes: Array.isArray(source.gamepad?.axes) ? source.gamepad.axes.map((value) => Number.isFinite(value) ? Number(value.toFixed(3)) : 0) : []
         }));
     const rawInputActive = xrRawInputs.some((input) => input.button0Pressed || input.button1Pressed || input.axes.some((value) => Math.abs(value) > 0.01));
     const rayActive = Boolean(context.debugState.interactionRay.active);

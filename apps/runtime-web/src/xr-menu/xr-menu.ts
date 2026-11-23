@@ -3,8 +3,8 @@ import type { MessageKey } from "../i18n/i18n.js";
 
 // The menu a participant opens in the headset with B or Y: the microphone, back to the screen (the room stays) and
 // leaving the space. It never moves the local pose; while it is open, locomotion gets no input.
-export type XrMenuAction = "microphone" | "to_screen" | "leave" | "close";
-export const XR_MENU_ACTIONS: readonly XrMenuAction[] = ["microphone", "to_screen", "leave", "close"];
+export type XrMenuAction = "microphone" | "to_screen" | "leave" | "close" | "stand";
+export const XR_MENU_ACTIONS: readonly XrMenuAction[] = ["microphone", "to_screen", "leave", "close", "stand"];
 export const XR_LEAVE_CONFIRM_MS = 4000;
 
 export interface XrMenuState {
@@ -13,13 +13,14 @@ export interface XrMenuState {
   menuPressedLastFrame: boolean;
 }
 
-export type XrMenuCommand = { type: "toggle_microphone" } | { type: "end_xr_session" } | { type: "leave_space" };
+export type XrMenuCommand = { type: "toggle_microphone" } | { type: "end_xr_session" } | { type: "leave_space" } | { type: "stand" };
 
 export interface XrMenuStepInput {
   presenting: boolean;
   menuPressed: boolean;
   confirm: boolean;
   hoveredAction: XrMenuAction | null;
+  seated?: boolean;
   nowMs: number;
 }
 
@@ -42,6 +43,9 @@ export function stepXrMenu(state: XrMenuState, input: XrMenuStepInput): XrMenuSt
   let command: XrMenuCommand | null = null;
   if (open && !toggled && input.confirm && input.hoveredAction) {
     switch (input.hoveredAction) {
+      case "stand":
+        if (input.seated) { open = false; command = { type: "stand" }; }
+        break;
       case "close":
         open = false;
         break;
@@ -86,6 +90,7 @@ export interface XrMenuAudioState {
 
 export function xrMenuButtonLabel(action: XrMenuAction, state: XrMenuState, audio: XrMenuAudioState): MessageKey {
   switch (action) {
+    case "stand": return "audio.standUp";
     case "microphone":
       if (!audio.available) return "audio.unsupported";
       return audio.joined && audio.microphoneEnabled ? "audio.mute" : "audio.unmute";

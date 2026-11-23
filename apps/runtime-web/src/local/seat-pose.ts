@@ -10,7 +10,19 @@ export const SEATED_EYE_ABOVE_CUSHION = 0.72;
 export function resolveLocalSeatRootPosition(anchor: SceneBundleSeatAnchor, xrPresenting: boolean): Vector3Like {
   return {
     x: anchor.position.x,
-    y: anchor.position.y + anchor.seatHeight + (xrPresenting ? 0 : SEATED_EYE_ABOVE_CUSHION - NON_XR_CAMERA_HEIGHT),
+    y: anchor.position.y + anchor.seatHeight + (xrPresenting ? 0 : (anchor.eyeHeight ?? SEATED_EYE_ABOVE_CUSHION) - NON_XR_CAMERA_HEIGHT),
     z: anchor.position.z
   };
+}
+
+/** At seat entry only: align the current tracked eye with the authored eye.
+ * Subsequent tracking is free, including translations/rotations of the head. */
+export function alignTrackedSeatEye(anchor: SceneBundleSeatAnchor, viewer: { position: Vector3Like; yaw: number }) {
+  const yaw = anchor.yaw - viewer.yaw;
+  const { x, y, z } = viewer.position;
+  return { yaw, position: {
+    x: anchor.position.x - (x * Math.cos(yaw) + z * Math.sin(yaw)),
+    y: anchor.position.y + anchor.seatHeight + (anchor.eyeHeight ?? SEATED_EYE_ABOVE_CUSHION) - y,
+    z: anchor.position.z - (-x * Math.sin(yaw) + z * Math.cos(yaw))
+  } };
 }
