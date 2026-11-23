@@ -2,7 +2,7 @@ import { expect, test, type Browser, type Page, type TestInfo } from "@playwrigh
 import { readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, resolve, sep } from "node:path";
-import { parseSceneBundleManifest } from "../../apps/runtime-web/src/scene-bundle.js";
+import { pathToFileURL } from "node:url";
 import { hardwareRenderingDecision, readWebglRenderer, requireHardwareRendering } from "./hardware-rendering";
 import { startReferenceTemplateFixture } from "./reference-template-fixture.js";
 import { observeReferenceTest } from "./reference-test-observation";
@@ -159,6 +159,10 @@ for (const staging of [false]) test.describe(`${staging ? "@staging " : ""}seat 
         const manifestResponse = page.waitForResponse(value => /\/scene\.json(?:[?#]|$)/.test(value.url()));
         if (visual) ownAuthority = await captureRoomAuthority(page);
         await join(page, roomUrl);
+        // Discovery runs before workspace builds. Load the shipping ESM parser
+        // only in the running scenario, like the reference fixture's storage.
+        const { parseSceneBundleManifest }: typeof import("../../apps/runtime-web/src/scene-bundle.js") =
+          await import(pathToFileURL(resolve("apps/runtime-web/dist/scene-bundle.js")).href);
         const manifest = parseSceneBundleManifest(await (await manifestResponse).json());
         const seat = manifest.anchors!.seatAnchors[0] as Seat;
         expect(seat.id).toBeTruthy();
