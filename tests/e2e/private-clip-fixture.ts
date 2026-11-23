@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { readFile } from "node:fs/promises";
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
-const sdk = createRequire(resolve("apps/api/package.json"))("@vrata/room-plugin-sdk/artifact");
 
 export async function privateClipFixture() {
   // Optional operator-owned fixtures never enter the repo or public asset service.
@@ -75,6 +74,8 @@ export async function privateClipFixture() {
       audio: { path: sound.path, sha256: createHash("sha256").update(sound.bytes).digest("hex"), gain: 0.2, nearM: 1, farM: 8 }
     }],
   });
+  // Remote suites discover this test without building the local fixture SDK.
+  const sdk = createRequire(resolve("apps/api/package.json"))("@vrata/room-plugin-sdk/artifact");
   const artifact = Buffer.from(
     sdk.createRoomPluginArtifact(
       {
