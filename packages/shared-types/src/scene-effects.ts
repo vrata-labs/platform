@@ -1,10 +1,25 @@
-/** Optional, data-only bindings to animation clips inside the same scene GLB. */
+/** Optional, data-only bindings to assets inside the same scene GLB. */
 export interface SceneClipEffect {
   id: string;
   kind: "clip-loop";
   root: string;
   clips: string[];
   audio?: SceneEffectAudio;
+}
+
+export interface SceneSpriteEffect {
+  id: string;
+  kind: "sprite-loop";
+  root: string;
+  atlas: { columns: number; rows: number; cycleSeconds: number };
+  switch: { mount: string; handle: string; offQuaternion: [number, number, number, number]; initiallyOn: boolean };
+  audio?: SceneEffectAudio;
+}
+
+export type SceneEffect = SceneClipEffect | SceneSpriteEffect;
+export interface SceneEffectSwitchState {
+  versionId: string;
+  switches: { id: string; enabled: boolean }[];
 }
 
 export type SceneAudioPath = `audio/${string}.wav`;
@@ -43,26 +58,34 @@ function isSceneEffectAudio(value: unknown): value is SceneEffectAudio {
 const name = (value: unknown): value is string =>
   typeof value === "string" && /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(value);
 
-export function isSceneClipEffects(value: unknown): value is SceneClipEffect[] {
+export function isSceneEffectSwitchState(value: unknown): value is SceneEffectSwitchState {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const v = value as SceneEffectSwitchState;
+  const ids = new Set<string>();
+  return typeof v.versionId === "string" && /^[a-z0-9-]{1,64}$/.test(v.versionId) &&
+    Array.isArray(v.switches) && v.switches.length <= 16 && v.switches.every(s => {
+      if (!s || !name(s.id) || typeof s.enabled !== "boolean" || ids.has(s.id)) return false;
+      ids.add(s.id);
+      return true;
+    });
+}
+
+export function isSceneEffects(value: unknown): value is SceneEffect[] {
   if (!Array.isArray(value) || value.length > 16) return false;
   const ids = new Set<string>(),
     roots = new Set<string>(),
-    clips = new Set<string>();
+    clips = new Set<string>(),
+    switches = new Set<string>();
   const audio = new Map<SceneAudioPath, string>();
   let soundCount = 0;
   return value.every((item) => {
     if (
       !item ||
       typeof item !== "object" ||
-      Object.keys(item).some((k) => !["id", "kind", "root", "clips", "audio"].includes(k)) ||
       !name(item.id) ||
       !name(item.root) ||
-      item.kind !== "clip-loop" ||
       ids.has(item.id) ||
-      roots.has(item.root) ||
-      !Array.isArray(item.clips) ||
-      item.clips.length < 1 ||
-      item.clips.length > 4
+      roots.has(item.root)
     )
       return false;
     if (item.audio !== undefined) {
@@ -73,10 +96,27 @@ export function isSceneClipEffects(value: unknown): value is SceneClipEffect[] {
     }
     ids.add(item.id);
     roots.add(item.root);
+    if (item.kind === "sprite-loop") {
+      if (Object.keys(item).some(k => !["id", "kind", "root", "atlas", "switch", "audio"].includes(k))) return false;
+      const { atlas, switch: control } = item;
+      const size = (n: unknown) => typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 16;
+      if (!atlas || Object.keys(atlas).length !== 3 || !size(atlas.columns) || !size(atlas.rows) ||
+          typeof atlas.cycleSeconds !== "number" || !(atlas.cycleSeconds >= 0.25 && atlas.cycleSeconds <= 16) ||
+          !control || Object.keys(control).length !== 4 || !name(control.mount) || !name(control.handle) ||
+          control.mount === control.handle || switches.has(control.mount) || switches.has(control.handle) ||
+          typeof control.initiallyOn !== "boolean" || !Array.isArray(control.offQuaternion) || control.offQuaternion.length !== 4 ||
+          !control.offQuaternion.every((n: unknown) => typeof n === "number" && Number.isFinite(n)) ||
+          Math.abs(Math.hypot(...control.offQuaternion) - 1) > 0.001) return false;
+      switches.add(control.mount);
+      switches.add(control.handle);
+      return true;
+    }
+    if (item.kind !== "clip-loop" || Object.keys(item).some(k => !["id", "kind", "root", "clips", "audio"].includes(k)) ||
+        !Array.isArray(item.clips) || item.clips.length < 1 || item.clips.length > 4) return false;
     return item.clips.every((clip: unknown) => {
       if (!name(clip) || clips.has(clip)) return false;
       clips.add(clip);
       return true;
     });
-  });
+  }) && [...switches].every(node => !roots.has(node));
 }

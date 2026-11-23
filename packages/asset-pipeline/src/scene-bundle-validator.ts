@@ -1,7 +1,7 @@
 import { constants as fsConstants } from "node:fs";
 import { createHash } from "node:crypto";
 import { isFloorPoint, isSceneFloorAreas, isSceneFloorLinks, isWalkablePoint } from "@vrata/shared-types";
-import { isSceneAudioWav, isSceneClipEffects, SCENE_AUDIO_MAX_BYTES, type SceneAudioPath } from "@vrata/shared-types";
+import { isSceneAudioWav, isSceneEffects, SCENE_AUDIO_MAX_BYTES, type SceneAudioPath } from "@vrata/shared-types";
 import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
@@ -406,7 +406,7 @@ export async function extractSceneBundleZipToTemp(zipPath: string): Promise<{ ro
 }
 
 const sceneAudioFiles = (manifest: Record<string, unknown>) =>
-  new Map(isSceneClipEffects(manifest.sceneEffects)
+  new Map(isSceneEffects(manifest.sceneEffects)
     ? manifest.sceneEffects.flatMap(effect => effect.audio ? [[effect.audio.path, effect.audio.sha256] as const] : [])
     : []);
 const validSceneAudio = (bytes: Buffer, expected: string) => isSceneAudioWav(bytes) &&
@@ -432,7 +432,7 @@ export function unpackPersonalScene(zip: Buffer): { manifest: Buffer; model: Buf
       (!Array.isArray(meta.materialOverrides) || meta.materialOverrides.some(value => !isRecord(value) || value.mapPath !== undefined)))) {
     throw new Error("private_scene_must_be_self_contained");
   }
-  if (meta.sceneEffects !== undefined && !isSceneClipEffects(meta.sceneEffects)) throw new Error("invalid_scene_effects");
+  if (meta.sceneEffects !== undefined && !isSceneEffects(meta.sceneEffects)) throw new Error("invalid_scene_effects");
   const expectedAudio = sceneAudioFiles(meta);
   if (entries.length !== 2 + expectedAudio.size || ![...expectedAudio.keys()].every(path => entries.some(entry => entry.name === path))) {
     throw new Error("private_scene_expected_files");
@@ -529,8 +529,8 @@ function validateManifestShape(input: unknown, issues: SceneBundleValidationIssu
   if (input.renderMode !== undefined && input.renderMode !== "default" && input.renderMode !== "clean") {
     issues.push(issue("error", "scene.json#/renderMode", "invalid_scene_bundle_render_mode", "renderMode must be default or clean."));
   }
-  if (input.sceneEffects !== undefined && (!isSceneClipEffects(input.sceneEffects) || !String(input.glbPath).endsWith(".glb"))) {
-    issues.push(issue("error", "scene.json#/sceneEffects", "invalid_scene_effects", "Effects must bind named clips in the bundle GLB."));
+  if (input.sceneEffects !== undefined && (!isSceneEffects(input.sceneEffects) || !String(input.glbPath).endsWith(".glb"))) {
+    issues.push(issue("error", "scene.json#/sceneEffects", "invalid_scene_effects", "Effects must bind named assets in the bundle GLB."));
   }
   if (input.renderProfile !== undefined && input.renderProfile !== "neutral-pbr" && input.renderProfile !== "baked-pbr-v1") {
     issues.push(issue("error", "scene.json#/renderProfile", "invalid_scene_bundle_render_profile", "renderProfile must be neutral-pbr or baked-pbr-v1 when provided."));

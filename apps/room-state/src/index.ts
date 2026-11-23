@@ -3,6 +3,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { applyRoomTemplateContext } from "./template-context.js";
+import { admitSceneEffectSwitches, setSceneEffectSwitch } from "./scene-effect-switch.js";
 import {
   IMAGE_VIEWER_OBJECT_TYPE,
   REMOTE_BROWSER_OBJECT_TYPE,
@@ -567,16 +568,23 @@ export function applyVerifiedParticipantAccess(server: RoomStateServer, current:
   records.set(current.participantId, effective);
   server.participantAuthorities.set(current.roomId, records);
   const access: ParticipantAccessState = { role: effective.role, permissions: [...effective.permissions],
-    sceneMediaSurfaces: current.sceneMediaSurfaces, roomTemplate: current.roomTemplate };
+    sceneMediaSurfaces: current.sceneMediaSurfaces, roomTemplate: current.roomTemplate,
+    sceneEffectVersionId: current.sceneEffectVersionId, sceneEffectSwitches: current.sceneEffectSwitches };
   for (const metadata of server.socketParticipants.values()) {
     if (metadata.roomId === current.roomId && metadata.participantId === current.participantId) {
       metadata.access = { ...metadata.access, role: access.role, permissions: [...effective.permissions] };
     }
   }
-  const room = server.rooms.get(current.roomId);
+  const previousRoom = server.rooms.get(current.roomId);
+  const room = previousRoom?.sceneEffectSwitches && current.sceneEffectVersionId !== undefined &&
+    previousRoom.sceneEffectSwitches.versionId !== current.sceneEffectVersionId
+    ? { ...previousRoom, sceneEffectSwitches: undefined } : previousRoom;
   const previous = room?.participants.find(participant => participant.participantId === current.participantId);
   if (room && previous && (previous.role !== access.role || JSON.stringify(previous.permissions) !== JSON.stringify(access.permissions))) {
     server.rooms.set(current.roomId, joinWithAccess(room, current.participantId, access));
+    broadcastRoom(server, current.roomId);
+  } else if (room && room !== previousRoom) {
+    server.rooms.set(current.roomId, room);
     broadcastRoom(server, current.roomId);
   }
   return access;
@@ -591,7 +599,9 @@ export function connectParticipant(server: RoomStateServer, roomId: string, part
     ? { ...bound, mediaObjects: registerSceneMediaSurfaces(bound.mediaObjects, roomId, access.sceneMediaSurfaces) }
     : bound;
   cancelPendingDisconnect(server, roomId, participantId);
-  server.rooms.set(roomId, joinWithAccess(configured, participantId, access));
+  const next = joinWithAccess(configured, participantId, access);
+  const sceneEffectSwitches = admitSceneEffectSwitches(next.sceneEffectSwitches, access);
+  server.rooms.set(roomId, sceneEffectSwitches === next.sceneEffectSwitches ? next : { ...next, sceneEffectSwitches });
   const set = server.clients.get(roomId) ?? new Set<WebSocket>();
   set.add(socket);
   server.clients.set(roomId, set);
@@ -1211,6 +1221,8 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
           patch?: unknown;
           enabled?: unknown;
           probeOnly?: unknown;
+          effectId?: unknown;
+          versionId?: unknown;
         };
         if (payload.type === "participant_update") {
           if (!payload.participant) {
@@ -1231,6 +1243,18 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
           return;
         }
         if (handleSeatCommand(authority, roomId, participantId, payload, message => sendToSocket(socket, message))) {
+          return;
+        }
+        if (payload.type === "scene_effect_set") {
+          const room = authority.rooms.get(roomId);
+          const liveAccess = authority.socketParticipants.get(socket)?.access;
+          if (!room || !v2 || !liveAccess || !verifiedAccess) return;
+          const after = setSceneEffectSwitch(room.sceneEffectSwitches,
+            { ...liveAccess, sceneEffectVersionId: verifiedAccess.sceneEffectVersionId }, payload);
+          if (after !== room.sceneEffectSwitches) {
+            authority.rooms.set(roomId, { ...room, sceneEffectSwitches: after });
+            broadcastRoom(authority, roomId);
+          }
           return;
         }
         if (payload.type === "surface_create_object") {
@@ -1300,9 +1324,9 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
     };
     const onDenied = (event: { code: number; reason: string; queuedMessages: number; queuedBytes: number; errorKind?: string }) =>
       logEvent({ service: "room-state", event: "identity_boundary_denied", roomId, participantId, ...event });
+    let verifiedAccess: ParticipantAccessState | null = null;
     if (v2) {
       authority.v2Connections.set(socket, { roomId, participantId });
-      let verifiedAccess: ParticipantAccessState | null = null;
       let lastVerified: VerifiedRoomSessionV2 | null = null;
       guardLegacySocket({ socket, roomId, onDenied, dispatch,
         // Reuse the bounded ordered socket bridge; v2 authorization is checked

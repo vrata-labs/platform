@@ -33,8 +33,13 @@ export function createInteractionTargetPerformer(input: {
   planner: InteractionCommandPlanner;
   executeCommands(commands: RuntimeCommand[]): void;
   getContext(): InteractionPerformContext;
+  activateEffectSwitch?(id: string): void;
 }): InteractionTargetPerformer {
   function performTarget(target: InteractionTarget, options: InteractionPerformOptions = {}): RuntimeCommand[] {
+    if (target.kind === "effect-switch") {
+      input.activateEffectSwitch?.(target.effectId);
+      return [];
+    }
     const context = input.getContext();
     const commands = input.planner.plan({
       target,
