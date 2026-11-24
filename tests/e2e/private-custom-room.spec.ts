@@ -109,12 +109,16 @@ test("private custom room: same owner can reopen, update and roll back a protect
     expect([403, 404, 409]).toContain(anonManifest.status());
     expect((await anonManifest.text()).includes(v.contentHash)).toBe(false);
     expect((await request.get(s3Url + [...files.keys()][0])).status()).toBe(403);
-    const visit = async (label: string, effectVisit?: number) => {
+    const visit = async (label: string, effectVisit?: number, clockOffsetMs = 0) => {
       const client = await browser.newContext();
       try {
         const grant = await permit(subject);
         expect(grant.status()).toBe(201);
         const page = await client.newPage();
+        if (clockOffsetMs) await page.addInitScript((offset) => {
+          const now = Date.now.bind(Date);
+          Date.now = () => now() + offset;
+        }, clockOffsetMs);
         if (sound && effectVisit !== undefined) await page.addInitScript(() => {
           const probe = { analysers: [] as AnalyserNode[], microphoneRequests: 0 };
           (window as any).__scenePlaybackProbe = probe;
@@ -176,9 +180,9 @@ test("private custom room: same owner can reopen, update and roll back a protect
         await client.close();
       }
     };
-    const first = await visit(authored.label, 0);
+    const first = await visit(authored.label, 0, 3_600_000);
     expect(first.person).toBeTruthy();
-    const original = await visit(authored.label, 1);
+    const original = await visit(authored.label, 1, -3_600_000);
     expect(original.person).toBe(first.person);
     const head = await request.head(original.asset);
     expect(head.status()).toBe(200);
