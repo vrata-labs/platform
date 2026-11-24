@@ -24,12 +24,20 @@ export async function privateClipFixture() {
   const gltf = {
     asset: { version: "2.0" },
     scene: 0,
-    scenes: [{ nodes: [0, 1, 3] }],
+    scenes: [{ nodes: [0, 1, 3, 4, 11] }],
     nodes: [
       { name: "mover", mesh: 0 },
       { name: "switch-mount", mesh: 0, translation: [0, 1.5, 1], scale: [.3, .3, .3], children: [2] },
       { name: "switch-handle", mesh: 0, translation: [.2, .2, .1], scale: [.4, .4, .4] },
-      { name: "glow", mesh: 1, translation: [-1, 1, 0] }
+      { name: "glow", mesh: 1, translation: [-1, 1, 0] },
+      { name: "tethered-body", translation: [1,0,1], children: [5, 8, 9, 10] },
+      { name: "tethered-handle", mesh: 0, translation: [0,1.2,0], scale: [.1,.1,.1], children: [6,7] },
+      { name: "tethered-tip", translation: [.5,0,0] },
+      { name: "tethered-end", translation: [-.5,0,0] },
+      { name: "tethered-connector", translation: [0,.8,0] },
+      { name: "tethered-rest", mesh: 0, translation: [0,.8,0], scale: [.05,.05,.05] },
+      { name: "tethered-sound" },
+      { name: "tethered-smoke", mesh: 1 }
     ],
     meshes: [
       { primitives: [{ attributes: { POSITION: 0 } }] },
@@ -94,6 +102,11 @@ export async function privateClipFixture() {
     }, {
       id: "light", kind: "sprite-loop", root: "glow", atlas: { columns: 1, rows: 1, cycleSeconds: 1 },
       switch: { mount: "switch-mount", handle: "switch-handle", offQuaternion: [0, 0, 1, 0], initiallyOn: true }
+    }, {
+      id: "tethered", kind: "held-prop", root: "tethered-smoke", fixture: "tethered-body", handle: "tethered-handle",
+      tip: "tethered-tip", tether: "tethered-end", connector: "tethered-connector", restHose: "tethered-rest", soundSource: "tethered-sound",
+      pickupM: .35, reachM: 2, contactM: .14, hoseRadiusM: .008,
+      burst: { columns: 1, rows: 1, durationSeconds: 1, intervalSeconds: 2 }
     }],
   });
   // Remote suites discover this test without building the local fixture SDK.
@@ -113,6 +126,32 @@ export async function privateClipFixture() {
     ).bytes,
   );
   return { manifest, model, artifact, archive: undefined, sound };
+}
+
+export async function assertPrivateHeldProp(page: Page) {
+  const state = () => page.evaluate(() => (window as any).__VRATA_DEBUG__.sceneEffects
+    .find((effect: { id: string }) => effect.id === "tethered"));
+  const grip = (point: { x: number; y: number; z: number }, pressed: boolean) =>
+    page.evaluate(({ point, pressed }) => (window as any).__VRATA_TEST__.setSyntheticXrState({
+      rightController: point, rightGrip: point, rayDirection: { x: 0, y: 0, z: -1 }, gripPressed: pressed
+    }), { point, pressed });
+  const rest = (await state()).position;
+  await page.evaluate(() => (window as any).__VRATA_TEST__.setSceneReviewPose({
+    position: { x: 1, y: 0, z: 2.15 }, yaw: 0, pitch: 0, fovDegrees: 66
+  }));
+  await grip({ x: rest[0], y: rest[1], z: rest[2] }, true);
+  await expect.poll(async () => [(await state()).holding, (await state()).bursts]).toEqual(["right", 0]);
+  const { eye } = await page.evaluate(() => (window as any).__VRATA_TEST__.getSceneReviewCamera());
+  const held = await state();
+  const mouth = { x: eye[0] - (held.tip[0] - held.position[0]), y: eye[1] - .085, z: eye[2] - .085 };
+  await grip(mouth, true);
+  await expect.poll(async () => (await state()).touching).toBe(true);
+  await expect.poll(async () => (await state()).bursts).toBeGreaterThan(0);
+  await grip(mouth, false);
+  await expect.poll(async () => {
+    const current = await state();
+    return [current.holding, current.touching, current.position];
+  }).toEqual([null, false, rest]);
 }
 
 export async function assertPrivateClip(options: {
@@ -192,10 +231,19 @@ export async function assertPrivateClip(options: {
   if (options.sound) {
     if (!(await audioButton.isVisible())) await page.locator("#meeting-nav-audio").click();
     await expect(audioButton).toHaveAttribute("aria-pressed", "false");
+    await expect(audioButton).toHaveAccessibleName(/^(Scene sounds|Звуки сцены)$/);
+    const off = audioButton.locator('[data-scene-sounds-state="off"]');
+    const on = audioButton.locator('[data-scene-sounds-state="on"]');
+    await expect(off).toBeVisible();
+    await expect(on).toBeHidden();
     expect((await audio()).playing).toBe(false);
     await audioButton.click();
+    await expect(on).toBeVisible();
+    await expect(off).toBeHidden();
     await expect.poll(audio, { timeout: 35_000 }).toEqual({ playing: true, audible: true, microphoneRequests: 0 });
     await audioButton.click();
+    await expect(off).toBeVisible();
+    await expect(on).toBeHidden();
     await expect.poll(async () => (await audio()).playing).toBe(false);
     expect((await state()).playing).toBe(true);
     await audioButton.click();

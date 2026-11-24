@@ -169,6 +169,8 @@ import { createFloorLinkPicker } from "./interaction/floor-link-picker.js";
 import { isWalkablePoint, type SceneFloorArea, type SceneFloorLink } from "@vrata/shared-types";
 import { resolveAvatarViewProfile } from "./avatar/avatar-visibility.js";
 import { createSyntheticLocalAvatarHandFrame, resolveLocalAvatarHandFrame, type LocalAvatarHandFrameResult } from "./avatar/avatar-xr-hands.js";
+import { sampleXrGripPressed } from "./input/xr-grip.js";
+import { resolveXrViewerPose } from "./input/xr-viewer.js";
 import { resolveAvatarXrInput } from "./avatar/avatar-xr-input.js";
 import { setAvatarSandboxStatus } from "./avatar/avatar-sandbox.js";
 import { resetAvatarSession, startAvatarSandboxSession, startLocalAvatarSession } from "./avatar/avatar-session.js";
@@ -779,6 +781,7 @@ let syntheticXrState: {
   rayDirection: { x: number; y: number; z: number };
   axes: { moveX: number; moveY: number; turnX: number; turnY: number };
   triggerPressed: boolean;
+  gripPressed: boolean;
   menuPressed: boolean;
   rayVisible: boolean;
 } | null = null;
@@ -5300,6 +5303,7 @@ const mediaSurfaceTestControls = createMediaSurfaceTestControls({
         turnY: state.axes?.turnY ?? 0
       },
       triggerPressed: state.triggerPressed ?? false,
+      gripPressed: state.gripPressed ?? false,
       menuPressed: state.menuPressed ?? false,
       rayVisible: state.rayVisible ?? false
     } : null;
@@ -6615,6 +6619,7 @@ function sampleRuntimeFrameContext(deltaSeconds: number, nowMs: number): Runtime
           sanitizedAxes: resolved.sanitizedAxes,
           rawAxes: syntheticXrState.axes,
           triggerPressed,
+          gripPressed: { left: false, right: syntheticXrState.gripPressed },
           menuPressed: syntheticXrState.menuPressed,
           rayVisibleLatched: resolved.rayVisibleLatched || syntheticXrState.rayVisible
         }
@@ -6623,6 +6628,7 @@ function sampleRuntimeFrameContext(deltaSeconds: number, nowMs: number): Runtime
 
     const xrFrame = renderer.xr.getFrame();
     const session = xrFrame?.session;
+    const referenceSpace = renderer.xr.getReferenceSpace();
     const inputSources = Array.from(session?.inputSources ?? []);
     const xrInput = resolveAvatarXrInput(inputSources);
     const rightIndex = inputSources.findIndex((source) => source.handedness === "right");
@@ -6647,12 +6653,14 @@ function sampleRuntimeFrameContext(deltaSeconds: number, nowMs: number): Runtime
       xr: {
         frame: xrFrame,
         session,
-        referenceSpace: renderer.xr.getReferenceSpace(),
+        referenceSpace,
+        viewerTransform: xrFrame && referenceSpace ? xrFrame.getViewerPose(referenceSpace)?.transform ?? null : null,
         inputSources,
         profile: xrInput.profile,
         sanitizedAxes: resolved.sanitizedAxes,
         rawAxes: xrInput.axes,
         triggerPressed,
+        gripPressed: sampleXrGripPressed(inputSources),
         // B or Y (xr-standard button 5) on either controller.
         menuPressed: inputSources.some((source) => Boolean(source.gamepad?.buttons?.[5]?.pressed)),
         rayVisibleLatched: resolved.rayVisibleLatched
@@ -6684,10 +6692,7 @@ function createFrameLocomotionHandlers(frameContext: RuntimeFrameContext): Frame
     getSeatRootPosition: (seatId) => {
       const seatAnchor = sceneSeatAnchorMap.get(seatId);
       if (!seatAnchor) return null;
-      const view = seatView.resolve(seatAnchor, renderer.xr.isPresenting, () => {
-        const xr = frameContext.xr;
-        return xr?.referenceSpace ? xr.frame?.getViewerPose(xr.referenceSpace)?.transform : undefined;
-      });
+      const view = seatView.resolve(seatAnchor, renderer.xr.isPresenting, () => frameContext.xr?.viewerTransform ?? undefined);
       seatYaw = view.yaw;
       calibrated = view.calibrated;
       return view.position;
@@ -8108,6 +8113,20 @@ renderer.setAnimationLoop(() => {
   remoteAvatarRuntime.update(delta, debugState);
   // The menu's frames, including the one where a button closes it, reach neither the remote browser nor the room ray.
   const xrMenuOwnsRay = updateXrMenu(frameContext);
+  if (activeSceneEffects?.hasHeldProps()) {
+    const poses = getFrameLocalAvatarHandFrame(frameContext)?.worldHandPoses;
+    const grip = frameContext.xr?.gripPressed;
+    activeSceneEffects.updateHeldProps({
+      nowMs,
+      enabled: frameContext.source === "xr" && !xrMenuOwnsInput && !xrMenuOwnsRay && !sessionControlBlocked,
+      head: resolveXrViewerPose(player, frameContext.xr?.viewerTransform,
+        avatarVrMockEnabled && syntheticXrState && !renderer.xr.isPresenting ? camera : undefined),
+      hands: {
+        left: { pressed: grip?.left ?? false, pose: poses?.leftHand ?? null },
+        right: { pressed: grip?.right ?? false, pose: poses?.rightHand ?? null }
+      }
+    });
+  }
   if (!xrMenuOwnsInput && !xrMenuOwnsRay && !updateRemoteBrowserXrInput(frameContext)) {
     updateInteractionRayState(getInteractionFrameInput(frameContext));
   }
