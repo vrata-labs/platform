@@ -366,7 +366,7 @@ export interface IntegrationOperationOutcome {
 export interface IntegrationStore {
   registerPrivateSceneVersion(version: PrivateSceneVersion): Promise<PrivateSceneVersion | null>;
   getPrivateSceneVersion(tenantId: string, versionId: string): Promise<PrivateSceneVersion | null>;
-  publishInitialPrivateScene(roomId: string, versionId: string, operationId:string): Promise<boolean>;
+  publishPrivateScene(roomId: string, versionId: string, expectedPublishedVersionId: string | null, operationId: string): Promise<boolean>;
   getIntegrationTenant(tenantId: string): Promise<IntegrationTenantRecord | null>;
   upsertIntegrationTenant(input: { tenantId: string; managedBy: string; displayName: string }): Promise<IntegrationTenantRecord | "tenant_mismatch">;
   createManagedRoom(input: Partial<RoomRecord>, managed: ManagedRoomCreateInput): Promise<RoomRecord>;

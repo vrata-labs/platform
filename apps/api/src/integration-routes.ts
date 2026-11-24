@@ -667,17 +667,21 @@ export function createIntegrationRoutes(context: IntegrationRoutesContext) {
         });
       }
       const roomId=publishing![2]!, room=await requireRoom(storage,principal,tenantId,roomId), body=await readJsonBody(request);
-      if (!isPlainObject(body)) throw new IntegrationRequestError("invalid_request","Expected initial publish");
+      if (!isPlainObject(body)) throw new IntegrationRequestError("invalid_request","Expected a version to publish");
       assertOnlyKeys(body,["bundleVersionId","expectedPublishedVersionId"]);
-      if (room.managed?.kind!=="custom" || room.managed.ownerSubject!==approval.ownerSubject || body.bundleVersionId!==room.managed.bundleVersionId ||
-          body.expectedPublishedVersionId!==null) throw new IntegrationRequestError("published_version_mismatch","Only an initial publication of the assigned version is supported");
-      const versionId=room.managed.bundleVersionId!;
+      if (room.managed?.kind!=="custom" || room.managed.ownerSubject!==approval.ownerSubject)
+        throw new IntegrationRequestError("forbidden_scope","Room is not part of this addressed delivery");
+      const versionId=body.bundleVersionId, expected=body.expectedPublishedVersionId;
+      if (typeof versionId!=="string" || !UUID_PATTERN.test(versionId) ||
+          (expected!==null && (typeof expected!=="string" || !UUID_PATTERN.test(expected))))
+        throw new IntegrationRequestError("invalid_request","Expected a version UUID and a previous UUID or null");
       const version=await storage.getPrivateSceneVersion(tenantId,versionId);
       if (!version || version.archiveSha256!==approval.archiveSha256 || version.bundleId!==approval.bundleId || version.version!==approval.version)
         throw new IntegrationRequestError("forbidden_scope","Version is not approved for publication");
       return runOperation(response,storage,{principal,idempotencyKey,kind:"room.publish",resourceType:"room",resourceId:roomId,requestId,
         requestHash:integrationRequestHash("POST",url.pathname,body)},async op=>{
-        if (!await storage.publishInitialPrivateScene(roomId,versionId,op.operationId)) throw new IntegrationRequestError("published_version_mismatch","Room is not awaiting first publication");
+        if (!await storage.publishPrivateScene(roomId,versionId,expected,op.operationId))
+          throw new IntegrationRequestError("published_version_mismatch","The room does not have the expected published version or bundle");
         return {status:200,body:serializeManagedRoom(await requireRoom(storage,principal,tenantId,roomId))};
       });
     }

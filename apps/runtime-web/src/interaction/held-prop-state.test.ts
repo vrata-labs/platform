@@ -14,7 +14,7 @@ test("only a fresh grip in reach holds the handle, until release, tracking loss 
   assert.equal(step(null, grip(.8, false)), null);
   assert.equal(step(grip(.6), grip(.8)), "right", "choose the closest fresh grip");
   assert.equal(step(grip(.6), grip(1.8)), "right");
-  assert.equal(step(grip(.6), grip(2.1)), null, "do not drag the hookah past the tether");
+  assert.equal(step(grip(.6), grip(2.1)), null, "do not drag the held prop past the tether");
   assert.equal(step(null, grip(.8)), null);
   assert.equal(step(null, { pressed: true, position: null }), null);
   assert.equal(step(null, grip(.8)), null, "regaining tracking does not replay the grip");
