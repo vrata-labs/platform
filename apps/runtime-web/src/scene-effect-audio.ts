@@ -21,7 +21,8 @@ export class SceneEffectSound {
   private readonly orientation = new Quaternion();
   private level = 0;
 
-  constructor(private readonly spec: SceneEffectAudio, private readonly node: Object3D, private readonly load: LoadSceneEffectSound) {}
+  constructor(private readonly spec: SceneEffectAudio, private readonly node: Object3D,
+    private readonly load: LoadSceneEffectSound, private readonly loop = true) {}
 
   tick(target: { context: AudioContext; camera: Object3D } | undefined, active: boolean, motionTime: number): void {
     if (!target || target.context.state !== "running" || !active) { this.stop(); return; }
@@ -42,6 +43,7 @@ export class SceneEffectSound {
       }
       return;
     }
+    if (!this.loop && motionTime >= this.buffer.duration) { this.stopVoice(); return; }
     camera.getWorldPosition(this.eye);
     this.node.getWorldPosition(this.delta).sub(this.eye);
     const distance = this.delta.length();
@@ -53,7 +55,7 @@ export class SceneEffectSound {
       const source = this.source = context.createBufferSource();
       volume.gain.value = 0;
       source.buffer = this.buffer;
-      source.loop = true;
+      source.loop = this.loop;
       source.connect(stereo).connect(volume).connect(context.destination);
       source.start(0, motionTime % this.buffer.duration);
     }

@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { startReferenceTemplateFixture } from "./reference-template-fixture.js";
-import { assertPrivateClip, privateClipFixture } from "./private-clip-fixture.js";
+import { assertPrivateClip, assertPrivateHeldProp, privateClipFixture } from "./private-clip-fixture.js";
 
 test.use({ trace: "off", screenshot: "off", video: "off" });
 test("private custom room: same owner can reopen, update and roll back a protected scene", async ({
@@ -232,6 +232,29 @@ test("private custom room: same owner can reopen, update and roll back a protect
     expect((await op(path + `/grants/${current.grantId}/revoke`, { reason: "review complete" })).status()).toBe(200);
     expect((await request.head(current.asset)).status()).toBe(403);
     if (currentAudio) expect((await request.head(currentAudio)).status()).toBe(403);
+    if (!archive) await test.step("grip works in the private room with emulated XR", async () => {
+      const client = await browser.newContext();
+      try {
+        const grant = await permit(subject);
+        expect(grant.status()).toBe(201);
+        const issued = await grant.json();
+        const entry = new URL(issued.entryUrl);
+        entry.searchParams.set("debug", "1");
+        entry.searchParams.set("scenefit", "0");
+        entry.searchParams.set("avatarvrmock", "1");
+        const page = await client.newPage();
+        await page.goto(entry.href);
+        await page.locator("#guest-name-input").fill("Recipient");
+        await page.locator("#guest-enter-without-audio").click({ noWaitAfter: true });
+        await expect.poll(() => page.evaluate(() => {
+          const state = (window as any).__VRATA_DEBUG__;
+          return state?.personalRoom?.isOwner && state?.sceneEffects?.some((e: { id: string }) => e.id === "tethered");
+        }), { timeout: 60_000 }).toBe(true);
+        await assertPrivateHeldProp(page);
+      } finally {
+        await client.close();
+      }
+    });
   } finally {
     await fixture?.close();
     await new Promise<void>((done) => s3.close(() => done()));

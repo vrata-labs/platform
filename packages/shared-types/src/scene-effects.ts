@@ -16,7 +16,27 @@ export interface SceneSpriteEffect {
   audio?: SceneEffectAudio;
 }
 
-export type SceneEffect = SceneClipEffect | SceneSpriteEffect;
+/** The handle is the only movable part. All named nodes refer to the same approved GLB. */
+export interface SceneHeldPropEffect {
+  id: string;
+  kind: "held-prop";
+  root: string;
+  fixture: string;
+  handle: string;
+  tip: string;
+  connector: string;
+  tether: string;
+  restHose: string;
+  soundSource: string;
+  pickupM: number;
+  reachM: number;
+  contactM: number;
+  hoseRadiusM: number;
+  burst: { columns: number; rows: number; durationSeconds: number; intervalSeconds: number };
+  audio?: SceneEffectAudio;
+}
+
+export type SceneEffect = SceneClipEffect | SceneSpriteEffect | SceneHeldPropEffect;
 export interface SceneEffectSwitchState {
   versionId: string;
   switches: { id: string; enabled: boolean }[];
@@ -58,6 +78,9 @@ function isSceneEffectAudio(value: unknown): value is SceneEffectAudio {
 const name = (value: unknown): value is string =>
   typeof value === "string" && /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(value);
 
+const atlasSize = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 16;
+const inRange = (n: unknown, min: number, max: number) => typeof n === "number" && n >= min && n <= max;
+
 export function isSceneEffectSwitchState(value: unknown): value is SceneEffectSwitchState {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const v = value as SceneEffectSwitchState;
@@ -78,6 +101,7 @@ export function isSceneEffects(value: unknown): value is SceneEffect[] {
     switches = new Set<string>();
   const audio = new Map<SceneAudioPath, string>();
   let soundCount = 0;
+  let heldPropCount = 0;
   return value.every((item) => {
     if (
       !item ||
@@ -96,11 +120,23 @@ export function isSceneEffects(value: unknown): value is SceneEffect[] {
     }
     ids.add(item.id);
     roots.add(item.root);
+    if (item.kind === "held-prop") {
+      if (++heldPropCount > 1) return false;
+      const nodes = ["fixture", "handle", "tip", "connector", "tether", "restHose", "soundSource"];
+      if (Object.keys(item).some(k => !["id", "kind", "root", ...nodes, "pickupM", "reachM", "contactM", "hoseRadiusM", "burst", "audio"].includes(k))) return false;
+      const { burst } = item;
+      if (nodes.some(key => !name(item[key]) || switches.has(item[key])) || new Set(nodes.map(key => item[key])).size !== nodes.length ||
+          !inRange(item.pickupM, .05, .5) || !inRange(item.reachM, .5, 3) ||
+          !inRange(item.contactM, .05, .25) || !inRange(item.hoseRadiusM, .002, .03) ||
+          !burst || Object.keys(burst).length !== 4 || !atlasSize(burst.columns) || !atlasSize(burst.rows) ||
+          !inRange(burst.durationSeconds, .3, 6) || !inRange(burst.intervalSeconds, burst.durationSeconds, 20)) return false;
+      for (const key of nodes) switches.add(item[key]);
+      return true;
+    }
     if (item.kind === "sprite-loop") {
       if (Object.keys(item).some(k => !["id", "kind", "root", "atlas", "switch", "audio"].includes(k))) return false;
       const { atlas, switch: control } = item;
-      const size = (n: unknown) => typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 16;
-      if (!atlas || Object.keys(atlas).length !== 3 || !size(atlas.columns) || !size(atlas.rows) ||
+      if (!atlas || Object.keys(atlas).length !== 3 || !atlasSize(atlas.columns) || !atlasSize(atlas.rows) ||
           typeof atlas.cycleSeconds !== "number" || !(atlas.cycleSeconds >= 0.25 && atlas.cycleSeconds <= 16) ||
           !control || Object.keys(control).length !== 4 || !name(control.mount) || !name(control.handle) ||
           control.mount === control.handle || switches.has(control.mount) || switches.has(control.handle) ||

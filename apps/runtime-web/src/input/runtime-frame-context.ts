@@ -12,11 +12,14 @@ export interface RuntimeFrameContext {
     frame?: XRFrame;
     session?: XRSession;
     referenceSpace: XRReferenceSpace | null;
+    viewerTransform?: XRRigidTransform | null;
     inputSources: XRInputSource[];
     profile: string;
     sanitizedAxes: XrAxesSample;
     rawAxes: XrAxesSample;
     triggerPressed: boolean;
+    /** Squeeze is distinct from the ray trigger; use the frame's sample for scene props. */
+    gripPressed?: { left: boolean; right: boolean };
     /** B or Y on either controller: opens and closes the XR menu. */
     menuPressed?: boolean;
     rayVisibleLatched: boolean;
