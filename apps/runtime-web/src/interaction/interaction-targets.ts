@@ -5,6 +5,7 @@ import type { SceneBundleSeatAnchor } from "../scene-bundle.js";
 
 export type InteractionTarget =
   | { kind: "none" }
+  | { kind: "effect-switch"; effectId: string; point: THREE.Vector3 }
   | { kind: "floor"; point: THREE.Vector3; destination?: FloorPoint }
   | { kind: "seat"; point: THREE.Vector3; seatId: string; seatAnchor: SceneBundleSeatAnchor };
 

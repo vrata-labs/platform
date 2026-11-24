@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { unpackPersonalScene, validateSceneBundlePath } from "@vrata/asset-pipeline";
-import type { SceneAudioPath } from "@vrata/shared-types";
+import { isSceneEffects, type SceneAudioPath, type SceneEffectSwitchState } from "@vrata/shared-types";
 import type { DocumentUploadStorage } from "./upload-storage-config.js";
 import { readPrivateUploadedObject, writeDocumentObject } from "./uploaded-object-storage.js";
 
@@ -23,6 +23,7 @@ export interface PrivateSceneVersion {
   contentHash: string;
   sizeBytes: number;
   files: PrivateSceneFile[];
+  effectSwitches?: SceneEffectSwitchState["switches"];
   state: "candidate";
   createdAt: string;
   validation: { issues: Array<{ severity: "warning"; code: string; path: string }> };
@@ -87,6 +88,9 @@ export async function preparePrivateScene(
 ): Promise<PrivateSceneVersion> {
   if (privateSceneHash(archive) !== approval.archiveSha256) throw new Error("private_scene_release_not_approved");
   const { manifest, model, audio } = unpackPersonalScene(archive);
+  const effects: unknown = JSON.parse(manifest.toString()).sceneEffects;
+  const effectSwitches = isSceneEffects(effects) ? effects.flatMap(effect =>
+    effect.kind === "sprite-loop" ? [{ id: effect.id, enabled: effect.switch.initiallyOn }] : []) : [];
   const assets = [
     ["scene.json", manifest, "application/json"],
     ["scene.glb", model, "model/gltf-binary"],
@@ -128,6 +132,7 @@ export async function preparePrivateScene(
     contentHash: `sha256:${privateSceneHash(JSON.stringify(files))}`,
     sizeBytes: files.reduce((sum, file) => sum + file.sizeBytes, 0),
     files,
+    ...(effectSwitches.length ? { effectSwitches } : {}),
     state: "candidate",
     createdAt: new Date().toISOString(),
     validation: {

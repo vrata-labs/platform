@@ -1,4 +1,4 @@
-import { getRoomPermissions, isRoomPermission, isRoomRole, type RoomRole, type RoomPermission } from "@vrata/shared-types";
+import { getRoomPermissions, isRoomPermission, isRoomRole, isSceneEffectSwitchState, type RoomRole, type RoomPermission } from "@vrata/shared-types";
 import { SocketAuthorityError, type ReadIdentityProtocolPolicy } from "./identity-boundary.js";
 import type { ParticipantAccessState } from "./state.js";
 
@@ -16,6 +16,8 @@ export interface VerifiedRoomSessionV2 {
   permissions: RoomPermission[];
   sceneMediaSurfaces?: ParticipantAccessState["sceneMediaSurfaces"];
   roomTemplate?: ParticipantAccessState["roomTemplate"];
+  sceneEffectVersionId?: string | null;
+  sceneEffectSwitches?: ParticipantAccessState["sceneEffectSwitches"];
 }
 
 export type VerifiedParticipantAuthority = Pick<VerifiedRoomSessionV2,
@@ -60,6 +62,8 @@ function validSession(value: unknown, roomId: string, participantId: string): va
   const result = value as VerifiedRoomSessionV2;
   const permissions = isRoomRole(result.role) ? getRoomPermissions(result.role) : null;
   return result.roomId === roomId && result.participantId === participantId
+    && (result.sceneEffectSwitches === undefined || (isSceneEffectSwitchState(result.sceneEffectSwitches) &&
+      result.sceneEffectSwitches.versionId === result.sceneEffectVersionId))
     && typeof result.tenantId === "string" && result.tenantId.length > 0
     && typeof result.identityId === "string" && result.identityId.length > 0
     && typeof result.sessionId === "string" && result.sessionId.length > 0

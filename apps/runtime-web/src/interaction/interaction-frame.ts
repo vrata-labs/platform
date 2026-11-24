@@ -19,6 +19,8 @@ import { isSeatMarkerBlocked, resolveInteractionTargetFromRay, type InteractionT
 
 import type { FloorLinkPicker } from "./floor-link-picker.js";
 
+type EffectSwitchPicker = (ray: THREE.Ray, maxDistance: number) => Extract<InteractionTarget, { kind: "effect-switch" }> | undefined;
+
 interface Vector3Like {
   x: number;
   y: number;
@@ -53,6 +55,7 @@ export interface RuntimeInteractionTargetInput {
   teleportFloorY: number;
   floorAreas?: SceneFloorArea[];
   pickFloorLink?: FloorLinkPicker;
+  pickEffectSwitch?: EffectSwitchPicker;
   maxDistance?: number;
 }
 
@@ -64,6 +67,7 @@ export interface RuntimeInteractionFrameInput extends RuntimeInteractionRayInput
   teleportFloorY: number;
   floorAreas?: SceneFloorArea[];
   pickFloorLink?: FloorLinkPicker;
+  pickEffectSwitch?: EffectSwitchPicker;
   maxDistance?: number;
   view: InteractionRayView;
   state: InteractionRayDebugState;
@@ -120,6 +124,9 @@ export function resolveInteractionTargetForRay(input: RuntimeInteractionTargetIn
     maxDistance: input.maxDistance
   });
   const link = input.pickFloorLink?.(input.ray, input.teleportFloorY, input.maxDistance ?? 20);
+  const marker = input.pickEffectSwitch?.(input.ray, input.maxDistance ?? 20);
+  if (marker && [target, link].every(other => !other || other.kind === "none" ||
+    marker.point.distanceToSquared(input.ray.origin) < other.point.distanceToSquared(input.ray.origin))) return marker;
   if (link && (target.kind !== "seat" || link.point.distanceToSquared(input.ray.origin) < target.point.distanceToSquared(input.ray.origin))) return link;
   return target;
 }
@@ -144,6 +151,7 @@ export function updateInteractionRayState(input: RuntimeInteractionFrameInput): 
   const target = resolveInteractionTargetForRay({
     ray: resolvedRay.ray,
     pickFloorLink: input.pickFloorLink,
+    pickEffectSwitch: input.pickEffectSwitch,
     forcedSeatId: input.forcedSeatId,
     seatMarkerHitMeshes: input.seatMarkerHitMeshes,
     seatAnchorMap: input.seatAnchorMap,

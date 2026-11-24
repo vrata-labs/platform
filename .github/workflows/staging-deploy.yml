@@ -447,6 +447,7 @@ jobs:
     needs: deploy
     # Rutube is a third-party service: it reports after every successful deploy and never blocks or rolls back.
     if: needs.deploy.result == 'success'
+    continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     concurrency:

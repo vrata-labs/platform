@@ -8,9 +8,12 @@ interface Descriptor {
   purpose: string;
   baseUrl: string;
   manifestUrl: string;
+  issuedAt: string;
   expiresAt: string;
   refreshAfter: string;
 }
+
+type CachedDescriptor = { baseUrl: string; refreshAt: number };
 
 /** Credentials go only to the same-origin API. The separate asset origin receives a short-lived view capability,
  * never the room session or cookies. Only non-secret errors/paths leave this closure. */
@@ -22,10 +25,11 @@ export function privateSceneSource(
   apiFetch: typeof fetch = fetch,
   assetFetch: typeof fetch = fetch
 ): PrivateSceneFileFetch {
-  let current: Descriptor | undefined, pending: Promise<Descriptor> | undefined;
-  async function refresh(): Promise<Descriptor> {
+  let current: CachedDescriptor | undefined, pending: Promise<CachedDescriptor> | undefined;
+  async function refresh(): Promise<CachedDescriptor> {
     const token = session();
     if (!token) throw new Error("private_scene_session_required");
+    const requestedAt = performance.now();
     const r = await apiFetch(endpoint, {
       method: "POST",
       headers: { authorization: `Bearer ${token}` },
@@ -38,7 +42,8 @@ export function privateSceneSource(
     const d = (await r.json()) as Descriptor;
     const base = new URL(d.baseUrl);
     const local = base.protocol === "http:" && ["127.0.0.1", "localhost"].includes(base.hostname);
-    const expires = Date.parse(d.expiresAt),
+    const issued = Date.parse(d.issuedAt),
+      expires = Date.parse(d.expiresAt),
       renew = Date.parse(d.refreshAfter);
     if (
       d.purpose !== "view" ||
@@ -53,16 +58,20 @@ export function privateSceneSource(
       base.hash ||
       !/^\/c\/[A-Za-z0-9_-]{43,2048}\/$/.test(base.pathname) ||
       d.manifestUrl !== `${base.href}scene.json` ||
+      !Number.isFinite(issued) ||
       !Number.isFinite(expires) ||
       !Number.isFinite(renew) ||
-      expires <= Date.now() ||
+      expires <= issued ||
+      renew < issued ||
       renew > expires
     )
       throw new Error("private_scene_descriptor_invalid");
-    return (current = d);
+    // Use elapsed time, not the device clock. Counting request latency can only refresh early;
+    // whether the capability is actually expired is decided by the asset server.
+    return (current = { baseUrl: d.baseUrl, refreshAt: requestedAt + (renew - issued) });
   }
   function descriptor() {
-    return current && Date.parse(current.refreshAfter) > Date.now()
+    return current && current.refreshAt > performance.now()
       ? Promise.resolve(current)
       : (pending ??= refresh().finally(() => {
           pending = undefined;

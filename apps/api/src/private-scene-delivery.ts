@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { isSceneAudioPath } from "@vrata/shared-types";
+import { isSceneAudioPath, isSceneEffectSwitchState } from "@vrata/shared-types";
 import type { RoomRecord, Storage } from "./storage-contracts.js";
 import { getManagedAccessBlockReason, managedRoomCutoffMs } from "./room-session-control.js";
 import { privateSceneApproval, privateSceneStore, readPrivateSceneFile, type PrivateSceneVersion } from "./private-scene-release.js";
@@ -62,6 +62,14 @@ export function servesPrivateVersion(room: RoomRecord | null, version: PrivateSc
     !getManagedAccessBlockReason(room)
   );
 }
+
+export async function privateSceneSwitchDefaults(storage: Storage, room: RoomRecord) {
+  if (room.managed?.kind !== "custom" || !room.managed.publishedVersionId) return;
+  const v = await storage.getPrivateSceneVersion(room.tenantId, room.managed.publishedVersionId);
+  if (!v || !servesPrivateVersion(room, v)) return;
+  const state = { versionId: v.bundleVersionId, switches: v.effectSwitches };
+  return isSceneEffectSwitchState(state) && state.switches.length ? state : undefined;
+}
 export function privateDescriptor(
   room: RoomRecord,
   version: PrivateSceneVersion,
@@ -93,6 +101,7 @@ export function privateDescriptor(
     purpose: "view",
     baseUrl,
     manifestUrl: baseUrl + "scene.json",
+    issuedAt: new Date(now).toISOString(),
     expiresAt: new Date(exp).toISOString(),
     refreshAfter: new Date(Math.max(now, exp - 30_000)).toISOString(),
     maxRefreshAttempts: 1

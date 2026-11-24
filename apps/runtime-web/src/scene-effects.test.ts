@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Group, AnimationClip, VectorKeyframeTrack } from "three";
-import { isSceneClipEffects, type SceneClipEffect } from "@vrata/shared-types";
+import { isSceneEffects, type SceneClipEffect } from "@vrata/shared-types";
 import { SceneEffects } from "./scene-effects.js";
 import { sceneEffectGain } from "./scene-effect-audio.js";
 
@@ -55,7 +55,7 @@ test("foreign tracks, duplicate bindings, URLs and undeclared fields are rejecte
     [{ ...spec, clips: ["clip", "clip"] }],
     [{ ...spec, url: "other.glb" }],
   ]) {
-    assert.equal(isSceneClipEffects(invalid), false);
+    assert.equal(isSceneEffects(invalid), false);
   }
 });
 

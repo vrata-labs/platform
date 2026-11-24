@@ -59,6 +59,7 @@ import { createMediaActionBarrier } from "./media/media-action-barrier.js";
 import { planBaseMedia } from "./media/media-token-error.js";
 import { createMediaParticipantResolver, planRemoteMicrophones, sameMicrophoneOwner } from "./media/media-participant.js";
 import { createRoomIdentityTab } from "./identity-session-tab.js";
+import { createSceneSwitchRuntime } from "./interaction/scene-switch-runtime.js";
 import { redeemRoomRecovery } from "./identity-recovery.js";
 import { probeDocumentMedia } from "./document-media-probe.js";
 import { createRuntimeDebugState } from "./runtime-debug-state.js";
@@ -74,6 +75,7 @@ import {
   sendAvatarPoseFrame,
   sendAvatarReliableState,
   sendParticipantUpdate,
+  sendSceneEffectSwitch,
   type RoomStateClient,
   type RoomStateSnapshot,
   type SurfaceCommandResult
@@ -782,6 +784,10 @@ let syntheticXrState: {
 } | null = null;
 let activeSceneBundleRoot: THREE.Object3D | null = null;
 let activeSceneEffects: import("./scene-effects.js").SceneEffects | undefined;
+const sceneSwitches = createSceneSwitchRuntime({
+  canActivate: () => !sessionControlBlocked && roomStateConnected && debugState.access.role === "host",
+  send: command => { if (roomStateClient) sendSceneEffectSwitch(roomStateClient, command); }
+});
 let sceneSoundsRequested = false;
 let avatarSandboxRegistry: ReturnType<typeof createAvatarRegistry> | null = null;
 let localAvatarController: LocalAvatarController | null = null;
@@ -2452,6 +2458,7 @@ function handleRoomSnapshot(snapshot: RoomStateSnapshot): void {
   roomStateServerOffsetMs = snapshot.serverTimeMs - Date.now();
   roomSeatOccupancy = { ...(snapshot.seatOccupancy ?? {}) };
   roomMediaObjects = snapshot.mediaObjects;
+  sceneSwitches.update(snapshot.sceneEffectSwitches);
   surfaceStopRevisionSupported = snapshot.capabilities?.surfaceStopRevision === true;
   seatCommandCorrelationSupported = snapshot.capabilities?.seatCommandCorrelation === true;
   roomStateOccupancySeen = true;
@@ -2614,6 +2621,7 @@ const executeRuntimeCommandList = createRuntimeCommandExecutor({
 const interactionTargetPerformer = createInteractionTargetPerformer({
   planner: interactionCommandPlanner,
   executeCommands: executeRuntimeCommandList,
+  activateEffectSwitch: sceneSwitches.activate,
   getContext: () => ({
     currentSeatId: getCurrentSeatId(),
     pendingSeatId: getPendingSeatId(),
@@ -2647,6 +2655,7 @@ function getInteractionFrameInput(frameContext: RuntimeFrameContext, options: { 
     teleportFloorY: interactionFloorY(),
     floorAreas: sceneFloorAreas,
     pickFloorLink,
+    pickEffectSwitch: sceneSwitches.pick,
     maxDistance: 18,
     view: interactionRayView,
     state: debugState.interactionRay,
@@ -7886,6 +7895,7 @@ renderer.domElement.addEventListener("click", (event) => {
     teleportFloorY: interactionFloorY(),
     floorAreas: sceneFloorAreas,
     pickFloorLink,
+    pickEffectSwitch: sceneSwitches.pick,
     maxDistance: 18,
     state: debugState.interactionRay,
     mode: "cursor",
@@ -8027,6 +8037,7 @@ window.addEventListener("resize", () => {
 
 window.addEventListener("beforeunload", () => {
   activeSceneEffects?.dispose();
+  sceneSwitches.bind(undefined);
   if (!sessionControlBlocked) void removePresence(apiBaseUrl, roomId, participantId, roomStateAccessToken).catch(() => undefined);
   detachVideoTrack();
   for (const surfaceId of Array.from(mediaSurfaceViews.keys())) {
@@ -8467,6 +8478,7 @@ async function main(): Promise<void> {
     activeSceneBundleRoot = sceneResult.activeSceneBundleRoot;
     activeSceneEffects?.dispose();
     activeSceneEffects = sceneResult.effects;
+    sceneSwitches.bind(activeSceneEffects, boot.privateScene?.bundleVersionId);
     sceneSoundsButton.hidden = !activeSceneEffects?.hasAudio();
     syncSceneSounds();
     if (activeSceneBundleRoot) sceneFrameReadiness.sceneAttached();
