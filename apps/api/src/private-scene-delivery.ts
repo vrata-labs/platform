@@ -101,6 +101,7 @@ export function privateDescriptor(
     purpose: "view",
     baseUrl,
     manifestUrl: baseUrl + "scene.json",
+    issuedAt: new Date(now).toISOString(),
     expiresAt: new Date(exp).toISOString(),
     refreshAfter: new Date(Math.max(now, exp - 30_000)).toISOString(),
     maxRefreshAttempts: 1
