@@ -592,6 +592,21 @@ canvas {
   gap: 6px;
 }
 
+.scene-sounds-state {
+  margin-inline-start: 0.3rem;
+  font-weight: 600;
+}
+
+#scene-sounds[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: #153e56;
+}
+
+#scene-sounds[aria-pressed="false"] [data-scene-sounds-state="on"],
+#scene-sounds[aria-pressed="true"] [data-scene-sounds-state="off"] {
+  display: none;
+}
+
 .audio-panel {
   margin-top: 14px;
   display: grid;
