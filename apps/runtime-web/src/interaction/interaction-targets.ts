@@ -90,6 +90,8 @@ export function resolveInteractionTarget(input: {
   }
   if (input.floorAreas) {
     if (input.ray.direction.y >= 0 || !isWalkablePoint(input.floorAreas, floorPoint)) return { kind: "none" };
+    // The authored height identifies the current floor. Ray intersection can round it.
+    floorPoint.y = input.teleportFloorY;
   }
   return {
     kind: "floor",
