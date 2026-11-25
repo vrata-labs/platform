@@ -4,6 +4,7 @@ import * as THREE from "three";
 
 import type { RuntimeFrameContext } from "../input/runtime-frame-context.js";
 import type { SceneBundleSeatAnchor } from "../scene-bundle.js";
+import { createFloorLinkPicker } from "./floor-link-picker.js";
 import { createInteractionRayView, type InteractionRayDebugState } from "./interaction-ray-view.js";
 import { resolveInteractionTargetForRay, updateInteractionRayState, type RuntimeInteractionFrameInput } from "./interaction-frame.js";
 
@@ -143,4 +144,36 @@ test("authored floors limit both seat hits and destinations; a landing displays 
   ray.origin.set(0, 5, 0);
   const level = resolveInteractionTargetForRay({ ...input, teleportFloorY: 4 });
   assert.ok(level.kind === "floor" && level.point.y === 4 && !level.destination);
+});
+
+test("a regular teleport on a fractional floor preserves the active stair link", () => {
+  const lower = { y: 0.001, minX: -3, maxX: 1, minZ: -1, maxZ: 1 };
+  const upper = { ...lower, y: 3.201 };
+  const stairs = new THREE.Mesh(new THREE.BoxGeometry(1, 0.2, 1));
+  stairs.name = "stairs";
+  stairs.position.set(0, 0.6, -3);
+  stairs.updateMatrixWorld(true);
+  const destination = { x: 0, y: upper.y, z: 0 };
+  const input = {
+    teleportFloorY: lower.y, floorAreas: [lower, upper],
+    seatAnchors: [], seatAnchorMap: new Map(), seatMarkerHitMeshes: [],
+    raycaster: new THREE.Raycaster(),
+    pickFloorLink: createFloorLinkPicker(stairs, [{ node: stairs.name, fromY: lower.y, destination }])
+  };
+  const start = new THREE.Vector3(-2, lower.y + 1.6, 0);
+  const landing = new THREE.Vector3(-1, lower.y, 0);
+  const floor = resolveInteractionTargetForRay({
+    ...input,
+    ray: new THREE.Ray(start, landing.sub(start).normalize())
+  });
+  assert.ok(floor.kind === "floor" && !floor.destination);
+
+  // The runtime remembers the height of the ordinary teleport as its active level.
+  const eye = floor.point.clone().add(new THREE.Vector3(0, 1.6, 0));
+  const stair = resolveInteractionTargetForRay({
+    ...input, teleportFloorY: floor.point.y,
+    ray: new THREE.Ray(eye, stairs.position.clone().sub(eye).normalize())
+  });
+  assert.ok(stair.kind === "floor");
+  assert.deepEqual(stair.destination, destination);
 });
