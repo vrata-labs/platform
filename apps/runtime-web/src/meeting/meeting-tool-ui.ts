@@ -57,8 +57,11 @@ export function createMeetingToolUi(input: { document: Document; confirm(): Prom
       if (state.phase === "confirm" && state.plan) {
         const old = contentNames[state.plan.previous?.type ?? ""] ?? "current content";
         const next = state.plan.intent.kind === "board" ? "whiteboard" : state.plan.intent.kind === "screen" ? "screen share" : "selected document";
-        explanation.textContent = `Stop the ${old} on “${safeLabel(state.plan.label)}” and start the ${next}?`
-          + (state.plan.previous?.type === "markdown-board" || state.plan.previous?.type === "whiteboard" ? " Its current notes or strokes will be removed from the live surface." : "");
+        const replacesBoard = state.plan.previous?.type === "markdown-board" || state.plan.previous?.type === "whiteboard";
+        const boardMessage = state.plan.keepsWhiteboardStrokes
+          ? " The drawing will return when you open the whiteboard on this surface."
+          : replacesBoard ? " Its current notes or strokes will be removed from the live surface." : "";
+        explanation.textContent = `Stop the ${old} on “${safeLabel(state.plan.label)}” and start the ${next}?` + boardMessage;
         confirm.textContent = state.plan.intent.kind === "screen" ? "Choose screen, then replace" : "Stop and replace";
         if (!dialog.open) { restoreFocus = document.activeElement as HTMLElement | null; dialog.showModal(); cancel.focus(); }
       } else if (dialog.open) { dialog.close(); restore(state.phase !== "idle"); }

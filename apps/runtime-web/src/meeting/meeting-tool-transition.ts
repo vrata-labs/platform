@@ -13,6 +13,7 @@ export interface MeetingToolContext {
   screenEnabled: boolean;
   documentsEnabled: boolean;
   stopRevisionSupported: boolean;
+  whiteboardResumeSupported?: boolean;
   xrActive: boolean;
   selectedSurfaceId: string;
   selectedDocumentId: string | null;
@@ -34,6 +35,7 @@ export interface MeetingToolPlan {
   label: string;
   previous: { objectId: string; revision: number; type: string; ownerParticipantId: string } | null;
   replace: boolean;
+  keepsWhiteboardStrokes: boolean;
 }
 export type MeetingToolDecision = { kind: "blocked"; reason: MeetingToolBlock } | { kind: "ready" | "confirm"; plan: MeetingToolPlan };
 const replaceable = new Set(["pdf-presentation", "image-viewer", "video-player", "screen-share", "whiteboard", "markdown-board"]);
@@ -69,7 +71,8 @@ export function planMeetingTool(context: MeetingToolContext, intent: MeetingTool
   if (replace && !context.stopRevisionSupported) return { kind: "blocked", reason: "replacement-unsupported" };
   if (replace && context.xrActive) return { kind: "blocked", reason: "replacement-unavailable-xr" };
   const plan: MeetingToolPlan = { intent: { ...intent }, leaseKey: context.leaseKey, surfaceId: target.surfaceId, requestedSelection: context.selectedSurfaceId,
-    label: target.label, replace, previous: previous ? { objectId: previous.objectId, revision: previous.revision,
+    label: target.label, replace, keepsWhiteboardStrokes: previous?.type === "whiteboard" && context.whiteboardResumeSupported === true,
+    previous: previous ? { objectId: previous.objectId, revision: previous.revision,
       type: previous.type, ownerParticipantId: previous.ownerParticipantId } : null };
   return { kind: replace ? "confirm" : "ready", plan };
 }
@@ -119,6 +122,7 @@ export function createMeetingToolTransition(input: {
     const current = input.current();
     if (ticket !== generation || plan.leaseKey !== current.leaseKey || authorize(current, plan.intent)) throw new MeetingToolTransitionError("context-changed");
     if (plan.replace && (!current.stopRevisionSupported || current.xrActive)) throw new MeetingToolTransitionError("context-changed");
+    if (plan.keepsWhiteboardStrokes && !current.whiteboardResumeSupported) throw new MeetingToolTransitionError("context-changed");
     const surface = current.surfaces?.[plan.surfaceId];
     const type = plan.intent.kind === "board" ? "whiteboard" : plan.intent.kind === "screen" ? "screen-share" : plan.intent.objectType;
     if (!surface || !current.physicalSurfaceIds.has(plan.surfaceId) || surface.visible === false || !surface.allowedObjectTypes.includes(type)

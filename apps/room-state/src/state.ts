@@ -4,6 +4,7 @@ import {
   PDF_PRESENTATION_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
   VIDEO_PLAYER_OBJECT_TYPE,
+  WHITEBOARD_OBJECT_TYPE,
   MARKDOWN_BOARD_ALLOWED_COLORS,
   MARKDOWN_BOARD_MAX_NOTES,
   MARKDOWN_BOARD_MAX_TEXT_LENGTH,
@@ -64,6 +65,7 @@ export interface RoomState {
   participants: ParticipantState[];
   seatOccupancy: SeatOccupancyState;
   mediaObjects: RoomMediaObjectsState;
+  inactiveWhiteboardStrokes?: ReadonlyMap<string, WhiteboardStroke[]>;
   roomTemplate?: RoomTemplateSessionContext;
   sceneEffectSwitches?: import("@vrata/shared-types").SceneEffectSwitchState;
 }
@@ -276,10 +278,10 @@ function createScreenShareState(ownerParticipantId: string, surfaceId: string): 
   };
 }
 
-function createWhiteboardState(): WhiteboardState {
+function createWhiteboardState(strokes: WhiteboardStroke[] = []): WhiteboardState {
   return {
     status: "active",
-    strokes: [],
+    strokes,
     revision: 0,
     lastInputEventId: null
   };
@@ -349,12 +351,12 @@ function createVideoPlayerState(): VideoPlayerState {
   };
 }
 
-function createInitialMediaObjectState(stateKind: MediaObjectStateKind, ownerParticipantId: string, surfaceId: string): SurfaceTestCardState | ScreenShareObjectState | WhiteboardState | MarkdownBoardState | RemoteBrowserObjectState | PdfPresentationState | ImageViewerState | VideoPlayerState {
+function createInitialMediaObjectState(stateKind: MediaObjectStateKind, ownerParticipantId: string, surfaceId: string, savedStrokes?: WhiteboardStroke[]): SurfaceTestCardState | ScreenShareObjectState | WhiteboardState | MarkdownBoardState | RemoteBrowserObjectState | PdfPresentationState | ImageViewerState | VideoPlayerState {
   if (stateKind === "screen-share") {
     return createScreenShareState(ownerParticipantId, surfaceId);
   }
   if (stateKind === "whiteboard") {
-    return createWhiteboardState();
+    return createWhiteboardState(savedStrokes);
   }
   if (stateKind === "markdown-board") {
     return createMarkdownBoardState();
@@ -1376,7 +1378,14 @@ export function createMediaObject(state: RoomState, participantId: string, input
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "surface-occupied", surfaceId: input.surfaceId, objectId: surface.activeObjectId, objectType: input.objectType });
   }
 
-  const objectState = createInitialMediaObjectState(definition.stateKind, participantId, input.surfaceId);
+  let inactiveWhiteboardStrokes = state.inactiveWhiteboardStrokes;
+  const savedStrokes = definition.stateKind === "whiteboard" ? inactiveWhiteboardStrokes?.get(input.surfaceId) : undefined;
+  if (savedStrokes && inactiveWhiteboardStrokes) {
+    const remaining = new Map(inactiveWhiteboardStrokes);
+    remaining.delete(input.surfaceId);
+    inactiveWhiteboardStrokes = remaining.size > 0 ? remaining : undefined;
+  }
+  const objectState = createInitialMediaObjectState(definition.stateKind, participantId, input.surfaceId, savedStrokes);
   const object: MediaObjectInstance<SurfaceTestCardState | ScreenShareObjectState | WhiteboardState | MarkdownBoardState | RemoteBrowserObjectState | PdfPresentationState | ImageViewerState | VideoPlayerState> = {
     objectId: input.objectId,
     type: input.objectType,
@@ -1403,7 +1412,7 @@ export function createMediaObject(state: RoomState, participantId: string, input
     }
   };
   return {
-    room: { ...state, mediaObjects: nextMediaObjects },
+    room: { ...state, mediaObjects: nextMediaObjects, inactiveWhiteboardStrokes },
     result: createMediaObjectCommandResult({
       accepted: true,
       commandId: input.commandId,
@@ -1446,6 +1455,13 @@ export function stopMediaObject(state: RoomState, participantId: string, input: 
 
   const nextObjects = { ...mediaObjects.objects };
   delete nextObjects[input.objectId];
+  let inactiveWhiteboardStrokes = state.inactiveWhiteboardStrokes;
+  if (object.type === WHITEBOARD_OBJECT_TYPE) {
+    const strokes = (object.state as WhiteboardState).strokes;
+    if (strokes.length > 0) {
+      inactiveWhiteboardStrokes = new Map(inactiveWhiteboardStrokes).set(input.surfaceId, strokes);
+    }
+  }
   const nextMediaObjects: RoomMediaObjectsState = {
     surfaces: {
       ...mediaObjects.surfaces,
@@ -1457,7 +1473,7 @@ export function stopMediaObject(state: RoomState, participantId: string, input: 
     objects: nextObjects
   };
   return {
-    room: { ...state, mediaObjects: nextMediaObjects },
+    room: { ...state, mediaObjects: nextMediaObjects, inactiveWhiteboardStrokes },
     result: createMediaObjectCommandResult({
       accepted: true,
       commandId: input.commandId,

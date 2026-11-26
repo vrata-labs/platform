@@ -511,7 +511,7 @@ function ensureRoom(server: RoomStateServer, roomId: string): RoomState {
 
 function broadcastRoom(server: RoomStateServer, roomId: string): void {
   const room = server.rooms.get(roomId);
-  const payload = JSON.stringify({ type: "room_state", serverTimeMs: Date.now(), capabilities: { surfaceStopRevision: 1, seatCommandCorrelation: 1 }, room: room ? serializeRoomState(room) : null });
+  const payload = JSON.stringify({ type: "room_state", serverTimeMs: Date.now(), capabilities: { surfaceStopRevision: 1, seatCommandCorrelation: 1, whiteboardResume: 1 }, room: room ? serializeRoomState(room) : null });
   for (const client of server.clients.get(roomId) ?? []) {
     if (client.readyState === client.OPEN) {
       client.send(payload);

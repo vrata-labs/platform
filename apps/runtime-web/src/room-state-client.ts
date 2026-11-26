@@ -13,7 +13,7 @@ export interface RoomStateSnapshot {
   seatOccupancy: Record<string, string>;
   mediaObjects: RoomMediaObjectsState;
   sceneEffectSwitches?: SceneEffectSwitchState;
-  capabilities?: { surfaceStopRevision?: boolean; seatCommandCorrelation?: boolean };
+  capabilities?: { surfaceStopRevision?: boolean; seatCommandCorrelation?: boolean; whiteboardResume?: boolean };
 }
 
 export interface SeatClaimResult { seatId: string; accepted: boolean; occupantId: string | null; previousSeatId: string | null; commandId?: string }
@@ -91,7 +91,7 @@ export function connectRoomState(
       const payload = JSON.parse(String(event.data)) as {
         type?: string;
         serverTimeMs?: unknown;
-        capabilities?: { surfaceStopRevision?: unknown; seatCommandCorrelation?: unknown };
+        capabilities?: { surfaceStopRevision?: unknown; seatCommandCorrelation?: unknown; whiteboardResume?: unknown };
         room?: Omit<RoomStateSnapshot, "serverTimeMs">;
         reliableState?: unknown;
         poseFrame?: unknown;
@@ -124,9 +124,11 @@ export function connectRoomState(
           seatOccupancy: payload.room.seatOccupancy ?? {},
           mediaObjects: payload.room.mediaObjects ?? createDefaultRoomMediaObjectsState(payload.room.roomId),
           ...(isSceneEffectSwitchState(payload.room.sceneEffectSwitches) ? { sceneEffectSwitches: payload.room.sceneEffectSwitches } : {}),
-          ...(payload.capabilities?.surfaceStopRevision === 1 || payload.capabilities?.seatCommandCorrelation === 1 ? { capabilities: {
+          ...(payload.capabilities?.surfaceStopRevision === 1 || payload.capabilities?.seatCommandCorrelation === 1
+            || payload.capabilities?.whiteboardResume === 1 ? { capabilities: {
             ...(payload.capabilities.surfaceStopRevision === 1 ? { surfaceStopRevision: true } : {}),
-            ...(payload.capabilities.seatCommandCorrelation === 1 ? { seatCommandCorrelation: true } : {}) } } : {})
+            ...(payload.capabilities.seatCommandCorrelation === 1 ? { seatCommandCorrelation: true } : {}),
+            ...(payload.capabilities.whiteboardResume === 1 ? { whiteboardResume: true } : {}) } } : {})
         });
         return;
       }
