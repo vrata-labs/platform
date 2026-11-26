@@ -1554,6 +1554,7 @@ function roomStateAuthorityKey(): string | null {
     [...debugState.access.permissions].sort(), debugState.personalRoom.isOwner]);
 }
 let surfaceStopRevisionSupported = false;
+let whiteboardResumeSupported = false;
 // Seat claim/release correlation announced by room-state, and whether this connection delivered occupancy yet.
 let seatCommandCorrelationSupported = false;
 let roomStateOccupancySeen = false;
@@ -2463,6 +2464,7 @@ function handleRoomSnapshot(snapshot: RoomStateSnapshot): void {
   roomMediaObjects = snapshot.mediaObjects;
   sceneSwitches.update(snapshot.sceneEffectSwitches);
   surfaceStopRevisionSupported = snapshot.capabilities?.surfaceStopRevision === true;
+  whiteboardResumeSupported = snapshot.capabilities?.whiteboardResume === true;
   seatCommandCorrelationSupported = snapshot.capabilities?.seatCommandCorrelation === true;
   roomStateOccupancySeen = true;
   if (firstSnapshot) void flushDeferredScreenShareStops();
@@ -4765,7 +4767,7 @@ function initializeMeetingTools(boot: { templateSurfaces?: RoomTemplateSurface[]
     blocked: sessionControlBlocked || Boolean(runtimeSessionGate.reason) || roomPageSuspended || roomStateRenewal.expired(), connected: roomStateConnected,
     participantId, permissions: debugState.access.permissions, screenSupported: shareMockEnabled || browserMediaCapabilities.screenShare.supported,
     screenEnabled: shareMockEnabled || runtimeFlags.screenShare, documentsEnabled: runtimeFlags.documentsEnabled,
-    stopRevisionSupported: surfaceStopRevisionSupported, xrActive: renderer.xr.isPresenting,
+    stopRevisionSupported: surfaceStopRevisionSupported, whiteboardResumeSupported, xrActive: renderer.xr.isPresenting,
     selectedSurfaceId: selectedMediaSurfaceId, selectedDocumentId: selectedDocument()?.documentId ?? null,
     selectedDocumentChecksum: selectedDocument()?.checksum ?? null, documents: roomDocuments,
     physicalSurfaceIds: new Set([...mediaSurfaceViews].filter(([, surface]) => surface.object.visible).map(([id]) => id)),
@@ -5572,6 +5574,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
 
   const connectionGeneration = ++roomStateConnectionGeneration;
   surfaceStopRevisionSupported = false;
+  whiteboardResumeSupported = false;
   seatCommandCorrelationSupported = false; roomStateOccupancySeen = false;
   meetingTools?.sync();
   const isCurrentConnection = () => connectionGeneration === roomStateConnectionGeneration;
@@ -5730,7 +5733,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       roomPluginRuntime.connectionChanged();
       roomPluginSeats.stop("offline");
       mediaSurfaceCommands.rejectAll("room_state_closed");
-      surfaceStopRevisionSupported = false; meetingTools?.sync();
+      surfaceStopRevisionSupported = false; whiteboardResumeSupported = false; meetingTools?.sync();
       applyIssue(issue, {
         degradedMode: "api_fallback",
         roomStateMode: "disconnected",

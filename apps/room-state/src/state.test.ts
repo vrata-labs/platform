@@ -919,6 +919,40 @@ test("legacy stop without a revision retains its original behavior", () => {
   assert.equal(stopped.result.accepted, true);
 });
 
+test("a whiteboard returns with its drawing after presenting on the same surface", () => {
+  const room = joinRoom(createRoomState("preserved-board"), "host", { role: "host" });
+  const create = (state: typeof room, surfaceId: string, objectType: string, objectId: string) => {
+    const result = createMediaObject(state, "host", { commandId: `create-${objectId}`, surfaceId, objectType, objectId, nowMs: 1 });
+    assert.equal(result.result.accepted, true);
+    return result.room;
+  };
+  const stop = (state: typeof room, objectId: string, expectedRevision: number) => {
+    const result = stopMediaObject(state, "host", { commandId: `stop-${objectId}`, surfaceId: "debug-main", objectId, expectedRevision });
+    assert.equal(result.result.accepted, true);
+    return result.room;
+  };
+  const initial = create(room, "debug-main", WHITEBOARD_OBJECT_TYPE, "original");
+  const drawn = patchMediaObjectState(initial, "host", { commandId: "draw", surfaceId: "debug-main", objectId: "original",
+    expectedRevision: 0, nowMs: 2, patch: { type: "append-stroke", inputEventId: "drawing",
+      stroke: { strokeId: "line", participantId: "host", tool: "pen", color: "#2563eb", width: 4, points: [{ u: .1, v: .2, t: 10 }] } } });
+  assert.equal(drawn.result.accepted, true);
+  const expected = (drawn.room.mediaObjects.objects.original!.state as { strokes: unknown[] }).strokes;
+
+  const paused = stop(drawn.room, "original", 1);
+  assert.equal(paused.mediaObjects.objects.original, undefined);
+  const presented = create(paused, "debug-main", PDF_PRESENTATION_OBJECT_TYPE, "slides");
+  const other = create(presented, "whiteboard-wall", WHITEBOARD_OBJECT_TYPE, "other");
+  assert.deepEqual((other.mediaObjects.objects.other!.state as { strokes: unknown[] }).strokes, []);
+  const resumed = create(stop(other, "slides", 0), "debug-main", WHITEBOARD_OBJECT_TYPE, "resumed");
+  assert.deepEqual(resumed.mediaObjects.objects.resumed!.state, { status: "active", revision: 0, lastInputEventId: null, strokes: expected });
+
+  const cleared = patchMediaObjectState(resumed, "host", { commandId: "clear", surfaceId: "debug-main", objectId: "resumed",
+    expectedRevision: 0, nowMs: 3, patch: { type: "clear", inputEventId: "clear-drawing" } });
+  assert.equal(cleared.result.accepted, true);
+  const reopened = create(stop(cleared.room, "resumed", 1), "debug-main", WHITEBOARD_OBJECT_TYPE, "reopened");
+  assert.deepEqual((reopened.mediaObjects.objects.reopened!.state as { strokes: unknown[] }).strokes, []);
+});
+
 test("markdown board object persists sticky notes and enforces edit permissions", () => {
   const hostRoom = joinRoom(createRoomState("demo"), "host", { role: "host" });
   const created = createMediaObject(hostRoom, "host", {

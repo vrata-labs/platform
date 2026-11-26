@@ -195,6 +195,9 @@ test("M1.5 host creates whiteboard and member stroke syncs to viewers", async ({
     await expect(host.locator("#draw-whiteboard")).toBeDisabled();
     await expect(host.locator("#clear-whiteboard")).toBeDisabled();
     await expect(host.locator("#stop-whiteboard")).toBeDisabled();
+
+    await host.click("#start-whiteboard");
+    await waitForWhiteboard(guest, 1);
   } finally {
     await host.close();
     await member.close();
