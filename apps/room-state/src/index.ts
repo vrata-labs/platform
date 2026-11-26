@@ -29,6 +29,7 @@ import { createRoomSessionV2Verifier, latestVerifiedRoomSession, latestVerifiedP
 
 import type { PresenceState } from "./schema.js";
 import {
+  applyRoomMediaPolicy,
   claimSeat,
   createMediaObject,
   createRoomState,
@@ -575,10 +576,18 @@ export function applyVerifiedParticipantAccess(server: RoomStateServer, current:
       metadata.access = { ...metadata.access, role: access.role, permissions: [...effective.permissions] };
     }
   }
-  const previousRoom = server.rooms.get(current.roomId);
-  const room = previousRoom?.sceneEffectSwitches && current.sceneEffectVersionId !== undefined &&
-    previousRoom.sceneEffectSwitches.versionId !== current.sceneEffectVersionId
-    ? { ...previousRoom, sceneEffectSwitches: undefined } : previousRoom;
+  const previousRoom = current.mediaPolicy ? ensureRoom(server, current.roomId) : server.rooms.get(current.roomId);
+  const updatedRoom = previousRoom && applyRoomMediaPolicy(previousRoom, current.mediaPolicy);
+  if (updatedRoom && previousRoom && updatedRoom !== previousRoom) {
+    for (const object of Object.values(previousRoom.mediaObjects.objects)) {
+      if (object.type === REMOTE_BROWSER_OBJECT_TYPE && !updatedRoom.mediaObjects.objects[object.objectId]) {
+        stopRemoteBrowserSession((object.state as RemoteBrowserObjectState).executorSessionId);
+      }
+    }
+  }
+  const room = updatedRoom?.sceneEffectSwitches && current.sceneEffectVersionId !== undefined &&
+    updatedRoom.sceneEffectSwitches.versionId !== current.sceneEffectVersionId
+    ? { ...updatedRoom, sceneEffectSwitches: undefined } : updatedRoom;
   const previous = room?.participants.find(participant => participant.participantId === current.participantId);
   if (room && previous && (previous.role !== access.role || JSON.stringify(previous.permissions) !== JSON.stringify(access.permissions))) {
     server.rooms.set(current.roomId, joinWithAccess(room, current.participantId, access));

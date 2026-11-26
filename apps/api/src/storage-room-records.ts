@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { RoomTemplateSnapshotV1, RoomTemplateVersionSnapshotV1 } from "@vrata/shared-types";
+import { isRoomMediaModes, type RoomTemplateSnapshotV1, type RoomTemplateVersionSnapshotV1 } from "@vrata/shared-types";
 import { referenceTemplateContract } from "@vrata/templates";
 
 import type {
@@ -271,6 +271,7 @@ export interface ManagedRoomRow {
   managed_max_participants?: number | null;
   managed_idle_timeout_seconds?: number | null;
   managed_features?: ManagedRoomFeatures | null;
+  managed_media_modes?: unknown;
 }
 
 export function mapManagedRoomState(row: ManagedRoomRow): ManagedRoomState {
@@ -293,6 +294,7 @@ export function mapManagedRoomState(row: ManagedRoomRow): ManagedRoomState {
     demoPolicyId: row.managed_demo_policy_id ?? null,
     maxParticipants: row.managed_max_participants ?? null,
     idleTimeoutSeconds: row.managed_idle_timeout_seconds ?? null,
-    features: row.managed_features ?? null
+    features: row.managed_features ?? null,
+    ...(isRoomMediaModes(row.managed_media_modes) ? { mediaModes: row.managed_media_modes } : {})
   };
 }

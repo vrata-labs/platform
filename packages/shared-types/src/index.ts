@@ -54,6 +54,7 @@ export * from "./avatar-transport.js";
 export * from "./access.js";
 export * from "./surface-input.js";
 export * from "./media-objects.js";
+export * from "./room-media-modes.js";
 export * from "./room-template.js";
 export * from "./scene-media-surfaces.js";
 export * from "./scene-navigation.js";

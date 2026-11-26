@@ -3,6 +3,7 @@ import { randomInt, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
+import { DEFAULT_PRIVATE_ROOM_MEDIA_MODES } from "@vrata/shared-types";
 
 import { createIntegrationRoutes, integrationRequestHash } from "./integration-routes.js";
 import { MemoryStorage, type Storage } from "./storage.js";
@@ -80,6 +81,43 @@ test("integration API authenticates every call with a fresh, scoped service asse
       assert.equal(unconfigured.status, 503);
       assert.equal(unconfigured.body?.error.code, "dependency_unavailable");
     } finally { process.env.VRATA_INTEGRATION_KEYS = saved; }
+  } finally { await h.close(); }
+});
+
+test("private room media modes are revisioned, replayable and isolated by room", async () => {
+  const h = await harness();
+  try {
+    const tenantId = await h.managedTenant();
+    const makeRoom = async (name: string) => {
+      const version = {
+        tenantId, bundleId: name, version: "v1", bundleVersionId: randomUUID(), archiveSha256: "a".repeat(64),
+        contentHash: "b".repeat(64), sizeBytes: 0, files: [], state: "candidate" as const,
+        createdAt: new Date().toISOString(), validation: { issues: [] }
+      };
+      await h.memory.registerPrivateSceneVersion(version);
+      const room = await h.memory.createManagedRoom({ roomId: randomUUID(), tenantId, name }, {
+        managedBy: "portal:stage", kind: "custom", customVersion: version, ownerSubject: "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VW",
+        accessUntil: future(), graceSeconds: 0, operationId: randomUUID()
+      });
+      assert.deepEqual(room.managed?.mediaModes, DEFAULT_PRIVATE_ROOM_MEDIA_MODES);
+      return `/integration/v1/tenants/${tenantId}/rooms/${room.roomId}`;
+    };
+    const room = await makeRoom("office");
+    const other = await makeRoom("meeting");
+    const mediaModes = { whiteboard: false, remoteBrowser: true, pdf: true, video: true };
+    const idempotencyKey = key();
+    const patch = { body: { expectedRevision: 0, mediaModes }, idempotencyKey };
+    const updated = await h.call("PATCH", `${room}/access`, patch);
+    assert.equal(updated.status, 200);
+    assert.deepEqual([updated.body?.revision, updated.body?.mediaModes], [1, mediaModes]);
+    const replay = await h.call("PATCH", `${room}/access`, patch);
+    assert.equal(replay.headers.get("idempotency-replayed"), "true");
+    assert.deepEqual(replay.body, updated.body);
+    const stale = await h.call("PATCH", `${room}/access`, { ...patch, idempotencyKey: key() });
+    assert.equal(stale.body?.error.code, "revision_mismatch");
+    const invalid = await h.call("PATCH", `${other}/access`, { body: { expectedRevision: 0, mediaModes: { video: true } }, idempotencyKey: key() });
+    assert.equal(invalid.status, 400);
+    assert.deepEqual((await h.call("GET", other)).body?.mediaModes, DEFAULT_PRIVATE_ROOM_MEDIA_MODES);
   } finally { await h.close(); }
 });
 

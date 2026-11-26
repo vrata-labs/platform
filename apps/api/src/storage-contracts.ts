@@ -1,4 +1,4 @@
-import type { RoomTemplateCatalogRecord, RoomTemplateSnapshotV1, RoomTemplateVersionSnapshotV1 } from "@vrata/shared-types";
+import type { RoomMediaModes, RoomTemplateCatalogRecord, RoomTemplateSnapshotV1, RoomTemplateVersionSnapshotV1 } from "@vrata/shared-types";
 import type { SceneBundleCreateInput, SceneBundleRecord } from "./scene-bundle-storage.js";
 import type { PrivateSceneVersion } from "./private-scene-release.js";
 import type { ReferenceCatalogState, TemplateCatalogPointer } from "@vrata/templates";
@@ -216,6 +216,7 @@ export interface ManagedRoomState {
   maxParticipants?: number | null;
   idleTimeoutSeconds?: number | null;
   features?: ManagedRoomFeatures | null;
+  mediaModes?: RoomMediaModes | null;
 }
 
 export interface ManagedRoomCreateInput {
@@ -304,6 +305,7 @@ export interface ManagedRoomAccessPatch {
   accessUntil?: string;
   graceSeconds?: number;
   status?: ManagedRoomStatus;
+  mediaModes?: RoomMediaModes;
 }
 
 export interface IntegrationTenantRecord {

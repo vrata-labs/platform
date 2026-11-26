@@ -2,7 +2,7 @@ import { initPostgresStorageWithRetry } from "./storage-init-retry.js";
 import { Pool, type PoolClient } from "pg";
 import { RoomPluginStorageError } from "./plugins/contracts.js";
 import { expectedReferenceCatalog, getTemplateVersion as getSeedTemplateVersion, listReferenceTemplateVersionContracts, listTemplateDefinitions, planReferenceCatalogTransition, PRODUCT_ROOM_TEMPLATE_IDS, PRODUCT_ROOM_TEMPLATE_VERSION, type ReferenceCatalogState, type TemplateCatalogPointer } from "@vrata/templates";
-import type { RoomTemplateStatus, RoomTemplateVersionSnapshotV1 } from "@vrata/shared-types";
+import { DEFAULT_PRIVATE_ROOM_MEDIA_MODES, type RoomTemplateStatus, type RoomTemplateVersionSnapshotV1 } from "@vrata/shared-types";
 
 import type { SceneBundleCreateInput, SceneBundleRecord } from "./scene-bundle-storage.js";
 import type { PrivateSceneVersion } from "./private-scene-release.js";
@@ -1117,7 +1117,8 @@ export class MemoryStorage implements Storage {
       demoPolicyId: managed.demoPolicyId ?? null,
       maxParticipants: managed.maxParticipants ?? null,
       idleTimeoutSeconds: managed.idleTimeoutSeconds ?? null,
-      features: managed.features ?? null
+      features: managed.features ?? null,
+      ...(managed.kind === "custom" ? { mediaModes: { ...DEFAULT_PRIVATE_ROOM_MEDIA_MODES } } : {})
     };
     return structuredClone(stored);
   }
@@ -1126,12 +1127,15 @@ export class MemoryStorage implements Storage {
     if (!room?.managed) return null;
     if (room.managed.status === "closed") return "room_closed";
     if (room.managed.revision !== expectedRevision) return "revision_mismatch";
-    this.managedRooms.noteManagedRoomAccessChange(room, patch.status ?? room.managed.status);
+    if (patch.accessUntil !== undefined || patch.graceSeconds !== undefined || patch.status !== undefined) {
+      this.managedRooms.noteManagedRoomAccessChange(room, patch.status ?? room.managed.status);
+    }
     room.managed = {
       ...room.managed,
       accessUntil: patch.accessUntil ?? room.managed.accessUntil,
       graceSeconds: patch.graceSeconds ?? room.managed.graceSeconds,
       status: patch.status ?? room.managed.status,
+      ...(patch.mediaModes ? { mediaModes: structuredClone(patch.mediaModes) } : {}),
       revision: room.managed.revision + 1,
       lastOperationId: operationId,
       updatedAt: new Date().toISOString()
@@ -1171,7 +1175,7 @@ const MANAGED_ROOM_COLUMNS_SQL = `ir.managed_by, ir.kind as managed_kind, ir.sta
              ir.last_operation_id as managed_last_operation_id, ir.created_at as managed_created_at, ir.updated_at as managed_updated_at,
              ir.access_epoch::text as managed_access_epoch, ir.closed_at as managed_closed_at, ir.close_reason as managed_close_reason,
              ir.demo_policy_id as managed_demo_policy_id, ir.max_participants as managed_max_participants,
-             ir.idle_timeout_seconds as managed_idle_timeout_seconds, ir.features as managed_features,
+             ir.idle_timeout_seconds as managed_idle_timeout_seconds, ir.features as managed_features, ir.media_modes as managed_media_modes,
              pv.version_id::text as private_version_id,pv.content_hash as private_content_hash,pv.published as private_published`;
 
 function isUniqueViolation(error: unknown): boolean {
@@ -2542,10 +2546,12 @@ export class PostgresStorage implements Storage {
       roomId = room.roomId;
       await client.query(
         `insert into integration_rooms (room_id, tenant_id, managed_by, kind, status, access_until, grace_seconds, revision, owner_subject, last_operation_id,
-                                        demo_policy_id, max_participants, idle_timeout_seconds, features)
-         values ($1,$2,$3,$4,'active',$5,$6,0,$7,$8,$9,$10,$11,$12::jsonb)`,
+                                        demo_policy_id, max_participants, idle_timeout_seconds, features, media_modes)
+         values ($1,$2,$3,$4,'active',$5,$6,0,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb)`,
         [room.roomId, room.tenantId, managed.managedBy, managed.kind, managed.accessUntil, managed.graceSeconds, managed.ownerSubject ?? null, managed.operationId,
-          managed.demoPolicyId ?? null, managed.maxParticipants ?? null, managed.idleTimeoutSeconds ?? null, managed.features ? JSON.stringify(managed.features) : null]
+          managed.demoPolicyId ?? null, managed.maxParticipants ?? null, managed.idleTimeoutSeconds ?? null,
+          managed.features ? JSON.stringify(managed.features) : null,
+          managed.kind === "custom" ? JSON.stringify(DEFAULT_PRIVATE_ROOM_MEDIA_MODES) : null]
       );
       if (managed.customVersion) await client.query(`insert into integration_private_room_versions(room_id,tenant_id,version_id,content_hash)
         values($1,$2,$3,$4)`,[roomId,room.tenantId,managed.customVersion.bundleVersionId,managed.customVersion.contentHash]);
@@ -2562,22 +2568,32 @@ export class PostgresStorage implements Storage {
     return created;
   }
   async updateManagedRoomAccess(roomId: string, expectedRevision: number, patch: ManagedRoomAccessPatch, operationId: string): Promise<RoomRecord | "revision_mismatch" | "room_closed" | null> {
-    const result = await this.pool.query(
-      `update integration_rooms
-          set access_until = coalesce($3::timestamptz, access_until), grace_seconds = coalesce($4::integer, grace_seconds),
-              status = coalesce($5::text, status), revision = revision + 1, last_operation_id = $6, updated_at = now(),
-              -- A pause, or any change after the window lapsed, opens a new media epoch; the enforcer may not have seen it yet.
-              rotate_requested_at = case when coalesce($5::text, status) = 'paused'
-                or access_until + grace_seconds * interval '1 second' <= now() then now() else rotate_requested_at end
-        where room_id = $1 and revision = $2 and status <> 'closed'`,
-      [roomId, expectedRevision, patch.accessUntil ?? null, patch.graceSeconds ?? null, patch.status ?? null, operationId]
-    );
-    if ((result.rowCount ?? 0) === 0) {
-      const existing = await this.pool.query<{ status: string }>(`select status from integration_rooms where room_id = $1`, [roomId]);
-      if (!existing.rows[0]) return null;
-      return existing.rows[0].status === "closed" ? "room_closed" : "revision_mismatch";
-    }
-    return this.getRoom(roomId);
+    return roomFenceTransaction(this.pool, {}, async client => {
+      if (patch.mediaModes) {
+        // Document effects holding the room fence finish before these permissions change.
+        await client.query("select 1 from rooms where room_id=$1 for update", [roomId]);
+      }
+      const result = await client.query(
+        `update integration_rooms
+            set access_until = coalesce($3::timestamptz, access_until), grace_seconds = coalesce($4::integer, grace_seconds),
+                status = coalesce($5::text, status), media_modes = coalesce($7::jsonb, media_modes),
+                revision = revision + 1, last_operation_id = $6, updated_at = now(),
+                -- A pause or access renewal after expiration opens a new media epoch.
+                rotate_requested_at = case
+                  when ($3::timestamptz is not null or $4::integer is not null or $5::text is not null)
+                    and (coalesce($5::text, status) = 'paused' or access_until + grace_seconds * interval '1 second' <= now())
+                  then now() else rotate_requested_at end
+          where room_id = $1 and revision = $2 and status <> 'closed'`,
+        [roomId, expectedRevision, patch.accessUntil ?? null, patch.graceSeconds ?? null, patch.status ?? null, operationId,
+          patch.mediaModes ? JSON.stringify(patch.mediaModes) : null]
+      );
+      if ((result.rowCount ?? 0) === 0) {
+        const existing = await client.query<{ status: string }>("select status from integration_rooms where room_id = $1", [roomId]);
+        if (!existing.rows[0]) return null;
+        return existing.rows[0].status === "closed" ? "room_closed" : "revision_mismatch";
+      }
+      return new PostgresStorage(this.pool, this.identityNow, client).getRoom(roomId);
+    });
   }
   beginIntegrationOperation(input: IntegrationOperationStart): Promise<{ created: boolean; operation: IntegrationOperationRecord }> { return this.integrationOperations.begin(input); }
   claimIntegrationOperation(operationId: string, leaseSeconds: number): Promise<IntegrationOperationRecord | null> { return this.integrationOperations.claim(operationId, leaseSeconds); }
