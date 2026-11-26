@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { referenceTemplateContract } from "@vrata/templates";
+import { DEFAULT_PRIVATE_ROOM_MEDIA_MODES, isRoomMediaModes } from "@vrata/shared-types";
 
 import { loadDemoPolicies, type DemoPolicy } from "./demo-policies.js";
 import { isPortalManagedDeployment } from "./feature-flags.js";
@@ -145,6 +146,7 @@ export function serializeManagedRoom(room: RoomRecord) {
     graceSeconds: managed.graceSeconds,
     effectiveCutoff: effectiveCutoff(room),
     revision: managed.revision,
+    ...(custom ? { mediaModes: managed.mediaModes ?? DEFAULT_PRIVATE_ROOM_MEDIA_MODES } : {}),
     createdAt: managed.createdAt,
     ...(managed.closedAt ? { closedAt: managed.closedAt } : {}),
     ...(managed.demoPolicyId ? { demoPolicyId: managed.demoPolicyId } : {}),
@@ -298,12 +300,15 @@ function blockError(reason: ManagedRoomBlockReason): IntegrationRequestError {
 
 function parseAccessUpdate(body: unknown): { expectedRevision: number; patch: ManagedRoomAccessPatch; reason?: string } {
   if (!isPlainObject(body)) throw new IntegrationRequestError("invalid_request", "Request body must be a JSON object");
-  assertOnlyKeys(body, ["expectedRevision", "accessUntil", "graceSeconds", "status", "reason"]);
-  if (typeof body.expectedRevision !== "number" || !Number.isInteger(body.expectedRevision) || body.expectedRevision < 0) {
+  assertOnlyKeys(body, ["expectedRevision", "accessUntil", "graceSeconds", "status", "mediaModes", "reason"]);
+  if (typeof body.expectedRevision !== "number" || !Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 0) {
     throw new IntegrationRequestError("invalid_request", "expectedRevision must be a non-negative integer");
   }
-  if (body.accessUntil === undefined && body.graceSeconds === undefined && body.status === undefined) {
-    throw new IntegrationRequestError("invalid_request", "Change accessUntil, graceSeconds or status");
+  if (body.accessUntil === undefined && body.graceSeconds === undefined && body.status === undefined && body.mediaModes === undefined) {
+    throw new IntegrationRequestError("invalid_request", "Change accessUntil, graceSeconds, status or mediaModes");
+  }
+  if (body.mediaModes !== undefined && !isRoomMediaModes(body.mediaModes)) {
+    throw new IntegrationRequestError("invalid_request", "mediaModes must contain four boolean values: whiteboard, remoteBrowser, pdf and video");
   }
   if (body.status !== undefined && body.status !== "active" && body.status !== "paused") throw new IntegrationRequestError("invalid_request", "status must be active or paused");
   if (body.reason !== undefined && (typeof body.reason !== "string" || body.reason.length > 200)) throw new IntegrationRequestError("invalid_request", "reason must have at most 200 characters");
@@ -312,7 +317,8 @@ function parseAccessUpdate(body: unknown): { expectedRevision: number; patch: Ma
     patch: {
       ...(body.accessUntil === undefined ? {} : { accessUntil: parseTimestamp(body.accessUntil, "accessUntil") }),
       ...(body.graceSeconds === undefined ? {} : { graceSeconds: parseGraceSeconds(body.graceSeconds) }),
-      ...(body.status === undefined ? {} : { status: body.status })
+      ...(body.status === undefined ? {} : { status: body.status }),
+      ...(body.mediaModes === undefined ? {} : { mediaModes: body.mediaModes })
     },
     ...(typeof body.reason === "string" ? { reason: body.reason } : {})
   };
@@ -531,6 +537,9 @@ export function createIntegrationRoutes(context: IntegrationRoutesContext) {
       const done = (room: RoomRecord): ExecutionResult => ({ status: 200, revision: room.managed!.revision, body: serializeManagedRoom(room) });
       const current = await requireRoom(storage, principal, tenantId, roomId);
       if (current.managed!.lastOperationId === operation.operationId) return done(current);
+      if (parsed.patch.mediaModes && current.managed!.kind !== "custom") {
+        throw new IntegrationRequestError("invalid_request", "mediaModes can be changed only on private scene instances");
+      }
       const updated = await storage.updateManagedRoomAccess(roomId, parsed.expectedRevision, parsed.patch, operation.operationId);
       if (updated === "revision_mismatch") {
         const latest = await storage.getRoom(roomId);

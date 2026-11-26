@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DISABLED_EXTENSION_CARD_TYPE, EXTENSION_TEST_CARD_TYPE, IMAGE_VIEWER_OBJECT_TYPE, MARKDOWN_BOARD_OBJECT_TYPE, MISSING_CAPABILITY_EXTENSION_CARD_TYPE, PDF_PRESENTATION_OBJECT_TYPE, VIDEO_PLAYER_OBJECT_TYPE, WHITEBOARD_OBJECT_TYPE, type VideoPlayerState } from "@vrata/shared-types";
+import { DEFAULT_PRIVATE_ROOM_MEDIA_MODES, DISABLED_EXTENSION_CARD_TYPE, EXTENSION_TEST_CARD_TYPE, IMAGE_VIEWER_OBJECT_TYPE, MARKDOWN_BOARD_OBJECT_TYPE, MISSING_CAPABILITY_EXTENSION_CARD_TYPE, PDF_PRESENTATION_OBJECT_TYPE, VIDEO_PLAYER_OBJECT_TYPE, WHITEBOARD_OBJECT_TYPE, type VideoPlayerState } from "@vrata/shared-types";
 
 import {
+  applyRoomMediaPolicy,
   claimSeat,
   createMediaObject,
   createParticipantState,
@@ -16,6 +17,7 @@ import {
   removeDocumentMediaObjects,
   removePdfPresentationDocument,
   resolveVideoPlaybackPositionMs,
+  serializeRoomState,
   setSurfaceMediaAudioEnabled,
   stopMediaObject,
   updateParticipantState
@@ -25,6 +27,28 @@ test("joinRoom adds participant once", () => {
   const room = joinRoom(createRoomState("demo"), "p1");
   const duplicated = joinRoom(room, "p1");
   assert.equal(duplicated.participants.length, 1);
+});
+
+test("media policy retires disabled modes without letting an older authority response bring them back", () => {
+  const room = joinRoom(createRoomState("custom"), "host", { role: "host" });
+  const defaultPolicy = { revision: 0, modes: { ...DEFAULT_PRIVATE_ROOM_MEDIA_MODES } };
+  const videoInput = {
+    commandId: "start-video", surfaceId: "debug-main", objectType: VIDEO_PLAYER_OBJECT_TYPE, objectId: "video", nowMs: 1
+  };
+  const limited = applyRoomMediaPolicy(room, defaultPolicy);
+  assert.equal(createMediaObject(limited, "host", videoInput).result.blockedReason, "feature-disabled");
+  const videoPolicy = { revision: 1, modes: { ...defaultPolicy.modes, video: true } };
+  const live = createMediaObject(applyRoomMediaPolicy(limited, videoPolicy), "host", videoInput);
+  assert.equal(live.result.accepted, true);
+  const disabled = applyRoomMediaPolicy(live.room, { ...defaultPolicy, revision: 2 });
+  assert.equal(disabled.mediaObjects.objects.video, undefined);
+  assert.equal(disabled.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
+  const publicState = serializeRoomState(disabled);
+  assert.equal(publicState.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes(VIDEO_PLAYER_OBJECT_TYPE), false);
+  assert.equal(publicState.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes(WHITEBOARD_OBJECT_TYPE), true);
+  const stale = applyRoomMediaPolicy(disabled, videoPolicy);
+  assert.equal(createMediaObject(stale, "host", videoInput).result.blockedReason, "feature-disabled");
+  assert.equal(createMediaObject(room, "host", videoInput).result.accepted, true, "an independent room keeps its previous settings");
 });
 
 test("joinRoom assigns access role and permissions", () => {

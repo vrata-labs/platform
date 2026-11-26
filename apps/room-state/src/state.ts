@@ -19,6 +19,7 @@ import {
   isMediaObjectDefinitionAvailable,
   isMediaObjectDefinitionEnabled,
   parseRoomRole,
+  roomAllowsMediaObject,
   type MediaObjectCommandBlockedReason,
   type MediaObjectCommandResult,
   type MediaObjectInstance,
@@ -36,6 +37,7 @@ import {
   type RemoteBrowserObjectState,
   type RemoteBrowserPatch,
   type RoomMediaObjectsState,
+  type RoomMediaPolicy,
   type RoomTemplateSessionContext,
   type SceneMediaSurfaceDefinition,
   type RoomPermission,
@@ -66,6 +68,7 @@ export interface RoomState {
   seatOccupancy: SeatOccupancyState;
   mediaObjects: RoomMediaObjectsState;
   inactiveWhiteboardStrokes?: ReadonlyMap<string, WhiteboardStroke[]>;
+  mediaPolicy?: RoomMediaPolicy;
   roomTemplate?: RoomTemplateSessionContext;
   sceneEffectSwitches?: import("@vrata/shared-types").SceneEffectSwitchState;
 }
@@ -1350,6 +1353,10 @@ export function createMediaObject(state: RoomState, participantId: string, input
   if (!hasRoomPermission(access.permissions, permission)) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-permission", surfaceId: input.surfaceId, objectType: input.objectType });
   }
+  if (!roomAllowsMediaObject(state.mediaPolicy?.modes, input.objectType)) {
+    return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "feature-disabled",
+      surfaceId: input.surfaceId, objectType: input.objectType });
+  }
 
   const mediaObjects = ensureMediaObjectsState(state);
   const surface = mediaObjects.surfaces[input.surfaceId];
@@ -1453,27 +1460,8 @@ export function stopMediaObject(state: RoomState, participantId: string, input: 
       surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
   }
 
-  const nextObjects = { ...mediaObjects.objects };
-  delete nextObjects[input.objectId];
-  let inactiveWhiteboardStrokes = state.inactiveWhiteboardStrokes;
-  if (object.type === WHITEBOARD_OBJECT_TYPE) {
-    const strokes = (object.state as WhiteboardState).strokes;
-    if (strokes.length > 0) {
-      inactiveWhiteboardStrokes = new Map(inactiveWhiteboardStrokes).set(input.surfaceId, strokes);
-    }
-  }
-  const nextMediaObjects: RoomMediaObjectsState = {
-    surfaces: {
-      ...mediaObjects.surfaces,
-      [input.surfaceId]: {
-        ...surface,
-        activeObjectId: null
-      }
-    },
-    objects: nextObjects
-  };
   return {
-    room: { ...state, mediaObjects: nextMediaObjects, inactiveWhiteboardStrokes },
+    room: retireMediaObject(state, object),
     result: createMediaObjectCommandResult({
       accepted: true,
       commandId: input.commandId,
@@ -1486,6 +1474,37 @@ export function stopMediaObject(state: RoomState, participantId: string, input: 
       revision: object.revision
     })
   };
+}
+
+function retireMediaObject(state: RoomState, object: MediaObjectInstance): RoomState {
+  const { objects, surfaces } = ensureMediaObjectsState(state);
+  const nextObjects = { ...objects };
+  delete nextObjects[object.objectId];
+  let inactiveWhiteboardStrokes = state.inactiveWhiteboardStrokes;
+  if (object.type === WHITEBOARD_OBJECT_TYPE) {
+    const strokes = (object.state as WhiteboardState).strokes;
+    if (strokes.length > 0) {
+      inactiveWhiteboardStrokes = new Map(inactiveWhiteboardStrokes).set(object.surfaceId, strokes);
+    }
+  }
+  const surface = surfaces[object.surfaceId];
+  return { ...state, inactiveWhiteboardStrokes, mediaObjects: {
+    objects: nextObjects,
+    surfaces: surface?.activeObjectId === object.objectId
+      ? { ...surfaces, [object.surfaceId]: { ...surface, activeObjectId: null } }
+      : surfaces
+  } };
+}
+
+export function applyRoomMediaPolicy(state: RoomState, policy: RoomMediaPolicy | undefined): RoomState {
+  if (!policy || (state.mediaPolicy && state.mediaPolicy.revision >= policy.revision)) return state;
+  let room: RoomState = { ...state, mediaPolicy: policy };
+  for (const object of Object.values(state.mediaObjects.objects)) {
+    if (!roomAllowsMediaObject(policy.modes, object.type)) {
+      room = retireMediaObject(room, object);
+    }
+  }
+  return room;
 }
 
 export function patchMediaObjectState(state: RoomState, participantId: string, input: PatchMediaObjectInput): MediaObjectMutationResult {
@@ -2083,11 +2102,17 @@ export function updateParticipantState(state: RoomState, nextState: Partial<Part
 
 export function serializeRoomState(state: RoomState): RoomState {
   const mediaObjects = ensureMediaObjectsState(state);
+  if (state.mediaPolicy) {
+    mediaObjects.surfaces = Object.fromEntries(Object.entries(mediaObjects.surfaces).map(([id, surface]) => [
+      id, { ...surface, allowedObjectTypes: surface.allowedObjectTypes.filter(type => roomAllowsMediaObject(state.mediaPolicy?.modes, type)) }
+    ]));
+  }
   return {
     roomId: state.roomId,
     participants: state.participants.map((item) => ({ ...item })),
     seatOccupancy: { ...state.seatOccupancy },
     ...(state.sceneEffectSwitches ? { sceneEffectSwitches: state.sceneEffectSwitches } : {}),
+    ...(state.mediaPolicy ? { mediaPolicy: state.mediaPolicy } : {}),
     mediaObjects
   };
 }

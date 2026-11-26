@@ -1,4 +1,4 @@
-import { createDefaultRoomMediaObjectsState, isSceneEffectSwitchState, type SceneEffectSwitchState, type RoomMediaObjectsState, type RoomPermission, type RoomRole } from "@vrata/shared-types";
+import { createDefaultRoomMediaObjectsState, isRoomMediaPolicy, isSceneEffectSwitchState, type RoomMediaPolicy, type SceneEffectSwitchState, type RoomMediaObjectsState, type RoomPermission, type RoomRole } from "@vrata/shared-types";
 
 import type { PresenceState } from "./index.js";
 import type { AvatarReliableState, CompactPoseFrame } from "./avatar/avatar-types.js";
@@ -12,6 +12,7 @@ export interface RoomStateSnapshot {
   participants: PresenceState[];
   seatOccupancy: Record<string, string>;
   mediaObjects: RoomMediaObjectsState;
+  mediaPolicy?: RoomMediaPolicy;
   sceneEffectSwitches?: SceneEffectSwitchState;
   capabilities?: { surfaceStopRevision?: boolean; seatCommandCorrelation?: boolean; whiteboardResume?: boolean };
 }
@@ -123,6 +124,7 @@ export function connectRoomState(
           participants: payload.room.participants,
           seatOccupancy: payload.room.seatOccupancy ?? {},
           mediaObjects: payload.room.mediaObjects ?? createDefaultRoomMediaObjectsState(payload.room.roomId),
+          ...(isRoomMediaPolicy(payload.room.mediaPolicy) ? { mediaPolicy: payload.room.mediaPolicy } : {}),
           ...(isSceneEffectSwitchState(payload.room.sceneEffectSwitches) ? { sceneEffectSwitches: payload.room.sceneEffectSwitches } : {}),
           ...(payload.capabilities?.surfaceStopRevision === 1 || payload.capabilities?.seatCommandCorrelation === 1
             || payload.capabilities?.whiteboardResume === 1 ? { capabilities: {

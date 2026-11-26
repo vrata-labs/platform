@@ -54,6 +54,7 @@ import {
   isPortalManagedDeployment,
   isAdhocRoomsAllowed
 } from "./feature-flags.js";
+import { effectiveRoomMediaPolicy, roomAllowsDocument } from "./room-media-policy.js";
 import { createLegacyIdentityBoundary, IdentityBoundaryError, legacyBoundaryApplies, legacyBoundaryAllowsAdministrator } from "./identity/legacy-boundary.js";
 import { assertVirtualRoomId, InvalidVirtualRoomId } from "./identity/virtual-effect-facade.js";
 import { validId } from "./identity/authority.js";
@@ -1078,6 +1079,10 @@ function captureV2FrameRelease(response: ServerResponse, storage: Storage, proof
       await releaseFrameCredential(async send => {
         try {
           await storage.withRoomIdentityEffect(guard, async scoped => {
+            const room = await scoped.getRoom(proof.roomId);
+            if (room && effectiveRoomMediaPolicy(room)?.modes.remoteBrowser === false) {
+              throw new RoomEffectPermissionDenied("remote_browser_disabled");
+            }
             scoped.releaseResponse(() => send(() => writeFrameCredential(response, plan, Date.now(), lapsed)));
           });
         } catch (error) { throw guardedEffectError(error); }
@@ -1343,6 +1348,7 @@ async function releaseDocumentBytes(storage: Storage, actor: ControlPlaneActor, 
   document: RoomDocumentRecord, permission: RoomPermission, activeSurfaceRequired: boolean, audit: FencedAudit,
   send: () => void): Promise<boolean> {
   return runGuardedRoomEffect(storage, actor, room, permission, async scoped => {
+    await requireRoomDocumentMode(scoped, room, document.contentType);
     if (actor.identityProtocolVersion === 2) {
       const current = await scoped.getRoomDocument(room.roomId, document.documentId);
       if (!current || current.deletedAt || current.storageKey !== document.storageKey
@@ -1352,6 +1358,12 @@ async function releaseDocumentBytes(storage: Storage, actor: ControlPlaneActor, 
     scoped.releaseResponse(() => { send(); audit.released(); });
     return true;
   }).catch(error => { audit.refused(error); throw error; });
+}
+
+async function requireRoomDocumentMode(scoped: RoomIdentityEffectStorage, room: RoomRecord, contentType: string): Promise<void> {
+  if (!effectiveRoomMediaPolicy(room)) return;
+  const current = await scoped.getRoom(room.roomId);
+  if (!current || !roomAllowsDocument(current, contentType)) throw new RoomEffectPermissionDenied("document_mode_disabled");
 }
 
 function isPrivateRoom(room: RoomRecord): boolean {
@@ -1444,6 +1456,8 @@ function resolveRoomDocumentsActor(
   if (actor.actorType === "room-session" && actor.roomId !== input.room.roomId) {
     return deny("room_mismatch");
   }
+  const managedBlock = getManagedAccessBlockReason(input.room);
+  if (managedBlock) return deny(managedBlock);
   if (isRoomDisabled(input.room) && actor.actorType !== "admin-token") {
     return deny("room_disabled");
   }
@@ -2374,6 +2388,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         roomAccessPolicyEnabled: isRoomAccessPolicyEnabled(),
         hostControlsEnabled: isHostControlsEnabled(),
         documentsEnabled: isDocumentsFeatureEnabled(),
+        roomMediaPolicyVersion: 1,
         notesEnabled: isNotesFeatureEnabled(),
         personalRoomsEnabled: isPersonalRoomsFeatureEnabled(),
         remoteBrowserEnabled: isRemoteBrowserFeatureEnabled(),
@@ -2479,12 +2494,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
     managedRoomEnforcer.observe(room, session.identity.identityId);
     const context = payload.includeSceneContext === true ? roomTemplateSessionContext(room) : null;
+    const mediaPolicy = effectiveRoomMediaPolicy(room);
     return json(response, 200, {
       tenantId: room.tenantId, roomId: room.roomId, identityId: session.identity.identityId,
       participantId: session.identity.participantId, displayName: session.identity.displayName,
       authEpoch: session.identity.authEpoch, sessionId: session.sessionId,
       expiresAtSeconds: session.expiresAtSeconds, authorityRevision: session.authority.revision,
       role: session.role, permissions: session.permissions,
+      ...(mediaPolicy ? { mediaPolicy } : {}),
       ...(room.managed?.kind === "custom" ? { sceneEffectVersionId: room.managed.publishedVersionId } : {}),
       ...(payload.includeSceneContext === true ? {
         sceneMediaSurfaces: context?.surfaces
@@ -3066,8 +3083,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       catch { if (method === "POST") return json(response, 503, { error: "document_upload_limits_unavailable" }); }
       if (method === "GET") {
         const documents = await storage.listRoomDocuments(roomId);
-        const items = documents.map((document) => serializeRoomDocument(request, document));
         await runGuardedRoomEffect(storage, actor, room, permission, async scoped => {
+          const current = effectiveRoomMediaPolicy(room) ? await scoped.getRoom(roomId) : room;
+          const items = current ? documents.filter(document => roomAllowsDocument(current, document.contentType))
+            .map(document => serializeRoomDocument(request, document)) : [];
           scoped.releaseResponse(() => { json(response, 200, { items, uploadPolicy }); audit.released(); });
         }).catch(error => { audit.refused(error); throw error; });
         return;
@@ -3098,6 +3117,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         incrementCounter(metrics.documentsUploadedTotal, "unsupported:rejected");
         return json(response, 400, { error: "unsupported_document_mime" });
       }
+      if (!roomAllowsDocument(room, contentType)) throw new RoomEffectPermissionDenied("document_mode_disabled");
       if (documentFile.data.byteLength > maxBytes) {
         incrementCounter(metrics.documentsUploadedTotal, `${contentType}:rejected`);
         return json(response, 413, { error: "document_too_large" });
@@ -3137,18 +3157,21 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         await writeDocumentBytes(uploadStorage, storageKey, documentFile.data, contentType);
         uploadedStorage = uploadStorage;
         uploadedKey = storageKey;
-        const document = await audit.effect(() => runGuardedRoomEffect(storage, actor, room, permission, scoped => scoped.createRoomDocument({
-          documentId,
-          roomId,
-          tenantId: room.tenantId,
-          filename,
-          contentType,
-          sizeBytes: documentFile.data.byteLength,
-          storageKey,
-          checksum: `sha256:${sha256Hex(documentFile.data)}`,
-          uploadedBy: actor.actorId,
-          metadata: documentMetadata
-        })));
+        const document = await audit.effect(() => runGuardedRoomEffect(storage, actor, room, permission, async scoped => {
+          await requireRoomDocumentMode(scoped, room, contentType);
+          return scoped.createRoomDocument({
+            documentId,
+            roomId,
+            tenantId: room.tenantId,
+            filename,
+            contentType,
+            sizeBytes: documentFile.data.byteLength,
+            storageKey,
+            checksum: `sha256:${sha256Hex(documentFile.data)}`,
+            uploadedBy: actor.actorId,
+            metadata: documentMetadata
+          });
+        }));
         documentPersisted = true;
         incrementCounter(metrics.documentsUploadedTotal, `${contentType}:success`);
         incrementCounter(metrics.documentStorageBytesTotal, room.tenantId, document.sizeBytes);
@@ -3191,6 +3214,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       const document = await storage.getRoomDocument(roomId, documentId);
       const deleteItem = method === "DELETE" && actionPath === "item";
       if (!document || (document.deletedAt && !deleteItem)) return json(response, 404, { error: "document_not_found" });
+      if (!deleteItem && !roomAllowsDocument(room, document.contentType)) throw new RoomEffectPermissionDenied("document_mode_disabled");
 
       if (method === "GET" && actionPath === "download") {
         let bytes: Buffer;
@@ -3309,8 +3333,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         const payload = (await parseBody<{ surfaceId?: unknown }>(request)) ?? {};
         const surfaceId = normalizeDocumentSurfaceId(payload.surfaceId);
         if (surfaceId === undefined) return json(response, 400, { error: "invalid_document_surface_id" });
-        const updated = await audit.effect(() => runGuardedRoomEffect(storage, actor, room, permission,
-          scoped => scoped.updateRoomDocumentSurface(roomId, documentId, surfaceId)));
+        const updated = await audit.effect(() => runGuardedRoomEffect(storage, actor, room, permission, async scoped => {
+          await requireRoomDocumentMode(scoped, room, document.contentType);
+          return scoped.updateRoomDocumentSurface(roomId, documentId, surfaceId);
+        }));
         if (!updated) return json(response, 404, { error: "document_not_found" });
         metrics.documentSurfaceSelectionsTotal += 1;
         json(response, 200, { document: serializeRoomDocument(request, updated) });
@@ -4323,6 +4349,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
     const remoteBrowserRoom = await storage.getRoom(payload.roomId);
     if (!remoteBrowserRoom && !isAdhocRoomsAllowed()) return json(response, 404, { error: "room_not_found", requestId });
+    if (remoteBrowserRoom && effectiveRoomMediaPolicy(remoteBrowserRoom)?.modes.remoteBrowser === false) {
+      return json(response, 403, { error: "remote_browser_disabled" });
+    }
     const remoteBrowserBlock = getManagedAccessBlockReason(remoteBrowserRoom);
     if (remoteBrowserBlock) return json(response, sessionBlockStatusCode(remoteBrowserBlock), { error: "room_access_denied", reason: remoteBrowserBlock });
     if (!await verifyRemoteBrowserAuthority({ roomId: payload.roomId, objectId: payload.objectId, executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId, mediaParticipantId: payload.mediaParticipantId })) {
@@ -4341,13 +4370,31 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const incarnation = boundary?.codec === 3 && remoteBrowserRoom
       ? await storage.roomIdentities.mediaIncarnation({ tenantId: remoteBrowserRoom.tenantId, roomId: payload.roomId }) : undefined;
     if (boundary?.codec === 3 && !incarnation) return json(response, 409, { error: "room_state_changed", reason: "room_state_changed" });
+    const mediaRoom = currentMediaRoomName(remoteBrowserRoom, payload.roomId, process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-", boundary?.namespace ?? null, incarnation ?? undefined);
+    if (remoteBrowserRoom?.managed) {
+      if (ttlSeconds <= 0) return json(response, 410, { error: "room_access_denied", reason: "access_expired" });
+      const control = managedMedia();
+      try {
+        if (!control || !boundary) throw new Error("livekit_api_unavailable");
+        await control.ensureRoom(mediaRoom, { maxParticipants: null });
+      } catch (error) {
+        logEvent({ service: "api", event: "managed_media_create_failed", requestId, roomId: payload.roomId,
+          message: error instanceof Error ? error.message : "unknown" });
+        return json(response, 503, { error: "media_unavailable", requestId });
+      }
+      // The browser may be the first media publisher in an otherwise silent room.
+      if ((await storage.getRoom(payload.roomId))?.managed?.accessEpoch !== remoteBrowserRoom.managed.accessEpoch) {
+        await control.deleteRoom(mediaRoom).catch(() => undefined);
+        return writeRoomStateChanged(response);
+      }
+    }
     const accessToken = new AccessToken(apiKey, apiSecret, {
       identity: payload.mediaParticipantId,
       name: `Remote Browser ${payload.objectId}`,
       ttl: `${ttlSeconds}s`
     });
     accessToken.addGrant({
-      room: currentMediaRoomName(remoteBrowserRoom, payload.roomId, process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-", boundary?.namespace ?? null, incarnation ?? undefined),
+      room: mediaRoom,
       roomJoin: true,
       canPublish: true,
       canSubscribe: false
@@ -4362,6 +4409,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!v2Media || !boundary) return reply();
     const currentRoom = await storage.getRoom(payload.roomId);
     if (!currentRoom || isRoomDisabled(currentRoom)) return json(response, 403, { error: "room_access_denied", reason: "room_disabled" });
+    const currentBlock = getManagedAccessBlockReason(currentRoom);
+    if (currentBlock) return json(response, sessionBlockStatusCode(currentBlock), { error: "room_access_denied", reason: currentBlock });
+    if (effectiveRoomMediaPolicy(currentRoom)?.modes.remoteBrowser === false) return json(response, 403, { error: "remote_browser_disabled" });
     const authority = await storage.roomIdentities.authority({ tenantId: currentRoom.tenantId, roomId: payload.roomId });
     if (!authority || authority.lifecycle.endedAt) return json(response, 409, { error: "remote_browser_session_not_authoritative" });
     if (!await verifyRemoteBrowserAuthority({ roomId: payload.roomId, objectId: payload.objectId,
@@ -4405,6 +4455,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!session.ok) return writeSessionTokenError(response, session);
     if (!hasRoomPermission(session.payload.permissions, "surface.view")) return writeFrameNotAllowed(response);
     if (!initialRoom && !isAdhocRoomsAllowed()) return json(response, 404, { error: "room_not_found", requestId });
+    if (initialRoom && effectiveRoomMediaPolicy(initialRoom)?.modes.remoteBrowser === false) {
+      return json(response, 403, { error: "remote_browser_disabled" });
+    }
     const frameBlock = getManagedAccessBlockReason(initialRoom);
     if (frameBlock) return json(response, sessionBlockStatusCode(frameBlock), { error: "room_access_denied", reason: frameBlock });
     const frameSecret = getRemoteBrowserFrameTokenSecret();

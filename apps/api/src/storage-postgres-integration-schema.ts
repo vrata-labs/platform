@@ -91,6 +91,7 @@ export async function ensureIntegrationStorageSchema(client: PoolClient): Promis
         add column if not exists max_participants integer,
         add column if not exists idle_timeout_seconds integer,
         add column if not exists features jsonb,
+        add column if not exists media_modes jsonb,
         add column if not exists enforced_block text,
         add column if not exists retired_epochs uuid[] not null default '{}',
         add column if not exists rotate_requested_at timestamptz,

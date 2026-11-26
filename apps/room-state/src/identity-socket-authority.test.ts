@@ -4,16 +4,17 @@ import { createServer, type ServerResponse } from "node:http";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { WebSocket } from "ws";
-import { getRoomPermissions } from "@vrata/shared-types";
+import { DEFAULT_PRIVATE_ROOM_MEDIA_MODES, getRoomPermissions } from "@vrata/shared-types";
 import { startRoomStateService } from "./index.js";
 
 test("real sockets apply a demotion before a delayed initial verification and reject conflicting authority", { timeout: 20_000 }, async () => {
   const previousEnv = { API_INTERNAL_URL: process.env.API_INTERNAL_URL, VRATA_INTERNAL_SERVICE_TOKEN: process.env.VRATA_INTERNAL_SERVICE_TOKEN };
   let revision = 5, conflict = false;
+  let mediaPolicy = { revision: 0, modes: { ...DEFAULT_PRIVATE_ROOM_MEDIA_MODES } };
   let held: ServerResponse | undefined;
   const session = (sessionId: string, rev: number, elevated: boolean) => ({ tenantId: "tenant", roomId: "room", participantId: "speaker", identityId: "identity",
     displayName: "Speaker", authEpoch: 1, sessionId, expiresAtSeconds: Math.floor(Date.now() / 1000) + 600,
-    authorityRevision: rev, role: elevated ? "presenter" : "member", permissions: getRoomPermissions(elevated ? "presenter" : "member") });
+    authorityRevision: rev, role: elevated ? "presenter" : "member", permissions: getRoomPermissions(elevated ? "presenter" : "member"), mediaPolicy });
   const answer = (response: ServerResponse, body: unknown) => { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify(body)); };
   const api = createServer((request, response) => {
     let body = "";
@@ -45,6 +46,19 @@ test("real sockets apply a demotion before a delayed initial verification and re
   try {
     const first = await connect("rs2.first");
     await wait(() => first.messages.some(message => message.type === "room_state"));
+    const startVideo = (commandId: string) => first.socket.send(JSON.stringify({
+      type: "surface_create_object", commandId, surfaceId: "debug-main", objectType: "video-player", probeOnly: false
+    }));
+    startVideo("video-disabled");
+    await wait(() => first.messages.some(message => message.result?.commandId === "video-disabled"));
+    assert.equal(first.messages.find(message => message.result?.commandId === "video-disabled")?.result?.accepted, false);
+    mediaPolicy = { revision: 1, modes: { ...mediaPolicy.modes, video: true } };
+    startVideo("video-enabled");
+    await wait(() => first.messages.some(message => message.result?.commandId === "video-enabled"));
+    assert.equal(first.messages.find(message => message.result?.commandId === "video-enabled")?.result?.accepted, true);
+    mediaPolicy = { revision: 2, modes: { ...mediaPolicy.modes, video: false } };
+    const afterDisable = first.messages.length;
+    await wait(() => first.messages.slice(afterDisable).some(message => message.room?.mediaObjects.surfaces["debug-main"]?.activeObjectId === null));
     first.socket.send(JSON.stringify({ type: "surface_create_object", commandId: "create", surfaceId: "debug-main", objectType: "screen-share", probeOnly: false }));
     await wait(() => first.messages.some(message => message.result?.commandId === "create"));
     assert.equal(first.messages.find(message => message.result?.commandId === "create")!.result!.accepted, true);

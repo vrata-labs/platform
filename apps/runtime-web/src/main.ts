@@ -1555,6 +1555,9 @@ function roomStateAuthorityKey(): string | null {
 }
 let surfaceStopRevisionSupported = false;
 let whiteboardResumeSupported = false;
+let roomMediaPolicy: RoomStateSnapshot["mediaPolicy"];
+const roomDocumentsEnabled = () => runtimeFlags.documentsEnabled
+  && (!roomMediaPolicy || roomMediaPolicy.modes.pdf || roomMediaPolicy.modes.video);
 // Seat claim/release correlation announced by room-state, and whether this connection delivered occupancy yet.
 let seatCommandCorrelationSupported = false;
 let roomStateOccupancySeen = false;
@@ -2238,7 +2241,7 @@ function syncSurfaceAudioControl(): void {
 function normalizeRemoteBrowserUrlInput(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
-    return new URL("/remote-browser-demo.html", apiBaseUrl).toString();
+    return roomMediaPolicy ? "https://example.com/" : new URL("/remote-browser-demo.html", apiBaseUrl).toString();
   }
   return new URL(trimmed, apiBaseUrl).toString();
 }
@@ -2270,7 +2273,8 @@ function syncRemoteBrowserControls(): void {
   const hasControl = snapshot.localHasControl;
   debugState.remoteBrowser.enabled = runtimeFlags.remoteBrowserEnabled;
   debugState.remoteBrowser.experimental = runtimeFlags.remoteBrowserExperimental;
-  remoteBrowserControlEl.hidden = (!runtimeFlags.remoteBrowserEnabled && !remoteBrowser) || (!debugState.access.canCreateRemoteBrowser && !remoteBrowser);
+  remoteBrowserControlEl.hidden = !remoteBrowser
+    && (!runtimeFlags.remoteBrowserEnabled || roomMediaPolicy?.modes.remoteBrowser === false || !debugState.access.canCreateRemoteBrowser);
   remoteBrowserUrlInput.disabled = !canOpen || hasOtherObject;
   openRemoteBrowserButton.disabled = !canOpen || hasOtherObject;
   takeRemoteBrowserControlButton.disabled = !remoteBrowser || !canInput || !roomStateConnected || !hasControl || remoteBrowser.state.controllerParticipantId === participantId;
@@ -2462,6 +2466,18 @@ function handleRoomSnapshot(snapshot: RoomStateSnapshot): void {
   roomStateServerOffsetMs = snapshot.serverTimeMs - Date.now();
   roomSeatOccupancy = { ...(snapshot.seatOccupancy ?? {}) };
   roomMediaObjects = snapshot.mediaObjects;
+  const previousModes = roomMediaPolicy?.modes;
+  roomMediaPolicy = snapshot.mediaPolicy;
+  if (!previousModes?.remoteBrowser && roomMediaPolicy?.modes.remoteBrowser && remoteBrowserUrlInput.value === "/remote-browser-demo.html") {
+    remoteBrowserUrlInput.value = "https://example.com/";
+  }
+  if (previousModes?.pdf !== roomMediaPolicy?.modes.pdf || previousModes?.video !== roomMediaPolicy?.modes.video) {
+    invalidateDocumentLibrary();
+    roomDocuments = [];
+    selectedDocumentId = "";
+    renderDocumentsUi();
+    if (roomDocumentsEnabled()) void loadRoomDocuments();
+  }
   sceneSwitches.update(snapshot.sceneEffectSwitches);
   surfaceStopRevisionSupported = snapshot.capabilities?.surfaceStopRevision === true;
   whiteboardResumeSupported = snapshot.capabilities?.whiteboardResume === true;
@@ -4659,7 +4675,7 @@ const {
   renderDocumentMediaControls: () => renderDocumentMediaControls(),
   listRoomDocuments, uploadRoomDocument, downloadRoomDocument,
   deleteRoomDocument, probeDocumentMedia,
-  get runtimeFlags() { return runtimeFlags; },
+  get runtimeFlags() { return { documentsEnabled: roomDocumentsEnabled() }; },
   get roomStateConnected() { return roomStateConnected; },
   get roomStateAccessToken() { return roomStateAccessToken; },
   get sessionControlBlocked() { return sessionControlBlocked; },
@@ -4766,7 +4782,7 @@ function initializeMeetingTools(boot: { templateSurfaces?: RoomTemplateSurface[]
     sessionControlBlocked, roomStateConnected, authorityRevision(), [...debugState.access.permissions].sort()]),
     blocked: sessionControlBlocked || Boolean(runtimeSessionGate.reason) || roomPageSuspended || roomStateRenewal.expired(), connected: roomStateConnected,
     participantId, permissions: debugState.access.permissions, screenSupported: shareMockEnabled || browserMediaCapabilities.screenShare.supported,
-    screenEnabled: shareMockEnabled || runtimeFlags.screenShare, documentsEnabled: runtimeFlags.documentsEnabled,
+    screenEnabled: shareMockEnabled || runtimeFlags.screenShare, documentsEnabled: roomDocumentsEnabled(),
     stopRevisionSupported: surfaceStopRevisionSupported, whiteboardResumeSupported, xrActive: renderer.xr.isPresenting,
     selectedSurfaceId: selectedMediaSurfaceId, selectedDocumentId: selectedDocument()?.documentId ?? null,
     selectedDocumentChecksum: selectedDocument()?.checksum ?? null, documents: roomDocuments,
@@ -5575,6 +5591,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
   const connectionGeneration = ++roomStateConnectionGeneration;
   surfaceStopRevisionSupported = false;
   whiteboardResumeSupported = false;
+  roomMediaPolicy = undefined;
   seatCommandCorrelationSupported = false; roomStateOccupancySeen = false;
   meetingTools?.sync();
   const isCurrentConnection = () => connectionGeneration === roomStateConnectionGeneration;
@@ -8697,7 +8714,7 @@ meetingNavigation = createMeetingNavigationRuntime({
     admitted: Boolean(roomStateAccessToken), blocked: sessionControlBlocked || Boolean(runtimeSessionGate.reason),
     connected: roomStateConnected, permissions: debugState.access.permissions,
     features: { audio: runtimeFlags.audioJoin, screenShare: runtimeFlags.screenShare || shareMockEnabled,
-      documents: runtimeFlags.documentsEnabled, notes: runtimeFlags.notesEnabled, hostControls: runtimeFlags.hostControlsEnabled },
+      documents: roomDocumentsEnabled(), notes: runtimeFlags.notesEnabled, hostControls: runtimeFlags.hostControlsEnabled },
     capabilities: { microphone: audioMockEnabled || browserMediaCapabilities.audioInput.supported,
       screenCapture: shareMockEnabled || browserMediaCapabilities.screenShare.supported, speakerSelection: supportsAudioOutputSelection() },
     audioJoined: audioSessionJoined, audioBusy: audioActionInFlight || mediaRoomTransitionInFlight,
