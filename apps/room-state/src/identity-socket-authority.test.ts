@@ -47,7 +47,7 @@ test("real sockets apply a demotion before a delayed initial verification and re
     const first = await connect("rs2.first");
     await wait(() => first.messages.some(message => message.type === "room_state"));
     const startVideo = (commandId: string) => first.socket.send(JSON.stringify({
-      type: "surface_create_object", commandId, surfaceId: "debug-main", objectType: "video-player"
+      type: "surface_create_object", commandId, surfaceId: "debug-main", objectType: "video-player", probeOnly: false
     }));
     startVideo("video-disabled");
     await wait(() => first.messages.some(message => message.result?.commandId === "video-disabled"));
