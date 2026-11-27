@@ -92,11 +92,27 @@ export async function ensureIntegrationStorageSchema(client: PoolClient): Promis
         add column if not exists idle_timeout_seconds integer,
         add column if not exists features jsonb,
         add column if not exists media_modes jsonb,
+        add column if not exists remote_browser_policy_revision uuid not null default gen_random_uuid(),
         add column if not exists enforced_block text,
         add column if not exists retired_epochs uuid[] not null default '{}',
         add column if not exists rotate_requested_at timestamptz,
         add column if not exists last_activity_at timestamptz
     `);
+  await client.query(`
+    create or replace function vrata_version_managed_browser_policy() returns trigger language plpgsql as $$
+    begin
+      if old.status is distinct from new.status
+        or coalesce(old.media_modes->>'remoteBrowser', 'false') is distinct from coalesce(new.media_modes->>'remoteBrowser', 'false')
+        or (old.access_until + old.grace_seconds * interval '1 second' <= statement_timestamp()
+            and new.access_until + new.grace_seconds * interval '1 second' > statement_timestamp()) then
+        new.remote_browser_policy_revision := gen_random_uuid();
+      end if;
+      return new;
+    end;
+    $$;
+    create or replace trigger version_managed_browser_policy before update of status, media_modes, access_until, grace_seconds on integration_rooms
+      for each row execute function vrata_version_managed_browser_policy();
+  `);
   await client.query(`
       create table if not exists integration_grants (
         grant_id uuid primary key,

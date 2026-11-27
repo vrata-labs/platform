@@ -30,7 +30,9 @@ test("browser URL policy migration preserves old room rows and supports previous
   // Remove only this migration's objects: the schema and populated rows are now in the pre-policy shape.
   await pool.query(`drop trigger reset_room_browser_url_policy on rooms;
     drop function vrata_reset_room_browser_url_policy();
-    alter table rooms drop column remote_browser_url_policy`);
+    drop trigger version_room_browser_policy on rooms;
+    drop function vrata_version_room_browser_policy();
+    alter table rooms drop column remote_browser_url_policy, drop column remote_browser_policy_revision`);
   const oldRead = async () => (await pool.query("select name, visibility, guest_allowed from rooms where room_id=$1", [roomId])).rows[0];
   const oldRow = await oldRead();
 
@@ -40,9 +42,12 @@ test("browser URL policy migration preserves old room rows and supports previous
   assert.equal(await storedPolicy(), null);
   await assert.rejects(pool.query("update rooms set remote_browser_url_policy='http' where room_id=$1", [roomId]), { code: "23514" });
   await storage.updateRoom(roomId, { remoteBrowserUrlPolicy: "public-https" });
+  const revision = (await storage.getRoomForRemoteBrowser(roomId))?.policyRevision;
+  assert.ok(revision);
   await storage.init();
   assert.equal(await storedPolicy(), "public-https");
   assert.equal((await storage.getRoom(roomId))?.remoteBrowserUrlPolicy, "public-https");
+  assert.equal((await storage.getRoomForRemoteBrowser(roomId))?.policyRevision, revision);
   assert.deepEqual(await oldRead(), oldRow);
   for (const visibility of ["unlisted", "private"]) {
     // Previous API versions write only visibility; reopening must not recover the former opt-in.
@@ -50,6 +55,8 @@ test("browser URL policy migration preserves old room rows and supports previous
     assert.equal(await storedPolicy(), null);
     assert.equal((await storage.getRoom(roomId))?.remoteBrowserUrlPolicy, undefined);
   }
+  await storage.updateRoom(roomId, { remoteBrowserUrlPolicy: "public-https" });
+  assert.notEqual((await storage.getRoomForRemoteBrowser(roomId))?.policyRevision, revision);
   await assert.rejects(pool.query("update rooms set visibility='public', remote_browser_url_policy='public-https' where room_id=$1", [
     (await storage.createRoom({ name: "Public room" })).roomId
   ]), { code: "23514" });

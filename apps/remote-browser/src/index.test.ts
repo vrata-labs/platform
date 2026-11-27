@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { REMOTE_BROWSER_PUBLIC_HTTPS_AUTHORITY_PATH, REMOTE_BROWSER_PUBLIC_HTTPS_SESSION_PATH } from "@vrata/shared-types";
 import { request as httpRequest } from "node:http";
 
 import {
@@ -105,7 +106,7 @@ test("remote browser production service fails closed when disabled", async () =>
     NODE_ENV: "production",
     REMOTE_BROWSER_ENABLED: "false",
     REMOTE_BROWSER_INTERNAL_TOKEN: "internal-test-token"
-  });
+  }, { prepare() { assert.fail("disabled executor must not prepare the extended runtime"); } });
   try {
     const response = await fetch("http://127.0.0.1:4042/api/sessions", {
       method: "POST",
@@ -114,6 +115,13 @@ test("remote browser production service fails closed when disabled", async () =>
     });
     assert.equal(response.status, 503);
     assert.equal(((await response.json()) as { error?: string }).error, "remote_browser_disabled");
+    const expanded = await fetch(`http://127.0.0.1:4042${REMOTE_BROWSER_PUBLIC_HTTPS_SESSION_PATH}`, {
+      method: "POST", headers: { "x-vrata-internal-token": "internal-test-token" },
+      body: JSON.stringify({ tenantId: "tenant", roomId: "room", surfaceId: "surface", objectId: "object",
+        sessionId: "remote-browser:object", executorInstanceId: "remote-browser:object:instance:1", policyRevision: "rule-revision" })
+    });
+    assert.equal(expanded.status, 503);
+    assert.equal((await expanded.json()).error, "remote_browser_disabled");
     const health = await (await fetch("http://127.0.0.1:4042/health")).json() as { enabled?: boolean };
     assert.equal(health.enabled, false);
   } finally {
@@ -133,6 +141,13 @@ test("remote browser production service requires auth and bound session identity
     assert.equal(((await notReady.json()) as { configured?: boolean }).configured, false);
     const unauthorized = await fetch("http://127.0.0.1:4043/api/sessions", { method: "POST" });
     assert.equal(unauthorized.status, 403);
+    const unavailable = await fetch(`http://127.0.0.1:4043${REMOTE_BROWSER_PUBLIC_HTTPS_SESSION_PATH}`, {
+      method: "POST", headers: { "x-vrata-internal-token": "internal-test-token" },
+      body: JSON.stringify({ tenantId: "tenant", roomId: "room", surfaceId: "surface", objectId: "object",
+        sessionId: "remote-browser:object", executorInstanceId: "remote-browser:object:instance:1", policyRevision: "rule-revision" })
+    });
+    assert.equal(unavailable.status, 503);
+    assert.equal((await unavailable.json()).error, "executor_unavailable");
     const invalidBinding = await fetch("http://127.0.0.1:4043/api/sessions", {
       method: "POST",
       headers: { "content-type": "application/json", "x-vrata-internal-token": "internal-test-token" },
@@ -146,6 +161,49 @@ test("remote browser production service requires auth and bound session identity
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
+});
+
+test("the extended executor opens only after the authenticated authority returns its exact binding and URL", async t => {
+  const token = "internal-test-token";
+  const binding = { tenantId: "tenant", roomId: "room", surfaceId: "surface", objectId: "object",
+    sessionId: "remote-browser:object", executorInstanceId: "remote-browser:object:instance:1", policyRevision: "rule-revision" };
+  const originalFetch = globalThis.fetch;
+  let authorityChecks = 0;
+  let returnedBinding = { ...binding, policyRevision: "stale-revision" };
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (!String(input).startsWith("http://room-state.test/")) return originalFetch(input, init);
+    assert.equal(new Headers(init?.headers).get("x-vrata-internal-token"), token);
+    if (String(input).endsWith(REMOTE_BROWSER_PUBLIC_HTTPS_AUTHORITY_PATH)) {
+      authorityChecks++;
+      assert.deepEqual(JSON.parse(String(init?.body)), { binding, purpose: "start" });
+      return Response.json({ binding: returnedBinding, validForMs: 10000, url: "https://authorized.test/" });
+    }
+    return new Response(null, { status: 200 });
+  }) as typeof fetch;
+  const urls: string[] = [];
+  const gate = { setDeadline() {}, revoke() {} };
+  const server = startRemoteBrowserService(0, {
+    NODE_ENV: "production", REMOTE_BROWSER_ENABLED: "true", REMOTE_BROWSER_INTERNAL_TOKEN: token,
+    ROOM_STATE_INTERNAL_URL: "http://room-state.test"
+  }, { prepare() { return { gateway: gate, publisher: gate, async open(url) { urls.push(url); } }; } });
+  t.after(async () => {
+    try { await new Promise<void>(resolve => server.close(() => resolve())); }
+    finally { globalThis.fetch = originalFetch; }
+  });
+  if (!server.listening) await once(server, "listening");
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const open = (authenticated = true) => originalFetch(`${base}${REMOTE_BROWSER_PUBLIC_HTTPS_SESSION_PATH}`, {
+    method: "POST", headers: authenticated ? { "x-vrata-internal-token": token } : {},
+    body: JSON.stringify({ ...binding, url: "https://ignored.test/" })
+  });
+  assert.equal((await open(false)).status, 403);
+  assert.equal((await open()).status, 409);
+  assert.deepEqual(urls, []);
+  returnedBinding = binding;
+  assert.equal((await open()).status, 200);
+  assert.equal((await open()).status, 200);
+  assert.equal(authorityChecks, 2);
+  assert.deepEqual(urls, ["https://authorized.test/"]);
 });
 
 test("remote browser session surface comes from the start request, with debug-main only for a request without it", () => {

@@ -5,12 +5,18 @@ import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
 import { chromium, type Browser, type BrowserContext, type Frame, type Page } from "playwright-core";
 import { WebSocketServer, WebSocket } from "ws";
-import type { RemoteBrowserErrorCode, RemoteBrowserExecutorInputState, RemoteBrowserMediaSourceRect, RemoteBrowserPatch, SurfaceInputEvent } from "@vrata/shared-types";
+import {
+  isRemoteBrowserLeaseDuration, isRemoteBrowserPublicHttpsBinding, sameRemoteBrowserPublicHttpsBinding,
+  REMOTE_BROWSER_PUBLIC_HTTPS_AUTHORITY_PATH, REMOTE_BROWSER_PUBLIC_HTTPS_SESSION_PATH,
+  type RemoteBrowserErrorCode, type RemoteBrowserExecutorInputState, type RemoteBrowserMediaSourceRect, type RemoteBrowserPatch,
+  type RemoteBrowserPublicHttpsBinding, type SurfaceInputEvent
+} from "@vrata/shared-types";
 
 import { admitRemoteBrowserFrameSocket, type RemoteBrowserFrameAdmission } from "./frame-token.js";
 import type { FrameMediaPeerNegotiation } from "./frame-media-peer.js";
 import { attachFrameSocketLifetime, type FrameSocketLifetime } from "./frame-socket-lifetime.js";
 import { remoteBrowserCloseMediaPeerInPage, remoteBrowserCreateMediaAnswerInPage, type RemoteBrowserMediaAnswerResult, type RemoteBrowserPageMediaAnswerInput } from "./frame-media-page.js";
+import { PublicHttpsSessions, type PublicHttpsRuntime } from "./public-https-sessions.js";
 import { canStartRemoteBrowserSession, resolveRemoteBrowserFrameStreamId, resolveRemoteBrowserFrameTokenSecret, resolveRemoteBrowserServicePolicy, scheduleRemoteBrowserSessionExpiry, validateRemoteBrowserSessionIdentity } from "./service-policy.js";
 import { createRemoteBrowserUrlPolicy, validateRemoteBrowserUrl, type RemoteBrowserUrlPolicy } from "./url-policy.js";
 
@@ -675,8 +681,8 @@ function remoteBrowserExecutorInputEventId(session: RemoteBrowserSessionRef, kin
   return `${session.sessionId}:${kind}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function getInternalHeaders(): Record<string, string> {
-  const token = getInternalServiceToken();
+function getInternalHeaders(env = process.env): Record<string, string> {
+  const token = getInternalServiceToken(env);
   return {
     "content-type": "application/json",
     ...(token ? { "x-vrata-internal-token": token } : {})
@@ -748,10 +754,11 @@ async function grantCurrentTabDisplayCapture(session: RemoteBrowserSession): Pro
   await grantPageDisplayCapture(session, session.page, new URL(session.page.url()).origin);
 }
 
-async function patchRemoteBrowserExecutorState(session: RemoteBrowserSessionRef, patch: RemoteBrowserPatch): Promise<void> {
-  const response = await fetch(`${roomStateInternalUrl}/api/internal/remote-browser/sessions/${encodeURIComponent(session.sessionId)}`, {
+async function patchRemoteBrowserExecutorState(session: RemoteBrowserSessionRef, patch: RemoteBrowserPatch, env = process.env): Promise<void> {
+  const baseUrl = env.ROOM_STATE_INTERNAL_URL?.trim() || roomStateInternalUrl;
+  const response = await fetch(new URL(`/api/internal/remote-browser/sessions/${encodeURIComponent(session.sessionId)}`, baseUrl), {
     method: "POST",
-    headers: getInternalHeaders(),
+    headers: getInternalHeaders(env),
     signal: AbortSignal.timeout(5000),
     body: JSON.stringify(remoteBrowserExecutorCallbackBody(session, patch))
   });
@@ -1647,7 +1654,9 @@ function requestInputFrameCapture(session: RemoteBrowserSession): void {
   void captureFrame(session, { force: true }).catch(() => undefined);
 }
 
-async function handleRequest(request: IncomingMessage, response: ServerResponse, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+async function handleRequest(
+  request: IncomingMessage, response: ServerResponse, env: NodeJS.ProcessEnv, publicHttps: PublicHttpsSessions | undefined
+): Promise<void> {
   const id = requestId(request);
   response.setHeader("x-request-id", id);
   metrics.requestsTotal += 1;
@@ -1674,6 +1683,25 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
     html(response, 200, remoteBrowserViewportPublisherHtml());
     return;
   }
+  if (url.pathname === REMOTE_BROWSER_PUBLIC_HTTPS_SESSION_PATH && (request.method === "POST" || request.method === "DELETE")) {
+    if (!getInternalServiceToken(env) || !isAuthorizedInternalRequest(request, env)) {
+      return json(response, 403, { error: "forbidden" });
+    }
+    const payload = await parseBody<RemoteBrowserPublicHttpsBinding>(request).catch(() => null);
+    if (!isRemoteBrowserPublicHttpsBinding(payload)) return json(response, 400, { error: "invalid_session_binding" });
+    const { tenantId, roomId, surfaceId, objectId, sessionId, executorInstanceId, policyRevision } = payload;
+    const binding = { tenantId, roomId, surfaceId, objectId, sessionId, executorInstanceId, policyRevision };
+    if (request.method === "DELETE") return json(response, 200, { ok: publicHttps?.stop(binding) ?? false });
+    if (!policy.enabled) return json(response, 503, { error: "remote_browser_disabled" });
+    if (!publicHttps) return json(response, 503, { error: "executor_unavailable" });
+    if (pendingSessionIds.has(binding.sessionId) || [...closingSessions].some(session => session.sessionId === binding.sessionId)) {
+      return json(response, 409, { error: "session_start_in_progress" });
+    }
+    if (!canStartRemoteBrowserSession(sessions.size + pendingSessionIds.size + closingSessions.size + publicHttps.size,
+      sessions.has(binding.sessionId) || publicHttps.has(binding.sessionId), policy.maxSessions)) return json(response, 429, { error: "session_limit_exceeded" });
+    const accepted = await publicHttps.start(binding, policy.sessionTtlMs);
+    return json(response, accepted ? 200 : 409, { ok: accepted });
+  }
   if (request.method === "POST" && url.pathname === "/api/sessions") {
     if (!isAuthorizedInternalRequest(request, env)) {
       incrementCounter(metrics.deniedTotal, "forbidden");
@@ -1696,6 +1724,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
       json(response, 400, { error: "invalid_session_binding" });
       return;
     }
+    if (publicHttps?.has(payload.sessionId)) return json(response, 409, { error: "session_start_in_progress" });
+    if (publicHttps?.size && !canStartRemoteBrowserSession(sessions.size + pendingSessionIds.size + closingSessions.size + publicHttps.size,
+      sessions.has(payload.sessionId), policy.maxSessions)) return json(response, 429, { error: "session_limit_exceeded" });
     let session: RemoteBrowserSession;
     try {
       session = await createSession({ sessionId: payload.sessionId, executorInstanceId: payload.executorInstanceId, frameStreamId: payload.frameStreamId, mediaParticipantId: payload.mediaParticipantId, roomId: payload.roomId, surfaceId, objectId: payload.objectId, url: payload.url }, policy);
@@ -1788,10 +1819,48 @@ function admitFrameSocketRequest(request: IncomingMessage, listenPort: number, e
   }
 }
 
-export function startRemoteBrowserService(listenPort = port, env: NodeJS.ProcessEnv = process.env) {
+export function startRemoteBrowserService(listenPort = port, env: NodeJS.ProcessEnv = process.env, publicHttpsRuntime?: PublicHttpsRuntime) {
+  // There is no default implementation: the allowlist browser cannot act as an isolated gateway or publisher.
+  const publicHttps = publicHttpsRuntime && new PublicHttpsSessions({
+    runtime: publicHttpsRuntime,
+    async retirePredecessor(binding) {
+      const previous = sessions.get(binding.sessionId);
+      if (!previous) return;
+      if (previous.roomId !== binding.roomId || previous.surfaceId !== binding.surfaceId || previous.objectId !== binding.objectId) {
+        throw new Error("invalid_session_binding");
+      }
+      await stopSession(previous.sessionId, "replaced");
+    },
+    async authorize(binding, purpose, signal) {
+      if (!resolveRemoteBrowserServicePolicy(env).enabled) return { status: "denied" };
+      const response = await fetch(new URL(REMOTE_BROWSER_PUBLIC_HTTPS_AUTHORITY_PATH, env.ROOM_STATE_INTERNAL_URL?.trim() || roomStateInternalUrl), {
+        method: "POST", headers: getInternalHeaders(env), redirect: "error",
+        signal: AbortSignal.any([signal, AbortSignal.timeout(3000)]),
+        body: JSON.stringify({ binding, purpose })
+      });
+      if (response.status === 403) return { status: "denied" };
+      if (!response.ok) return { status: "unavailable" };
+      const result = await response.json() as { binding?: unknown; validForMs?: unknown; url?: unknown } | null;
+      if (!isRemoteBrowserLeaseDuration(result?.validForMs) || !isRemoteBrowserPublicHttpsBinding(result.binding)
+        || !sameRemoteBrowserPublicHttpsBinding(result.binding, binding)) return { status: "unavailable" };
+      if (purpose === "start") {
+        if (typeof result.url !== "string" || URL.parse(result.url)?.protocol !== "https:") return { status: "denied" };
+        return { status: "allowed", validForMs: result.validForMs, url: result.url };
+      }
+      return { status: "allowed", validForMs: result.validForMs };
+    },
+    onStop(binding, reason) {
+      const inputEventId = `${binding.executorInstanceId}:public-https:${reason}`;
+      const patch: RemoteBrowserPatch = reason === "manual"
+        ? { type: "mark-stopped", inputEventId }
+        : { type: "mark-failed", inputEventId, errorCode: reason === "expired" ? "session_expired" : "executor_unavailable" };
+      void patchRemoteBrowserExecutorState({ ...binding, mediaParticipantId: binding.executorInstanceId,
+        frameStreamId: resolveRemoteBrowserFrameStreamId(binding) }, patch, env).catch(() => undefined);
+    }
+  });
   activeListenPort = listenPort;
   const server = createServer((request, response) => {
-    handleRequest(request, response, env).catch((error: unknown) => {
+    handleRequest(request, response, env, publicHttps).catch((error: unknown) => {
       metrics.requestFailuresTotal += 1;
       const id = requestId(request);
       response.setHeader("x-request-id", id);
@@ -1853,6 +1922,7 @@ export function startRemoteBrowserService(listenPort = port, env: NodeJS.Process
     });
   });
   server.on("close", () => {
+    publicHttps?.close();
     for (const sessionId of [...sessions.keys()]) void stopSession(sessionId, "shutdown");
     void browserPromise?.then((browser) => browser.close()).catch(() => undefined);
     browserPromise = null;

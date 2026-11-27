@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { REMOTE_BROWSER_ROOM_POLICY_PATH } from "@vrata/shared-types";
 import { activatedIdentityRoomGuard } from "./identity/protocol-guard.js";
-import { startAuthorHttpFixture, authorHttpBearer, until, type AuthorHttpResponse } from "./plugins/author-http.test-helper.js";
+import { AUTHOR_HTTP_INTERNAL_TOKEN, startAuthorHttpFixture, authorHttpBearer, until, type AuthorHttpResponse } from "./plugins/author-http.test-helper.js";
 
 const postgres = { skip: !process.env.VRATA_TEST_POSTGRES_URL && !process.env.CI, timeout: 120_000 };
 function noGrant(response: AuthorHttpResponse) {
@@ -10,7 +11,7 @@ function noGrant(response: AuthorHttpResponse) {
 }
 
 test("only the room administrator can read or change the browser URL policy of a saved private room", postgres, async t => {
-  const h = await startAuthorHttpFixture(t);
+  const h = await startAuthorHttpFixture(t, 2, false, false, {});
   const { room, host } = await h.room();
   const member = await h.session(room.roomId);
   const other = await h.room();
@@ -23,7 +24,10 @@ test("only the room administrator can read or change the browser URL policy of a
     return result.json<{ participant: { role: string; permissions: string[] } }>().participant;
   };
   const policy = { remoteBrowserUrlPolicy: "public-https" };
+  const decide = (roomId = room.roomId, headers = { "x-vrata-internal-token": AUTHOR_HTTP_INTERNAL_TOKEN }) =>
+    h.request(REMOTE_BROWSER_ROOM_POLICY_PATH, "POST", headers, { roomId });
   assert.equal((await read()).json().remoteBrowserUrlPolicy, "allowlist");
+  assert.deepEqual((await decide()).json(), { roomId: room.roomId, mode: "allowlist" });
   assert.equal((await patch(policy)).status, 400);
   assert.equal((await patch({ visibility: "unlisted", ...policy })).status, 400);
   assert.equal((await patch({ remoteBrowserUrlPolicy: null })).status, 400);
@@ -36,12 +40,18 @@ test("only the room administrator can read or change the browser URL policy of a
   assert.equal(changed.status, 200);
   assert.equal(changed.json().remoteBrowserUrlPolicy, "public-https");
   assert.equal((await read()).json().remoteBrowserUrlPolicy, "public-https");
+  const grant = (await decide()).json();
+  assert.deepEqual(grant, { roomId: room.roomId, tenantId: room.tenantId, mode: "public-https",
+    policyRevision: (await h.storage.getRoomForRemoteBrowser(room.roomId))?.policyRevision, validForMs: 10_000 });
+  assert.deepEqual((await decide(other.room.roomId)).json(), { roomId: other.room.roomId, mode: "allowlist" });
+  assert.equal((await decide("unknown-room")).status, 403);
   for (const token of [host.token, member.token]) {
     const headers = authorHttpBearer(token);
     const details = await read(headers);
     assert.equal(details.status, 200);
     assert.equal(details.json().remoteBrowserUrlPolicy, undefined);
     assert.equal((await patch({ remoteBrowserUrlPolicy: "allowlist" }, headers)).status, 403);
+    assert.equal((await h.request(REMOTE_BROWSER_ROOM_POLICY_PATH, "POST", headers, { roomId: room.roomId })).status, 403);
   }
   assert.deepEqual(await Promise.all([control(host.token), control(member.token)]), permissions);
   const stale = await h.held(room.roomId, () => patch(policy), async client => {
@@ -50,6 +60,12 @@ test("only the room administrator can read or change the browser URL policy of a
   assert.deepEqual([stale.status, stale.json().error], [409, "room_visibility_changed"]);
   const afterRace = (await read()).json();
   assert.deepEqual([afterRace.visibility, afterRace.remoteBrowserUrlPolicy], ["unlisted", "allowlist"]);
+  assert.deepEqual((await decide()).json(), { roomId: room.roomId, mode: "allowlist" });
+  assert.equal((await patch({ visibility: "private", ...policy })).status, 200);
+  assert.notEqual((await decide()).json().policyRevision, grant.policyRevision);
+  await h.storage.updateRoom(room.roomId, { status: "disabled" });
+  assert.equal((await decide()).status, 403);
+  assert.equal((await read()).json().remoteBrowserUrlPolicy, "public-https");
   assert.equal((await read(h.adminHeaders, `/api/rooms/${other.room.roomId}`)).json().remoteBrowserUrlPolicy, "allowlist");
   const virtual = await patch({ visibility: "private", ...policy }, h.adminHeaders, `/api/rooms/virtual-${randomUUID()}`);
   assert.equal(virtual.status, 404);

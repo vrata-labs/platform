@@ -18,7 +18,8 @@ import { fileURLToPath } from "node:url";
 import { AccessToken } from "livekit-server-sdk";
 import { PDFDocument } from "pdf-lib";
 import { extractSceneBundleZipToTemp, normalizeSceneBundleRelativePath, validateSceneBundlePath, validateSceneBundleReference } from "@vrata/asset-pipeline";
-import { createRoomAccessDebugState, createUserMediaIdentity, userMediaScope, getRoomPermissions, hasRoomPermission, parseRoomRole, type RoomPermission, type RoomRole } from "@vrata/shared-types";
+import { createRoomAccessDebugState, createUserMediaIdentity, userMediaScope, getRoomPermissions, hasRoomPermission, parseRoomRole,
+  REMOTE_BROWSER_ROOM_POLICY_PATH, type RoomPermission, type RoomRole } from "@vrata/shared-types";
 import { getRoomSessionTokenSecret, isRotatedDevelopmentSession, signRoomSessionToken, verifyRoomSessionToken, type RoomSessionRoleSource, type RoomSessionTokenPayload, type RoomSessionTokenVerificationResult } from "@vrata/shared-types/session-token";
 
 import {
@@ -55,7 +56,7 @@ import {
   isAdhocRoomsAllowed
 } from "./feature-flags.js";
 import { effectiveRoomMediaPolicy, roomAllowsDocument } from "./room-media-policy.js";
-import { isRemoteBrowserUrlPolicy } from "./room-browser-url-policy.js";
+import { isRemoteBrowserUrlPolicy, readRemoteBrowserRoomPolicy } from "./room-browser-url-policy.js";
 import { createLegacyIdentityBoundary, IdentityBoundaryError, legacyBoundaryApplies, legacyBoundaryAllowsAdministrator } from "./identity/legacy-boundary.js";
 import { assertVirtualRoomId, InvalidVirtualRoomId } from "./identity/virtual-effect-facade.js";
 import { validId } from "./identity/authority.js";
@@ -2475,6 +2476,17 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const roomId = url.searchParams.get("roomId");
     const roomRequiresV2 = roomId ? await storage.hasRoomIdentityAuthority(roomId) : false;
     return json(response, 200, { minimumProtocolVersion, roomRequiresV2 });
+  }
+
+  if (method === "POST" && url.pathname === REMOTE_BROWSER_ROOM_POLICY_PATH) {
+    if (!getInternalServiceToken() || !isAuthorizedInternalRequest(request)) return json(response, 403, { error: "forbidden" });
+    const payload = await parseBody<{ roomId?: unknown }>(request).catch(() => null);
+    if (typeof payload?.roomId !== "string" || !payload.roomId || payload.roomId.length > 512) {
+      return json(response, 400, { error: "invalid_room_id" });
+    }
+    const policy = await readRemoteBrowserRoomPolicy(storage, payload.roomId);
+    response.setHeader("cache-control", "no-store");
+    return policy ? json(response, 200, policy) : json(response, 403, { error: "remote_browser_not_authorized" });
   }
 
   if (method === "POST" && url.pathname === "/api/internal/identity-session/verify") {

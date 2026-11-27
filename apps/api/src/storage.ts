@@ -259,6 +259,7 @@ export class MemoryStorage implements Storage {
   private readonly identityAdapter: ReturnType<typeof createMemoryRoomIdentities>;
   /** Durable per-record media generation: replaced on create, dropped on delete, kept by updates. */
   private readonly mediaIncarnations = new Map<string, string>();
+  private readonly remoteBrowserPolicyRevisions = new Map<string, string>();
   private readonly identityPolicy = createMemoryIdentityProtocol();
   readonly identityProtocol: Storage["identityProtocol"] = this.identityPolicy;
   readonly roomIdentities: Storage["roomIdentities"];
@@ -369,7 +370,10 @@ export class MemoryStorage implements Storage {
     if (decision.kind === "apply" && this.rooms.get(guard.roomId) === room) {
       // Only the patch keys over the current raw control; spare keys and every other room field are kept.
       const sessionControl = structuredClone({ ...room.sessionControl, ...decision.patch });
-      publish = () => { this.rooms.set(guard.roomId, { ...room, sessionControl }); };
+      publish = () => {
+        if (room.sessionControl?.endedAt !== sessionControl.endedAt) this.remoteBrowserPolicyRevisions.delete(guard.roomId);
+        this.rooms.set(guard.roomId, { ...room, sessionControl });
+      };
       receipt = appliedLegacyControl(structuredClone(sessionControl));
     }
     assertLegacyControlLease(guard, this.identityNow());
@@ -562,6 +566,13 @@ export class MemoryStorage implements Storage {
     const room = this.rooms.get(roomId);
     return room ? structuredClone(room) : null;
   }
+  async getRoomForRemoteBrowser(roomId: string): Promise<{ room: RoomRecord; policyRevision: string } | null> {
+    const room = this.rooms.get(roomId);
+    if (!room) return null;
+    const policyRevision = this.remoteBrowserPolicyRevisions.get(roomId) ?? crypto.randomUUID();
+    this.remoteBrowserPolicyRevisions.set(roomId, policyRevision);
+    return { room: structuredClone(room), policyRevision };
+  }
   private createRoomSync(input: Partial<RoomRecord>, options?: { allowUnownedPersonal?: boolean }): RoomRecord {
     const templateId = input.templateId ?? (input.roomType === "personal" ? "personal-workspace-basic" : "meeting-room-basic");
     const versionSnapshot = this.requireActiveTemplateVersion(templateId);
@@ -693,6 +704,11 @@ export class MemoryStorage implements Storage {
     if ((this.identityPolicy.current() >= 2 || this.identityAdapter.hasRoomBindings(roomId)) && identityLifecycleChanged(existing, updated)) {
       throw new Error(IDENTITY_LIFECYCLE_REQUIRES_V2);
     }
+    if (existing.remoteBrowserUrlPolicy !== updated.remoteBrowserUrlPolicy || existing.visibility !== updated.visibility
+      || existing.status !== updated.status || existing.disabledAt !== updated.disabledAt
+      || existing.sessionControl?.endedAt !== updated.sessionControl?.endedAt) {
+      this.remoteBrowserPolicyRevisions.delete(roomId);
+    }
     this.rooms.set(roomId, structuredClone(updated));
     return structuredClone(updated);
   }
@@ -707,6 +723,7 @@ export class MemoryStorage implements Storage {
     if (room) documentStorageKeys?.push(...[...this.roomDocuments.values()].filter(document => document.roomId === roomId).map(document => document.storageKey));
     this.identityAdapter.deleteRoom(roomId);
     this.mediaIncarnations.delete(roomId);
+    this.remoteBrowserPolicyRevisions.delete(roomId);
     // The room's notes, their versions and its documents go with it, as the Postgres foreign keys cascade:
     // a recreated room with the same ID starts empty.
     for (const note of [...this.roomNotes.values()].filter(note => note.roomId === roomId)) {
@@ -1141,6 +1158,8 @@ export class MemoryStorage implements Storage {
     if (patch.remoteBrowserUrlPolicy !== undefined && !roomSupportsRemoteBrowserUrlPolicy(room)) {
       throw new Error("room_remote_browser_url_policy_not_supported");
     }
+    const previousMode = room.remoteBrowserUrlPolicy;
+    const previousAccess = room.managed;
     if (patch.accessUntil !== undefined || patch.graceSeconds !== undefined || patch.status !== undefined) {
       this.managedRooms.noteManagedRoomAccessChange(room, patch.status ?? room.managed.status);
     }
@@ -1156,6 +1175,12 @@ export class MemoryStorage implements Storage {
     };
     if (patch.remoteBrowserUrlPolicy === "public-https") room.remoteBrowserUrlPolicy = patch.remoteBrowserUrlPolicy;
     if (patch.remoteBrowserUrlPolicy === "allowlist") delete room.remoteBrowserUrlPolicy;
+    if (previousMode !== room.remoteBrowserUrlPolicy || previousAccess.status !== room.managed.status
+      || (previousAccess.mediaModes?.remoteBrowser ?? false) !== (room.managed.mediaModes?.remoteBrowser ?? false)
+      || ((patch.accessUntil !== undefined || patch.graceSeconds !== undefined || patch.status !== undefined)
+        && Date.parse(previousAccess.accessUntil) + previousAccess.graceSeconds * 1000 <= this.identityNow())) {
+      this.remoteBrowserPolicyRevisions.delete(roomId);
+    }
     return structuredClone(room);
   }
   beginIntegrationOperation(input: IntegrationOperationStart): Promise<{ created: boolean; operation: IntegrationOperationRecord }> { return this.integrationOperations.begin(input); }
@@ -1746,13 +1771,25 @@ export class PostgresStorage implements Storage {
     return result.rows.map(mapRoomRow);
   }
   async getRoom(roomId: string): Promise<RoomRecord | null> {
-    const result = await this.effectDatabase.query(`
+    const row = await this.readRoomRow(roomId);
+    return row ? mapRoomRow(row) : null;
+  }
+  async getRoomForRemoteBrowser(roomId: string): Promise<{ room: RoomRecord; policyRevision: string } | null> {
+    const row = await this.readRoomRow(roomId);
+    return row ? { room: mapRoomRow(row), policyRevision: row.managed_browser_policy_revision
+      ? `${row.remote_browser_policy_revision}:${row.managed_browser_policy_revision}` : row.remote_browser_policy_revision } : null;
+  }
+  private async readRoomRow(roomId: string) {
+    const result = await this.effectDatabase.query<Parameters<typeof mapRoomRow>[0] & {
+      remote_browser_policy_revision: string; managed_browser_policy_revision: string | null;
+    }>(`
       select r.room_id, r.tenant_id, r.template_id, r.template_version, r.template_snapshot,
              tv.template_id as template_version_template_id, tv.version as template_version_resolved,
              tv.snapshot as template_version_snapshot, tv.content_hash as template_version_content_hash,
              r.name, r.room_type, r.owner_participant_id,
              r.status, r.disabled_at, r.disabled_by, r.visibility, r.remote_browser_url_policy, r.scene_bundle_url, r.features,
              r.asset_ids, r.theme, r.guest_allowed, r.avatar_config, r.session_control, r.personal_state,
+             r.remote_browser_policy_revision, ir.remote_browser_policy_revision as managed_browser_policy_revision,
              ${MANAGED_ROOM_COLUMNS_SQL}
       from rooms r
       left join templates t on t.template_id = r.template_id
@@ -1761,8 +1798,7 @@ export class PostgresStorage implements Storage {
       left join template_versions tv on tv.template_id = r.template_id and tv.version = coalesce(r.template_version, t.current_version)
       where r.room_id = $1
     `, [roomId]);
-    const row = result.rows[0];
-    return row ? mapRoomRow(row) : null;
+    return result.rows[0];
   }
   private async insertRoom(input: Partial<RoomRecord>, executor: Pick<PoolClient, "query">, options?: { allowUnownedPersonal?: boolean }): Promise<RoomRecord> {
     const templateId = input.templateId ?? (input.roomType === "personal" ? "personal-workspace-basic" : "meeting-room-basic");

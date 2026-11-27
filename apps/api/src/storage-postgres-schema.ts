@@ -208,6 +208,24 @@ export async function ensurePostgresStorageSchema(client: PoolClient, installRoo
   await client.query(`alter table rooms alter column session_control set default '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb`);
   await client.query(`update rooms set session_control = '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb where session_control is null`);
   await client.query(`update rooms set session_control = '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb || session_control`);
+  await client.query(`
+    alter table rooms add column if not exists remote_browser_policy_revision uuid not null default gen_random_uuid();
+    create or replace function vrata_version_room_browser_policy() returns trigger language plpgsql as $$
+    begin
+      if old.remote_browser_url_policy is distinct from new.remote_browser_url_policy
+        or old.visibility is distinct from new.visibility
+        or old.status is distinct from new.status
+        or old.disabled_at is distinct from new.disabled_at
+        or (old.session_control->>'endedAt') is distinct from (new.session_control->>'endedAt') then
+        new.remote_browser_policy_revision := gen_random_uuid();
+      end if;
+      return new;
+    end;
+    $$;
+    -- Fires after reset_room_browser_url_policy, even for older writers.
+    create or replace trigger version_room_browser_policy before update of remote_browser_url_policy, visibility, status, disabled_at, session_control on rooms
+      for each row execute function vrata_version_room_browser_policy();
+  `);
   await installRoomExtensions(client);
   await client.query(`alter table scene_bundles add column if not exists status text not null default 'active'`);
   await client.query(`alter table scene_bundles add column if not exists is_current boolean not null default true`);

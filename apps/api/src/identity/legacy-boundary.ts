@@ -1,3 +1,4 @@
+import { REMOTE_BROWSER_ROOM_POLICY_PATH } from "@vrata/shared-types";
 import type { Storage } from "../storage-contracts.js";
 import { PREJOIN_SETTINGS_ROUTE } from "../room-prejoin-settings.js";
 
@@ -38,7 +39,7 @@ export function legacyBoundaryApplies(method: string, pathname: string): boolean
   // The pre-join read releases only the template settings of a room open to anonymous guests and applies this boundary to every other room itself.
   if (method === "GET" && PREJOIN_SETTINGS_ROUTE.test(pathname)) return false;
   return !(method === "GET" && ["/api/templates", "/api/assets", "/api/tenants", "/api/internal/identity-policy"].includes(pathname))
-    && !(method === "POST" && ["/api/internal/identity-session/verify", "/api/tokens/state", "/api/tokens/remote-browser-media", "/api/personal-room",
+    && !(method === "POST" && ["/api/internal/identity-session/verify", REMOTE_BROWSER_ROOM_POLICY_PATH, "/api/tokens/state", "/api/tokens/remote-browser-media", "/api/personal-room",
       "/api/room-grants/exchange"].includes(pathname));
 }
 

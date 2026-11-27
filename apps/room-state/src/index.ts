@@ -8,17 +8,25 @@ import {
   IMAGE_VIEWER_OBJECT_TYPE,
   REMOTE_BROWSER_OBJECT_TYPE,
   PDF_PRESENTATION_OBJECT_TYPE,
+  REMOTE_BROWSER_PUBLIC_HTTPS_AUTHORITY_PATH,
+  REMOTE_BROWSER_PUBLIC_HTTPS_SESSION_PATH,
+  REMOTE_BROWSER_ROOM_POLICY_PATH,
   VIDEO_PLAYER_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
   IDENTITY_UPGRADE_CLOSE_CODE,
   getRoomPermissions,
   hasRoomPermission,
+  isRemoteBrowserLeaseDuration,
+  isRemoteBrowserPublicHttpsBinding,
   parseRoomRole,
   registerSceneMediaSurfaces,
+  sameRemoteBrowserPublicHttpsBinding,
   type MediaObjectCommandResult,
   type MediaObjectInstance,
   type RemoteBrowserObjectState,
   type RemoteBrowserPatch,
+  type RemoteBrowserPublicHttpsBinding,
+  type RemoteBrowserRoomPolicy,
   type RoomPermission,
   type RoomRole
 } from "@vrata/shared-types";
@@ -78,6 +86,7 @@ export interface RoomStateServer {
   pendingDisconnects: Map<string, Map<string, ReturnType<typeof setTimeout>>>;
   participantAuthorities: Map<string, Map<string, VerifiedParticipantAuthority>>;
   v2Connections: Map<WebSocket, { roomId: string; participantId: string }>;
+  publicHttpsOpens: Map<string, { binding: RemoteBrowserPublicHttpsBinding; participantId: string; phase: "pending" | "claimed" | "revoked" }>;
 }
 
 const DISCONNECT_GRACE_MS = 1500;
@@ -388,6 +397,7 @@ export function createRoomStateServer(): RoomStateServer {
     socketParticipants: new Map<WebSocket, { roomId: string; participantId: string; access: ParticipantAccessState }>(),
     pendingDisconnects: new Map<string, Map<string, ReturnType<typeof setTimeout>>>(),
     participantAuthorities: new Map<string, Map<string, VerifiedParticipantAuthority>>(),
+    publicHttpsOpens: new Map(),
     // Includes initial verifications, before the socket becomes an admitted participant.
     v2Connections: new Map<WebSocket, { roomId: string; participantId: string }>()
   };
@@ -413,7 +423,7 @@ function scheduleDisconnectCleanup(server: RoomStateServer, roomId: string, part
     if (room) {
       for (const object of Object.values(room.mediaObjects.objects)) {
         if (object.type === REMOTE_BROWSER_OBJECT_TYPE && object.ownerParticipantId === participantId) {
-          stopRemoteBrowserSession((object.state as RemoteBrowserObjectState).executorSessionId);
+          stopRemoteBrowserSession(server, object as MediaObjectInstance<RemoteBrowserObjectState>);
         }
       }
       server.rooms.set(roomId, leaveRoom(room, participantId));
@@ -581,7 +591,7 @@ export function applyVerifiedParticipantAccess(server: RoomStateServer, current:
   if (updatedRoom && previousRoom && updatedRoom !== previousRoom) {
     for (const object of Object.values(previousRoom.mediaObjects.objects)) {
       if (object.type === REMOTE_BROWSER_OBJECT_TYPE && !updatedRoom.mediaObjects.objects[object.objectId]) {
-        stopRemoteBrowserSession((object.state as RemoteBrowserObjectState).executorSessionId);
+        stopRemoteBrowserSession(server, object as MediaObjectInstance<RemoteBrowserObjectState>);
       }
     }
   }
@@ -713,7 +723,7 @@ export function applyMediaObjectStopCommand(server: RoomStateServer, roomId: str
 }): MediaObjectCommandResultPayload {
   const room = ensureRoom(server, roomId);
   const objectId = input.objectId?.trim() || "";
-  const remoteBrowserSessionId = getRemoteBrowserObject(server, roomId, objectId)?.state.executorSessionId ?? null;
+  const remoteBrowser = getRemoteBrowserObject(server, roomId, objectId);
   const result = stopMediaObject(room, participantId, {
     commandId: input.commandId?.trim() || randomUUID(),
     surfaceId: input.surfaceId?.trim() || "debug-main",
@@ -722,9 +732,7 @@ export function applyMediaObjectStopCommand(server: RoomStateServer, roomId: str
   });
   server.rooms.set(roomId, result.room);
   if (result.result.accepted) {
-    if (result.result.objectType === REMOTE_BROWSER_OBJECT_TYPE) {
-      stopRemoteBrowserSession(remoteBrowserSessionId);
-    }
+    if (remoteBrowser) stopRemoteBrowserSession(server, remoteBrowser);
     broadcastRoom(server, roomId);
   }
   return result.result;
@@ -783,7 +791,7 @@ export function applyMediaObjectPatchCommand(server: RoomStateServer, roomId: st
   }
   if (result.result.accepted) {
     if (result.result.objectType === REMOTE_BROWSER_OBJECT_TYPE) {
-      forwardRemoteBrowserPatch(server, roomId, result.result.objectId, input.patch);
+      forwardRemoteBrowserPatch(server, roomId, participantId, result.result.objectId, input.patch, featureEnv);
     }
     broadcastRoom(server, roomId);
   }
@@ -980,7 +988,65 @@ export function verifyRemoteBrowserBinding(server: RoomStateServer, input: Param
   return classifyRemoteBrowserBinding(server, input) === "authorized";
 }
 
-function forwardRemoteBrowserPatch(server: RoomStateServer, roomId: string, objectId: string | null | undefined, patch: unknown): void {
+async function readBrowserRoomPolicy(roomId: string, env: NodeJS.ProcessEnv): Promise<RemoteBrowserRoomPolicy | null> {
+  const token = getInternalServiceToken(env);
+  const response = await fetch(new URL(REMOTE_BROWSER_ROOM_POLICY_PATH, env.API_INTERNAL_URL?.trim() || "http://127.0.0.1:4000"), {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(token ? { "x-vrata-internal-token": token } : {}) },
+    body: JSON.stringify({ roomId }),
+    redirect: "error",
+    signal: AbortSignal.timeout(2000)
+  });
+  if (response.status === 403) return null;
+  if (!response.ok) throw new Error("remote_browser_policy_unavailable");
+  const decision = await response.json() as Partial<RemoteBrowserRoomPolicy> | null;
+  if (decision?.roomId === roomId) {
+    if (decision.mode === "allowlist") return { mode: "allowlist", roomId };
+    if (decision.mode === "public-https" && typeof decision.tenantId === "string" && decision.tenantId
+      && typeof decision.policyRevision === "string" && decision.policyRevision && isRemoteBrowserLeaseDuration(decision.validForMs)) {
+      return { mode: "public-https", roomId, tenantId: decision.tenantId, policyRevision: decision.policyRevision, validForMs: decision.validForMs };
+    }
+  }
+  throw new Error("remote_browser_policy_unavailable");
+}
+
+function currentBrowserOpen(server: RoomStateServer, input: Pick<RemoteBrowserPublicHttpsBinding, "roomId" | "surfaceId" | "objectId" | "sessionId" | "executorInstanceId">) {
+  const room = server.rooms.get(input.roomId);
+  const object = getRemoteBrowserObject(server, input.roomId, input.objectId);
+  if (!room || room.mediaPolicy?.modes.remoteBrowser === false || object?.surfaceId !== input.surfaceId
+    || !verifyRemoteBrowserBinding(server, { ...input, executorSessionId: input.sessionId })) return null;
+  return { room, object };
+}
+
+async function authorizePublicHttps(
+  server: RoomStateServer, binding: RemoteBrowserPublicHttpsBinding, purpose: "start" | "renew", env: NodeJS.ProcessEnv
+) {
+  const claimable = () => {
+    const open = server.publicHttpsOpens.get(binding.objectId);
+    if (!open || !sameRemoteBrowserPublicHttpsBinding(open.binding, binding) || open.phase !== (purpose === "renew" ? "claimed" : "pending")
+      || !isRemoteBrowserFeatureEnabled(env)) return null;
+    const current = currentBrowserOpen(server, binding);
+    if (!current || !current.object.state.currentUrl) return null;
+    if (purpose === "start" && !hasRoomPermission(
+      current.room.participants.find(item => item.participantId === open.participantId)?.permissions ?? [], "remote-browser.open-url"
+    )) return null;
+    return { open, url: current.object.state.currentUrl };
+  };
+  if (!claimable()) return null;
+  const policy = await readBrowserRoomPolicy(binding.roomId, env);
+  const current = claimable();
+  if (!current) return null;
+  if (policy?.mode !== "public-https" || policy.tenantId !== binding.tenantId || policy.policyRevision !== binding.policyRevision) {
+    current.open.phase = "revoked";
+    return null;
+  }
+  current.open.phase = "claimed";
+  return { binding: current.open.binding, validForMs: policy.validForMs, ...(purpose === "start" ? { url: current.url } : {}) };
+}
+
+function forwardRemoteBrowserPatch(
+  server: RoomStateServer, roomId: string, participantId: string, objectId: string | null | undefined, patch: unknown, env: NodeJS.ProcessEnv
+): void {
   const baseUrl = getRemoteBrowserInternalUrl();
   if (!baseUrl || !patch || typeof patch !== "object") {
     return;
@@ -991,23 +1057,36 @@ function forwardRemoteBrowserPatch(server: RoomStateServer, roomId: string, obje
     return;
   }
   const remotePatch = patch as RemoteBrowserPatch;
-  const request = remotePatch.type === "open-url"
-    ? fetch(`${baseUrl}/api/sessions`, {
-      method: "POST",
-      headers: getRemoteBrowserFetchHeaders(),
-      body: JSON.stringify({
-        sessionId: state.executorSessionId,
-        executorInstanceId: state.executorInstanceId,
-        frameStreamId: remoteBrowserFrameStreamId(state),
-        mediaParticipantId: state.mediaParticipantId,
-        roomId,
-        // Executor callbacks must name the object's surface: room-state rejects any other one.
-        surfaceId: object.surfaceId,
-        objectId,
-        url: remotePatch.url
-      })
-    })
-    : remotePatch.type === "pointer" || remotePatch.type === "scroll" || remotePatch.type === "keyboard"
+  const binding = {
+    sessionId: state.executorSessionId, executorInstanceId: state.executorInstanceId,
+    roomId, surfaceId: object.surfaceId, objectId: object.objectId
+  };
+  const start = async () => {
+    // A new object revision supersedes the previous instance even if its start has not reached the executor.
+    const stopped = stopPublicHttpsOpen(server, object.objectId, baseUrl);
+    const policy = await readBrowserRoomPolicy(roomId, env);
+    if (stopped) await stopped;
+    const current = currentBrowserOpen(server, binding);
+    if (!current) return null;
+    if (!isRemoteBrowserFeatureEnabled(env) || !hasRoomPermission(
+      current.room.participants.find(item => item.participantId === participantId)?.permissions ?? [], "remote-browser.open-url"
+    )) throw new Error("remote_browser_not_authorized");
+    if (!policy) throw new Error("remote_browser_not_authorized");
+    const headers = getRemoteBrowserFetchHeaders();
+    if (policy.mode === "public-https") {
+      const expanded = { ...binding, tenantId: policy.tenantId, policyRevision: policy.policyRevision };
+      server.publicHttpsOpens.set(object.objectId, { binding: expanded, participantId, phase: "pending" });
+      return fetch(`${baseUrl}${REMOTE_BROWSER_PUBLIC_HTTPS_SESSION_PATH}`, {
+        method: "POST", headers, redirect: "error", signal: AbortSignal.timeout(5000), body: JSON.stringify(expanded)
+      });
+    }
+    return fetch(`${baseUrl}/api/sessions`, {
+      method: "POST", headers, redirect: "error",
+      body: JSON.stringify({ ...binding, frameStreamId: remoteBrowserFrameStreamId(state), mediaParticipantId: state.mediaParticipantId, url: state.currentUrl })
+    });
+  };
+  const request = remotePatch.type === "open-url" ? start()
+    : !server.publicHttpsOpens.has(object.objectId) && (remotePatch.type === "pointer" || remotePatch.type === "scroll" || remotePatch.type === "keyboard")
       ? fetch(`${baseUrl}/api/sessions/${encodeURIComponent(state.executorSessionId)}/input`, {
         method: "POST",
         headers: getRemoteBrowserFetchHeaders(),
@@ -1017,10 +1096,15 @@ function forwardRemoteBrowserPatch(server: RoomStateServer, roomId: string, obje
   if (!request) {
     return;
   }
-  request.then((response) => {
-    if (response.ok) {
-      return;
+  const markUnavailable = () => {
+    if (remotePatch.type === "open-url" && currentBrowserOpen(server, binding)?.object.state.status === "loading") {
+      applyRemoteBrowserExecutorPatchCommand(server, { ...binding, executorSessionId: binding.sessionId,
+        patch: { type: "mark-failed", errorCode: "executor_unavailable", inputEventId: `${binding.executorInstanceId}:forward-failed` } });
     }
+  };
+  request.then((response) => {
+    if (!response || response.ok) return;
+    markUnavailable();
     logEvent({
       service: "room-state",
       env: process.env.NODE_ENV ?? "development",
@@ -1031,22 +1115,33 @@ function forwardRemoteBrowserPatch(server: RoomStateServer, roomId: string, obje
       status: response.status,
       timestamp: new Date().toISOString()
     });
-  }).catch((error: unknown) => {
+  }).catch(() => {
+    markUnavailable();
     logEvent({
       service: "room-state",
       env: process.env.NODE_ENV ?? "development",
       errorCode: "remote_browser_forward_failed",
       roomId,
       objectId,
-      message: error instanceof Error ? error.message : "unknown",
       timestamp: new Date().toISOString()
     });
   });
 }
 
-function stopRemoteBrowserSession(sessionId: string | null | undefined): void {
+function stopPublicHttpsOpen(server: RoomStateServer, objectId: string, baseUrl: string): Promise<unknown> | undefined {
+  const open = server.publicHttpsOpens.get(objectId);
+  if (!open) return undefined;
+  server.publicHttpsOpens.delete(objectId);
+  return fetch(`${baseUrl}${REMOTE_BROWSER_PUBLIC_HTTPS_SESSION_PATH}`, {
+    method: "DELETE", headers: getRemoteBrowserFetchHeaders(), redirect: "error",
+    signal: AbortSignal.timeout(2000), body: JSON.stringify(open.binding)
+  }).catch(() => undefined); // The executor's lease independently expires if this notification is lost.
+}
+
+function stopRemoteBrowserSession(server: RoomStateServer, object: MediaObjectInstance<RemoteBrowserObjectState>): void {
   const baseUrl = getRemoteBrowserInternalUrl();
-  if (!baseUrl || !sessionId) {
+  const sessionId = object.state.executorSessionId;
+  if (!baseUrl || !sessionId || stopPublicHttpsOpen(server, object.objectId, baseUrl)) {
     return;
   }
   fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE", headers: getRemoteBrowserFetchHeaders() }).catch((error: unknown) => {
@@ -1143,6 +1238,20 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
         return;
       }
       const remoteBrowserSessionMatch = url.pathname.match(/^\/api\/internal\/remote-browser\/sessions\/([^/]+)$/);
+      if (request.method === "POST" && url.pathname === REMOTE_BROWSER_PUBLIC_HTTPS_AUTHORITY_PATH) {
+        if (!isAuthorizedRemoteBrowserRequest(request)) return json(response, 403, { error: "forbidden" });
+        const payload = await parseBody<{ binding?: unknown; purpose?: unknown }>(request).catch(() => null);
+        if (!isRemoteBrowserPublicHttpsBinding(payload?.binding) || (payload?.purpose !== "start" && payload?.purpose !== "renew")) {
+          return json(response, 400, { error: "invalid_remote_browser_binding" });
+        }
+        response.setHeader("cache-control", "no-store");
+        try {
+          const grant = await authorizePublicHttps(authority, payload.binding, payload.purpose, process.env);
+          return grant ? json(response, 200, grant) : json(response, 403, { error: "remote_browser_not_authorized" });
+        } catch {
+          return json(response, 503, { error: "remote_browser_policy_unavailable" });
+        }
+      }
       if (request.method === "POST" && url.pathname === "/api/internal/remote-browser/bindings/verify") {
         if (!isAuthorizedInternalRequest(request)) {
           json(response, 403, { error: "forbidden" });
@@ -1152,6 +1261,9 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
         if (!payload?.roomId || !payload.objectId || !payload.executorSessionId || !payload.executorInstanceId) {
           json(response, 400, { error: "invalid_remote_browser_binding" });
           return;
+        }
+        if (authority.publicHttpsOpens.get(payload.objectId)?.binding.executorInstanceId === payload.executorInstanceId) {
+          return json(response, 409, { authorized: false, reason: "mismatch" });
         }
         const reason = classifyRemoteBrowserBinding(authority, {
           roomId: payload.roomId,

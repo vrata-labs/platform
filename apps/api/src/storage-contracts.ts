@@ -554,6 +554,7 @@ export interface Storage extends IntegrationStore {
   listAssets(): Promise<AssetRecord[]>;
   listRooms(): Promise<RoomRecord[]>;
   getRoom(roomId: string): Promise<RoomRecord | null>;
+  getRoomForRemoteBrowser(roomId: string): Promise<{ room: RoomRecord; policyRevision: string } | null>;
   createRoom(input: Partial<RoomRecord>): Promise<RoomRecord>;
   /** Administrative metadata receipt, not a grant; floor 2 rejects raw owner/host/presenter seeds. */
   createAdministrativeRoom(input: Partial<RoomRecord>): Promise<RoomRecord>;

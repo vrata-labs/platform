@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { setImmediate } from "node:timers/promises";
 import { WebSocket } from "ws";
 
-import { getRoomPermissions } from "@vrata/shared-types";
+import { getRoomPermissions, REMOTE_BROWSER_ROOM_POLICY_PATH } from "@vrata/shared-types";
 import { signRoomSessionToken } from "@vrata/shared-types/session-token";
 
 import {
@@ -758,12 +759,13 @@ test("remote browser binding names why an instance is not current, and only last
   assert.equal(reason(second), "stopped");
 });
 
-test("remote browser open-url forwards the derived frame stream without storing it", () => {
+test("remote browser open-url forwards the derived frame stream without storing it", async () => {
   const previousUrl = process.env.REMOTE_BROWSER_INTERNAL_URL;
   const originalFetch = globalThis.fetch;
   const forwarded: Array<{ url: string; body: Record<string, unknown> }> = [];
   process.env.REMOTE_BROWSER_INTERNAL_URL = "http://remote-browser.test";
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).endsWith(REMOTE_BROWSER_ROOM_POLICY_PATH)) return Response.json({ mode: "allowlist", roomId: "demo-room" });
     forwarded.push({ url: String(url), body: JSON.parse(String(init?.body)) as Record<string, unknown> });
     return new Response(null, { status: 200 });
   }) as typeof fetch;
@@ -785,6 +787,7 @@ test("remote browser open-url forwards the derived frame stream without storing 
       patch: { type: "open-url", url: "https://example.com", inputEventId: "host:open:1" }
     });
     assert.equal(opened.accepted, true);
+    await setImmediate();
     assert.deepEqual(forwarded.map(({ url, body }) => [url, body.sessionId, body.executorInstanceId, body.frameStreamId, body.surfaceId]), [
       ["http://remote-browser.test/api/sessions", `remote-browser:${objectId}`, `remote-browser:${objectId}:instance:1`, `remote-browser:${objectId}:frames`, "debug-main"]
     ]);
@@ -810,12 +813,13 @@ test("remote browser open-url forwards the derived frame stream without storing 
   }
 });
 
-test("remote browser open-url, retry and replacement start the executor on the object's surface", () => {
+test("remote browser open-url, retry and replacement start the executor on the object's surface", async () => {
   const previousUrl = process.env.REMOTE_BROWSER_INTERNAL_URL;
   const originalFetch = globalThis.fetch;
   const forwarded: Array<{ url: string; body: Record<string, unknown> }> = [];
   process.env.REMOTE_BROWSER_INTERNAL_URL = "http://remote-browser.test";
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).endsWith(REMOTE_BROWSER_ROOM_POLICY_PATH)) return Response.json({ mode: "allowlist", roomId: "demo-room" });
     forwarded.push({ url: String(url), body: JSON.parse(String(init?.body)) as Record<string, unknown> });
     return new Response(null, { status: 200 });
   }) as typeof fetch;
@@ -839,6 +843,7 @@ test("remote browser open-url, retry and replacement start the executor on the o
       const instance = () => (server.rooms.get("demo-room")?.mediaObjects.objects[objectId]?.state as { executorInstanceId?: string } | undefined)?.executorInstanceId ?? "";
 
       assert.equal(open(revision(), "host:open:1", "https://example.com").accepted, true);
+      await setImmediate();
       const failed = applyRemoteBrowserExecutorPatchCommand(server, {
         roomId: "demo-room",
         surfaceId,
@@ -850,7 +855,9 @@ test("remote browser open-url, retry and replacement start the executor on the o
       assert.equal(failed.accepted, true, surfaceId);
       // Retry after a failure, then a replacement of the running session with another URL.
       assert.equal(open(revision(), "host:open:2", "https://example.com").accepted, true);
+      await setImmediate();
       assert.equal(open(revision(), "host:open:3", "https://example.org").accepted, true);
+      await setImmediate();
       assert.deepEqual(forwarded.map(({ url, body }) => [url, body.surfaceId, body.objectId, body.url]), [
         ["http://remote-browser.test/api/sessions", surfaceId, objectId, "https://example.com"],
         ["http://remote-browser.test/api/sessions", surfaceId, objectId, "https://example.com"],
