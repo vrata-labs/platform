@@ -43,10 +43,16 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Observe the public HTTPS network boundary with Chromium
+          cache: pnpm
+      - name: Build the room policy and callback authorities
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @vrata/api... --filter @vrata/room-state... build
+      - name: Observe network isolation and separately published media with Chromium
         run: node tests/integration/remote-browser-network/run.mjs
 
   core:

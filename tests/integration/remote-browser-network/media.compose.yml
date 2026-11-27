@@ -1,0 +1,86 @@
+x-platform: &platform
+  image: ${REMOTE_BROWSER_IMAGE_REPO}:${IMAGE_TAG}
+  working_dir: /workspace
+  networks: [fixture-media]
+  volumes:
+    - ${NETWORK_FIXTURE_DIR}/../../..:/workspace:ro
+  healthcheck:
+    disable: true
+
+x-environment: &environment
+  NODE_ENV: development
+  VRATA_DEV_ROLE_QUERY: "true"
+  VRATA_ADHOC_ROOMS: "true"
+  VRATA_INTERNAL_SERVICE_TOKEN: local-fixture-internal
+  REMOTE_BROWSER_INTERNAL_TOKEN: local-fixture-internal
+  REMOTE_BROWSER_ENABLED: "true"
+  API_INTERNAL_URL: http://fixture-api:4000
+  ROOM_STATE_INTERNAL_URL: http://fixture-room-state:2567
+  REMOTE_BROWSER_INTERNAL_URL: http://fixture-executor:4010
+
+services:
+  fixture-api:
+    <<: *platform
+    command: [node, apps/api/dist/index.js]
+    networks: [fixture-media, fixture-control]
+    ports: ["127.0.0.1::4000"]
+    environment:
+      <<: *environment
+      CONTROL_PLANE_ADMIN_TOKEN: local-fixture-admin
+      LIVEKIT_URL: ws://fixture-livekit:7880
+      LIVEKIT_API_KEY: devkey
+      LIVEKIT_API_SECRET: fixture-media-signing-key-only-for-local-tests
+
+  fixture-room-state:
+    <<: *platform
+    command: [node, apps/room-state/dist/index.js]
+    networks: [fixture-media, fixture-control]
+    ports: ["127.0.0.1::2567"]
+    environment: *environment
+
+  fixture-executor:
+    image: ${REMOTE_BROWSER_IMAGE_REPO}:${IMAGE_TAG}
+    init: true
+    environment:
+      <<: *environment
+      REMOTE_BROWSER_PUBLIC_HTTPS_ENABLED: "true"
+      REMOTE_BROWSER_VIEWPORT_MOCK: "1"
+      REMOTE_BROWSER_ALLOWED_ORIGINS: http://127.0.0.1:4010
+      REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS: "true"
+    networks: [fixture-media]
+    volumes:
+      - ${NETWORK_FIXTURE_DIR}:/fixture:ro
+      - public-https-control:/var/lib/vrata-public-https/control:ro
+      - public-https-data:/var/lib/vrata-public-https/data:ro
+      - public-https-display-91:/var/lib/vrata-public-https/slot-91-display:ro
+      - public-https-display-92:/var/lib/vrata-public-https/slot-92-display:ro
+      - public-https-proxy-91:/var/lib/vrata-public-https/slot-91-proxy
+      - public-https-proxy-92:/var/lib/vrata-public-https/slot-92-proxy
+    healthcheck:
+      disable: true
+
+  fixture-livekit:
+    image: livekit/livekit-server:v1.13.9
+    command: [--bind, 0.0.0.0]
+    environment:
+      LIVEKIT_CONFIG: |
+        port: 7880
+        log_level: warn
+        rtc:
+          tcp_port: 7881
+          udp_port: 7882
+          use_external_ip: false
+        keys:
+          devkey: fixture-media-signing-key-only-for-local-tests
+    networks: [fixture-media]
+
+  fixture-receiver:
+    <<: *platform
+    command: [sleep, infinity]
+    volumes:
+      - ${NETWORK_FIXTURE_DIR}:/fixture:ro
+
+networks:
+  fixture-media:
+    internal: true
+  fixture-control: {}

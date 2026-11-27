@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   createRemoteBrowserObjectRuntime,
   remoteBrowserMediaDrawRegion,
+  remoteBrowserSiteStatus,
   shouldCompositeRemoteBrowserMediaFrame
 } from "./remote-browser-object.js";
 import {
@@ -11,6 +12,22 @@ import {
   type MediaObjectInstance,
   type RemoteBrowserObjectState
 } from "@vrata/shared-types";
+import { setLocale } from "../i18n/i18n.js";
+
+test("browser menu explains the refusal separately from nonblocking page resource errors", () => {
+  const state: RemoteBrowserObjectState = { status: "active", ownerParticipantId: "host", surfaceId: "screen", lastInputEventId: null };
+  try {
+    setLocale("en");
+    assert.equal(remoteBrowserSiteStatus({ ...state, errorCode: "url_not_allowed" }), "This address is blocked by the room's browser policy.");
+    assert.match(remoteBrowserSiteStatus({ ...state, resourceIssue: "site_unavailable" }) ?? "", /^A page resource could not load\./);
+    setLocale("ru");
+    assert.equal(remoteBrowserSiteStatus({ ...state, navigationIssue: "private_destination", resourceIssue: "site_unavailable" }),
+      "Браузер не может подключиться к закрытому назначению.");
+    assert.equal(remoteBrowserSiteStatus(state), null);
+  } finally {
+    setLocale("en");
+  }
+});
 
 function installFakeCanvasDocument(): () => void {
   const previousDocument = globalThis.document;

@@ -86,7 +86,7 @@ export interface RoomStateServer {
   pendingDisconnects: Map<string, Map<string, ReturnType<typeof setTimeout>>>;
   participantAuthorities: Map<string, Map<string, VerifiedParticipantAuthority>>;
   v2Connections: Map<WebSocket, { roomId: string; participantId: string }>;
-  publicHttpsOpens: Map<string, { binding: RemoteBrowserPublicHttpsBinding; participantId: string; phase: "pending" | "claimed" | "revoked" }>;
+  publicHttpsOpens: Map<string, { binding: RemoteBrowserPublicHttpsBinding; participantId: string; phase: "pending" | "claimed" | "revoked"; url?: string }>;
 }
 
 const DISCONNECT_GRACE_MS = 1500;
@@ -1026,11 +1026,11 @@ async function authorizePublicHttps(
     if (!open || !sameRemoteBrowserPublicHttpsBinding(open.binding, binding) || open.phase !== (purpose === "renew" ? "claimed" : "pending")
       || !isRemoteBrowserFeatureEnabled(env)) return null;
     const current = currentBrowserOpen(server, binding);
-    if (!current || !current.object.state.currentUrl) return null;
+    if (!current || (purpose === "start" && !open.url)) return null;
     if (purpose === "start" && !hasRoomPermission(
       current.room.participants.find(item => item.participantId === open.participantId)?.permissions ?? [], "remote-browser.open-url"
     )) return null;
-    return { open, url: current.object.state.currentUrl };
+    return { open, url: open.url };
   };
   if (!claimable()) return null;
   const policy = await readBrowserRoomPolicy(binding.roomId, env);
@@ -1038,9 +1038,11 @@ async function authorizePublicHttps(
   if (!current) return null;
   if (policy?.mode !== "public-https" || policy.tenantId !== binding.tenantId || policy.policyRevision !== binding.policyRevision) {
     current.open.phase = "revoked";
+    delete current.open.url;
     return null;
   }
   current.open.phase = "claimed";
+  delete current.open.url;
   return { binding: current.open.binding, validForMs: policy.validForMs, ...(purpose === "start" ? { url: current.url } : {}) };
 }
 
@@ -1062,6 +1064,7 @@ function forwardRemoteBrowserPatch(
     roomId, surfaceId: object.surfaceId, objectId: object.objectId
   };
   const start = async () => {
+    if (remotePatch.type !== "open-url") return null;
     // A new object revision supersedes the previous instance even if its start has not reached the executor.
     const stopped = stopPublicHttpsOpen(server, object.objectId, baseUrl);
     const policy = await readBrowserRoomPolicy(roomId, env);
@@ -1075,23 +1078,29 @@ function forwardRemoteBrowserPatch(
     const headers = getRemoteBrowserFetchHeaders();
     if (policy.mode === "public-https") {
       const expanded = { ...binding, tenantId: policy.tenantId, policyRevision: policy.policyRevision };
-      server.publicHttpsOpens.set(object.objectId, { binding: expanded, participantId, phase: "pending" });
+      server.publicHttpsOpens.set(object.objectId, { binding: expanded, participantId, phase: "pending", url: remotePatch.url });
       return fetch(`${baseUrl}${REMOTE_BROWSER_PUBLIC_HTTPS_SESSION_PATH}`, {
         method: "POST", headers, redirect: "error", signal: AbortSignal.timeout(5000), body: JSON.stringify(expanded)
       });
     }
     return fetch(`${baseUrl}/api/sessions`, {
       method: "POST", headers, redirect: "error",
-      body: JSON.stringify({ ...binding, frameStreamId: remoteBrowserFrameStreamId(state), mediaParticipantId: state.mediaParticipantId, url: state.currentUrl })
+      body: JSON.stringify({ ...binding, frameStreamId: remoteBrowserFrameStreamId(state), mediaParticipantId: state.mediaParticipantId, url: remotePatch.url })
     });
   };
+  const publicOpen = server.publicHttpsOpens.get(object.objectId);
   const request = remotePatch.type === "open-url" ? start()
-    : !server.publicHttpsOpens.has(object.objectId) && (remotePatch.type === "pointer" || remotePatch.type === "scroll" || remotePatch.type === "keyboard")
-      ? fetch(`${baseUrl}/api/sessions/${encodeURIComponent(state.executorSessionId)}/input`, {
+    : (remotePatch.type === "pointer" || remotePatch.type === "scroll" || remotePatch.type === "keyboard")
+      ? (publicOpen?.binding.executorInstanceId === binding.executorInstanceId
+        ? fetch(`${baseUrl}${REMOTE_BROWSER_PUBLIC_HTTPS_SESSION_PATH}/input`, {
+          method: "POST", headers: getRemoteBrowserFetchHeaders(), redirect: "error", signal: AbortSignal.timeout(2000),
+          body: JSON.stringify({ binding: publicOpen.binding, patch: remotePatch })
+        })
+        : fetch(`${baseUrl}/api/sessions/${encodeURIComponent(state.executorSessionId)}/input`, {
         method: "POST",
         headers: getRemoteBrowserFetchHeaders(),
         body: JSON.stringify(remotePatch)
-      })
+      }))
       : null;
   if (!request) {
     return;
@@ -1144,13 +1153,12 @@ function stopRemoteBrowserSession(server: RoomStateServer, object: MediaObjectIn
   if (!baseUrl || !sessionId || stopPublicHttpsOpen(server, object.objectId, baseUrl)) {
     return;
   }
-  fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE", headers: getRemoteBrowserFetchHeaders() }).catch((error: unknown) => {
+  fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE", headers: getRemoteBrowserFetchHeaders() }).catch(() => {
     logEvent({
       service: "room-state",
       env: process.env.NODE_ENV ?? "development",
       errorCode: "remote_browser_stop_failed",
       sessionId,
-      message: error instanceof Error ? error.message : "unknown",
       timestamp: new Date().toISOString()
     });
   });
@@ -1257,10 +1265,19 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
           json(response, 403, { error: "forbidden" });
           return;
         }
-        const payload = await parseBody<RemoteBrowserBindingRequest>(request);
+        const payload = await parseBody<RemoteBrowserBindingRequest & { publicHttpsBinding?: unknown }>(request);
         if (!payload?.roomId || !payload.objectId || !payload.executorSessionId || !payload.executorInstanceId) {
           json(response, 400, { error: "invalid_remote_browser_binding" });
           return;
+        }
+        if (payload.publicHttpsBinding !== undefined) {
+          const binding = payload.publicHttpsBinding;
+          const authorized = isRemoteBrowserPublicHttpsBinding(binding)
+            && binding.roomId === payload.roomId && binding.objectId === payload.objectId
+            && binding.sessionId === payload.executorSessionId && binding.executorInstanceId === payload.executorInstanceId
+            && binding.executorInstanceId === payload.mediaParticipantId
+            && await authorizePublicHttps(authority, binding, "renew", process.env).catch(() => null);
+          return json(response, authorized ? 200 : 409, { publicHttpsAuthorized: Boolean(authorized) });
         }
         if (authority.publicHttpsOpens.get(payload.objectId)?.binding.executorInstanceId === payload.executorInstanceId) {
           return json(response, 409, { authorized: false, reason: "mismatch" });
@@ -1297,18 +1314,20 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
       json(response, 404, { error: "not_found" });
     })().catch((error: unknown) => {
       metrics.requestFailuresTotal += 1;
+      const path = request.url ?? "";
+      const browserRequest = path.startsWith("/api/internal/remote-browser/");
+      const details = browserRequest ? {} : { message: error instanceof Error ? error.message : "unknown" };
       logEvent({
         service: "room-state",
         event: "request_failed",
         env: process.env.NODE_ENV ?? "development",
         requestId: requestId(request),
         errorCode: "room_state_error",
-        path: request.url ?? "",
+        ...(browserRequest ? {} : { path, ...details }),
         method: request.method ?? "GET",
-        message: error instanceof Error ? error.message : "unknown",
         timestamp: new Date().toISOString()
       });
-      json(response, 500, { error: "room_state_error", message: error instanceof Error ? error.message : "unknown" });
+      json(response, 500, { error: "room_state_error", ...details });
     });
   });
   const wss = new WebSocketServer({ server: httpServer });

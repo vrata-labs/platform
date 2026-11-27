@@ -55,9 +55,18 @@ services:
     cpus: ${REMOTE_BROWSER_CPU_LIMIT:-2.0}
     mem_limit: ${REMOTE_BROWSER_MEMORY_LIMIT:-2g}
     pids_limit: ${REMOTE_BROWSER_PIDS_LIMIT:-512}
+    volumes:
+      - public-https-control:/var/lib/vrata-public-https/control:ro
+      - public-https-data:/var/lib/vrata-public-https/data:ro
+      - public-https-display-91:/var/lib/vrata-public-https/slot-91-display:ro
+      - public-https-display-92:/var/lib/vrata-public-https/slot-92-display:ro
+      - public-https-proxy-91:/var/lib/vrata-public-https/slot-91-proxy
+      - public-https-proxy-92:/var/lib/vrata-public-https/slot-92-proxy
     environment:
       NODE_ENV: production
       REMOTE_BROWSER_ENABLED: ${REMOTE_BROWSER_ENABLED:-false}
+      REMOTE_BROWSER_PUBLIC_HTTPS_ENABLED: ${REMOTE_BROWSER_PUBLIC_HTTPS_ENABLED:-false}
+      REMOTE_BROWSER_PUBLIC_HTTPS_LIVEKIT_URL: ${REMOTE_BROWSER_PUBLIC_HTTPS_LIVEKIT_URL:-ws://livekit:7880}
       REMOTE_BROWSER_PORT: 4010
       REMOTE_BROWSER_TOKEN_SECRET: ${REMOTE_BROWSER_TOKEN_SECRET}
       VRATA_INTERNAL_SERVICE_TOKEN: ${VRATA_INTERNAL_SERVICE_TOKEN}

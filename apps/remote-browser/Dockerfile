@@ -20,16 +20,22 @@ ENV NODE_ENV=production \
 WORKDIR /app
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends pulseaudio pulseaudio-utils libasound2-plugins libnss3-tools openssl \
+  && apt-get install -y --no-install-recommends pulseaudio pulseaudio-utils libasound2-plugins libnss3-tools openssl ffmpeg python3-venv x11-utils \
   && rm -rf /var/lib/apt/lists/* \
+  && python3 -m venv /opt/vrata-publisher \
+  && /opt/vrata-publisher/bin/pip install --no-cache-dir livekit==1.3.0 \
   && install -d -o 1000 -g 1001 -m 0711 /var/lib/vrata-public-https/data \
-  && install -d -o 1000 -g 1001 -m 0770 /var/lib/vrata-public-https/control
+  && install -d -o 1000 -g 1001 -m 0770 /var/lib/vrata-public-https/control \
+  && install -d -o 1001 -g 1001 -m 0700 /var/lib/vrata-public-https/slot-91-display /var/lib/vrata-public-https/slot-92-display \
+    /var/lib/vrata-public-https/slot-91-proxy /var/lib/vrata-public-https/slot-92-proxy /var/lib/vrata-public-https/proxy \
+  && install -d -o 1001 -g 1001 -m 1777 /tmp/.X11-unix
 
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/remote-browser/package.json ./apps/remote-browser/package.json
 COPY --from=build /app/apps/remote-browser/dist ./apps/remote-browser/dist
 COPY --chmod=755 apps/remote-browser/start.sh ./apps/remote-browser/start.sh
+COPY apps/remote-browser/public-https-publisher.py ./apps/remote-browser/public-https-publisher.py
 COPY --from=build /app/packages/shared-types/package.json ./packages/shared-types/package.json
 COPY --from=build /app/packages/shared-types/dist ./packages/shared-types/dist
 COPY --from=build /app/packages/shared-types/package.json ./node_modules/@vrata/shared-types/package.json

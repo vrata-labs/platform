@@ -1348,7 +1348,7 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
   assert.equal(hostLeft.mediaObjects.objects["browser-1"], undefined);
 });
 
-test("remote-browser executor failure stores sanitized diagnostic detail", () => {
+test("remote-browser snapshots keep the safe address and discard raw executor errors", () => {
   const hostRoom = joinRoom(createRoomState("demo"), "host", { role: "host" });
   const created = createMediaObject(hostRoom, "host", {
     commandId: "cmd-create-browser-failed",
@@ -1364,7 +1364,7 @@ test("remote-browser executor failure stores sanitized diagnostic detail", () =>
     expectedRevision: 0,
     patch: {
       type: "open-url",
-      url: "https://example.com/remote-browser-demo.html",
+      url: "https://name:credential@example.com/remote-browser-demo.html?probe=query-marker#fragment-marker",
       inputEventId: "host:open-failed:1"
     },
     nowMs: 2
@@ -1378,17 +1378,18 @@ test("remote-browser executor failure stores sanitized diagnostic detail", () =>
     patch: {
       type: "mark-failed",
       errorCode: "viewport_capture_failed",
-      errorDetail: "NotReadableError:\nCould not start video source",
+      errorDetail: "navigation failed at https://name:credential@example.com?probe=query-marker",
       inputEventId: "executor:failed:1"
     },
     nowMs: 3
   });
 
   assert.equal(failed.result.accepted, true);
-  const failedState = failed.room.mediaObjects.objects["browser-failed"]?.state as { status?: string; errorCode?: string; errorDetail?: string } | undefined;
+  const failedState = failed.room.mediaObjects.objects["browser-failed"]?.state as { status?: string; errorCode?: string; errorDetail?: string; currentUrl?: string } | undefined;
   assert.equal(failedState?.status, "failed");
   assert.equal(failedState?.errorCode, "viewport_capture_failed");
-  assert.equal(failedState?.errorDetail, "NotReadableError: Could not start video source");
+  assert.equal(failedState?.errorDetail, undefined);
+  assert.equal(failedState?.currentUrl, "https://example.com/remote-browser-demo.html");
 });
 
 test("remote-browser open-url binds the committed revision as a fresh executor instance, never the client event id", () => {

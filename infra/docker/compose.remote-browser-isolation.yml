@@ -1,4 +1,4 @@
-# This profile is inert until a trusted runtime and publisher are installed.
+# Start this profile together with the trusted executor's explicit opt-in.
 x-isolation: &isolation
   image: ${REMOTE_BROWSER_IMAGE_REPO:-vrata-remote-browser}:${IMAGE_TAG:-local}
   build:
@@ -11,6 +11,17 @@ x-isolation: &isolation
   tmpfs: [/tmp]
   healthcheck:
     disable: true
+
+x-chromium: &chromium
+  <<: *isolation
+  network_mode: none
+  user: "1001:1001"
+  security_opt:
+    - no-new-privileges:true
+    - seccomp:chromium-seccomp.json
+  shm_size: 256m
+  pids_limit: 256
+  mem_limit: 1g
 
 services:
   public-https-gateway:
@@ -28,19 +39,18 @@ services:
     mem_limit: 512m
 
   public-https-chromium:
-    <<: *isolation
-    # Template for a single per-session worker. Task 5 supplies the trusted entry point.
-    command: ["true"]
-    network_mode: none
-    user: "1001:1001"
-    security_opt:
-      - no-new-privileges:true
-      - seccomp:chromium-seccomp.json
+    <<: *chromium
+    command: [node, apps/remote-browser/dist/public-https-worker.js, "91"]
     volumes:
-      - public-https-data:/var/lib/vrata-public-https/data:ro
-    shm_size: 256m
-    pids_limit: 256
-    mem_limit: 1g
+      - public-https-display-91:/tmp/.X11-unix
+      - public-https-proxy-91:/var/lib/vrata-public-https/proxy:ro
+
+  public-https-chromium-92:
+    <<: *chromium
+    command: [node, apps/remote-browser/dist/public-https-worker.js, "92"]
+    volumes:
+      - public-https-display-92:/tmp/.X11-unix
+      - public-https-proxy-92:/var/lib/vrata-public-https/proxy:ro
 
 networks:
   public-https-egress:
@@ -49,3 +59,7 @@ networks:
 volumes:
   public-https-control:
   public-https-data:
+  public-https-display-91:
+  public-https-display-92:
+  public-https-proxy-91:
+  public-https-proxy-92:

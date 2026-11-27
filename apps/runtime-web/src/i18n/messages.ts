@@ -161,7 +161,12 @@ export const EN = {
   "issue.accessDenied": "Room access denied",
   "issue.xrUnavailable": "VR unavailable on this device or disabled for this environment",
   "issue.xrEnterFailed": "VR session could not start; room continues in desktop mode",
-  "issue.runtimeError": "Runtime error; include the report ID when contacting support"
+  "issue.runtimeError": "Runtime error; include the report ID when contacting support",
+  "browser.room_policy": "This address is blocked by the room's browser policy.",
+  "browser.private_destination": "The browser cannot connect to a private or restricted destination.",
+  "browser.site_unavailable": "The browser could not reach this site.",
+  "browser.resourceIssue": "A page resource could not load. {message}",
+  "browser.streaming": "Remote browser streaming"
 } as const;
 
 export type MessageKey = keyof typeof EN;
@@ -326,5 +331,10 @@ export const RU: Record<MessageKey, string> = {
   "issue.accessDenied": "Вход в комнату закрыт",
   "issue.xrUnavailable": "VR недоступен на этом устройстве или отключён",
   "issue.xrEnterFailed": "Не удалось запустить VR; комната работает в обычном режиме",
-  "issue.runtimeError": "Ошибка в комнате; при обращении в поддержку укажите номер отчёта"
+  "issue.runtimeError": "Ошибка в комнате; при обращении в поддержку укажите номер отчёта",
+  "browser.room_policy": "Правило комнаты не разрешает этот адрес.",
+  "browser.private_destination": "Браузер не может подключиться к закрытому назначению.",
+  "browser.site_unavailable": "Браузер не смог открыть сайт.",
+  "browser.resourceIssue": "Не удалось загрузить один из ресурсов страницы. {message}",
+  "browser.streaming": "Трансляция общего браузера"
 };

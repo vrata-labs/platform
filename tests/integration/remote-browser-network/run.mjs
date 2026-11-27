@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import { runMedia } from "./media.mjs";
 
 const directory = fileURLToPath(new URL(".", import.meta.url));
 const certificates = mkdtempSync(join(tmpdir(), "vrata-network-fixture-"));
@@ -16,13 +17,14 @@ const environment = {
   NETWORK_FIXTURE_CERTS: certificates,
   REMOTE_BROWSER_IMAGE_REPO: process.env.NETWORK_FIXTURE_IMAGE ?? project,
   IMAGE_TAG: "integration",
+  COMPOSE_PARALLEL_LIMIT: process.env.COMPOSE_PARALLEL_LIMIT ?? "4",
   REMOTE_BROWSER_PUBLIC_HTTPS_DENY_CIDRS: "11.53.49.11/32"
 };
 const composeDirectory = fileURLToPath(new URL("../../../infra/docker/", import.meta.url));
 const args = ["compose", "-p", project, "--project-directory", composeDirectory, "-f", join(directory, "compose.yml"),
   "--profile", "public-https-network"];
 const compose = (...command) => execFileSync("docker", [...args, ...command], {
-  env: environment, encoding: "utf8", timeout: 60_000
+  env: environment, encoding: "utf8", timeout: command[0] === "up" || command[0] === "down" ? 300_000 : 60_000
 }).trim();
 const children = new Set();
 
@@ -87,6 +89,23 @@ async function startLease() {
     }
   };
 }
+
+async function startLeasedBrowser(lease) {
+  // Container creation and browser startup are outside the behavior under
+  // observation. Keep their real short grant live on a slow CI worker.
+  let renewal = Promise.resolve();
+  const timer = setInterval(() => {
+    renewal = renewal.then(() => lease.renew(9500));
+    void renewal.catch(() => {});
+  }, 2000);
+  try {
+    return await startBrowser(lease.path);
+  } finally {
+    clearInterval(timer);
+    await renewal;
+    await lease.renew(9500);
+  }
+}
 async function untilClose(expected, startedAt, budgetMs) {
   let closed = [];
   while (Date.now() - startedAt <= budgetMs + 750) {
@@ -100,26 +119,7 @@ async function untilClose(expected, startedAt, budgetMs) {
   return elapsed;
 }
 
-let version;
-try {
-  chmodSync(certificates, 0o755);
-  const domains = ["allowed", "changing", "denied", "channel", "mixed4", "mixed6", "uncertain"];
-  const alternativeNames = domains.map(name => `DNS:${name}.test`).join(",");
-  openssl("req", "-new", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-days", "2",
-    "-subj", "/CN=Isolated fixture root", "-addext", "basicConstraints=critical,CA:true,pathlen:0",
-    "-keyout", "ca.key", "-out", "ca.pem");
-  openssl("req", "-new", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-subj", "/CN=Isolated fixture",
-    "-addext", `subjectAltName=${alternativeNames}`, "-keyout", "site.key", "-out", "site.csr");
-  openssl("x509", "-req", "-in", "site.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial",
-    "-copy_extensions", "copy", "-days", "2", "-out", "site.pem");
-  // Test leaf only, on a local internal network; the CA signing key stays private.
-  rmSync(join(certificates, "ca.key"));
-  chmodSync(join(certificates, "site.key"), 0o644);
-  if (!process.env.NETWORK_FIXTURE_IMAGE) {
-    execFileSync("docker", [...args, "build", "public-https-gateway"], { env: environment, stdio: "inherit", timeout: 600_000 });
-  }
-  compose("up", "-d", "--wait", "--wait-timeout", "20", "fixture-dns",
-    "origin-allowed", "origin-denied", "origin-certificate", "origin-channel", "origin-dns-candidate", "public-https-gateway");
+async function runNetwork() {
   const gatewayAddress = compose("exec", "-T", "public-https-gateway", "node", "-p",
     "Object.values(require('node:os').networkInterfaces()).flat().find(address => address.family === 'IPv4' && !address.internal).address");
   // The observers are independent of the proxy. Exercise the real listeners first
@@ -155,9 +155,8 @@ try {
   assert.deepEqual(observations("allowed"), []);
 
   let lease = await startLease();
-  let worker = await startBrowser(lease.path);
-  version = worker.version;
-  await lease.renew(9500);
+  let worker = await startLeasedBrowser(lease);
+  const version = worker.version;
   await worker.run("content");
   await lease.renew(9500);
   await worker.run("channels");
@@ -190,7 +189,7 @@ try {
   await lease.close();
 
   lease = await startLease();
-  worker = await startBrowser(lease.path);
+  worker = await startLeasedBrowser(lease);
   await worker.run("hold");
   stoppedAt = Date.now();
   await lease.renew(1800);
@@ -203,7 +202,7 @@ try {
   await lease.close();
 
   lease = await startLease();
-  worker = await startBrowser(lease.path);
+  worker = await startLeasedBrowser(lease);
   await worker.run("hold");
   stoppedAt = Date.now();
   compose("stop", "-t", "1", "public-https-gateway");
@@ -216,8 +215,37 @@ try {
     chromium: version, deniedNewConnections: 0, unsupportedNewConnections: 0, invalidTlsHttpRequests: 0,
     connectionRevokedMs: revokeMs, connectionExpiredMs: expiryMs, connectionLostGatewayMs: outageMs
   }));
+}
+
+let failed = false;
+try {
+  chmodSync(certificates, 0o755);
+  const domains = ["allowed", "changing", "denied", "channel", "mixed4", "mixed6", "uncertain"];
+  const alternativeNames = domains.map(name => `DNS:${name}.test`).join(",");
+  openssl("req", "-new", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-days", "2",
+    "-subj", "/CN=Isolated fixture root", "-addext", "basicConstraints=critical,CA:true,pathlen:0",
+    "-keyout", "ca.key", "-out", "ca.pem");
+  openssl("req", "-new", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-subj", "/CN=Isolated fixture",
+    "-addext", `subjectAltName=${alternativeNames}`, "-keyout", "site.key", "-out", "site.csr");
+  openssl("x509", "-req", "-in", "site.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial",
+    "-copy_extensions", "copy", "-days", "2", "-out", "site.pem");
+  // Test leaf only, on a local internal network; the CA signing key stays private.
+  rmSync(join(certificates, "ca.key"));
+  chmodSync(join(certificates, "site.key"), 0o644);
+  if (!process.env.NETWORK_FIXTURE_IMAGE) {
+    execFileSync("docker", [...args, "build", "public-https-gateway"], { env: environment, stdio: "inherit", timeout: 600_000 });
+  }
+  const origins = ["origin-allowed", "origin-denied", "origin-certificate"];
+  if (!process.argv.includes("--media-only")) origins.push("origin-channel", "origin-dns-candidate");
+  compose("up", "-d", "--wait", "--wait-timeout", "30", "fixture-dns", ...origins, "public-https-gateway");
+  if (!process.argv.includes("--media-only")) {
+    await runNetwork();
+    if (!process.argv.includes("--network-only")) compose("up", "-d", "--wait", "public-https-gateway");
+  }
+  if (!process.argv.includes("--network-only")) await runMedia({ compose, processPeer, observations });
 } catch (error) {
-  console.error(compose("logs", "--tail", "30", "public-https-gateway", "fixture-dns"));
+  failed = true;
+  console.error(error instanceof Error ? error.message : "fixture failed");
   throw error;
 } finally {
   for (const child of children) {
@@ -226,6 +254,9 @@ try {
   }
   try {
     compose("down", "--volumes", "--remove-orphans", "--timeout", "1");
+  } catch (error) {
+    if (!failed) throw error;
+    console.error("fixture cleanup failed");
   } finally {
     rmSync(certificates, { recursive: true, force: true });
   }

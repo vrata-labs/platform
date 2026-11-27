@@ -580,6 +580,26 @@ export interface RemoteBrowserObjectState {
   lastExecutorInput?: RemoteBrowserExecutorInputState;
   lastInputEventId: string | null;
   errorCode?: RemoteBrowserErrorCode;
+  navigationIssue?: RemoteBrowserSiteIssue;
+  resourceIssue?: RemoteBrowserSiteIssue;
+}
+
+export type RemoteBrowserSiteIssue = "room_policy" | "private_destination" | "site_unavailable";
+
+export function isRemoteBrowserSiteIssue(value: unknown): value is RemoteBrowserSiteIssue {
+  return value === "room_policy" || value === "private_destination" || value === "site_unavailable";
+}
+
+/** Safe for room snapshots and diagnostics; never use this value to navigate. */
+export function remoteBrowserDisplayUrl(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return undefined;
+  }
 }
 
 export interface RemoteBrowserExecutorInputState {
@@ -678,6 +698,7 @@ export type RemoteBrowserPatch =
   | { type: "mark-publishing"; mediaParticipantId: string; inputEventId: string }
   | { type: "mark-active"; mediaParticipantId: string; mediaTrackSid: string; audioTrackSid: string; mediaSourceRect?: RemoteBrowserMediaSourceRect; inputEventId: string }
   | { type: "mark-source-rect"; mediaSourceRect: RemoteBrowserMediaSourceRect; inputEventId: string }
+  | { type: "mark-site-status"; scope: "navigation" | "resource"; issue: RemoteBrowserSiteIssue | null; inputEventId: string }
   | { type: "mark-input-applied"; input: RemoteBrowserExecutorInputState; inputEventId: string }
   | { type: "mark-stopped"; inputEventId: string }
   | { type: "pointer"; event: SurfaceInputEvent; inputEventId: string }

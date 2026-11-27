@@ -1,7 +1,12 @@
 import {
   isRemoteBrowserLeaseDuration, REMOTE_BROWSER_PUBLIC_HTTPS_MAX_LEASE_MS, sameRemoteBrowserPublicHttpsBinding,
-  type RemoteBrowserPublicHttpsBinding
+  type RemoteBrowserErrorCode, type RemoteBrowserPublicHttpsBinding
 } from "@vrata/shared-types";
+import type { PublicHttpsInput } from "./public-https-channel.js";
+
+export class PublicHttpsOpenError extends Error {
+  constructor(readonly code: RemoteBrowserErrorCode) { super(code); }
+}
 
 const renewIntervalMs = 2500;
 
@@ -33,6 +38,7 @@ export interface PublicHttpsRuntime {
     publisher: PublicHttpsLeaseConsumer;
     /** Abort after revocation even if browser startup/navigation has yet to finish. */
     open(url: string, signal: AbortSignal): Promise<void>;
+    input?(patch: PublicHttpsInput): boolean;
   };
 }
 
@@ -58,7 +64,7 @@ export class PublicHttpsSessions {
   constructor(private readonly options: {
     runtime: PublicHttpsRuntime;
     authorize(binding: RemoteBrowserPublicHttpsBinding, purpose: "start" | "renew", signal: AbortSignal): Promise<Authorization>;
-    onStop(binding: RemoteBrowserPublicHttpsBinding, reason: StopReason): void;
+    onStop(binding: RemoteBrowserPublicHttpsBinding, reason: StopReason, errorCode?: RemoteBrowserErrorCode): void;
     retirePredecessor?(binding: RemoteBrowserPublicHttpsBinding): Promise<void>;
     clock?: PublicHttpsLeaseClock;
   }) {}
@@ -89,6 +95,12 @@ export class PublicHttpsSessions {
   stop(binding: RemoteBrowserPublicHttpsBinding): boolean {
     const current = this.sessions.get(binding.sessionId);
     return Boolean(current && sameRemoteBrowserPublicHttpsBinding(current.binding, binding) && this.retire(current, "manual"));
+  }
+
+  input(binding: RemoteBrowserPublicHttpsBinding, patch: PublicHttpsInput): boolean {
+    const entry = this.sessions.get(binding.sessionId);
+    return Boolean(entry && sameRemoteBrowserPublicHttpsBinding(entry.binding, binding)
+      && this.isLive(entry) && entry.resources?.input?.(patch));
   }
 
   close(): void {
@@ -164,16 +176,17 @@ export class PublicHttpsSessions {
       entry.resources!.publisher.setDeadline(deadline);
       this.scheduleRenew(entry);
       if (purpose === "start") {
-        void entry.resources!.open(authorization.url!, signal).catch(() => this.retire(entry, "failed"));
+        void entry.resources!.open(authorization.url!, signal).catch(error =>
+          this.retire(entry, "failed", error instanceof PublicHttpsOpenError ? error.code : undefined));
       }
       return true;
-    } catch {
-      this.retire(entry, "failed");
+    } catch (error) {
+      this.retire(entry, "failed", error instanceof PublicHttpsOpenError ? error.code : undefined);
       return false;
     }
   }
 
-  private retire(entry: Entry, reason: StopReason): boolean {
+  private retire(entry: Entry, reason: StopReason, errorCode?: RemoteBrowserErrorCode): boolean {
     if (this.sessions.get(entry.binding.sessionId) !== entry) return false;
     this.sessions.delete(entry.binding.sessionId);
     entry.cancelExpiry?.();
@@ -183,7 +196,7 @@ export class PublicHttpsSessions {
       try { consumer?.revoke(); } catch { /* The other consumer still has to close. */ }
     }
     entry.controller.abort();
-    this.options.onStop(entry.binding, reason);
+    this.options.onStop(entry.binding, reason, errorCode);
     return true;
   }
 }

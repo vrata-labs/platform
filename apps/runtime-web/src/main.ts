@@ -118,7 +118,7 @@ import { createInactiveMarkdownBoardDebugSnapshot, createMarkdownBoardObjectRunt
 import { createPdfPresentationObjectRuntime } from "./media/pdf-presentation-object.js";
 import { createImageViewerObjectRuntime } from "./media/image-viewer-object.js";
 import { createVideoPlayerObjectRuntime } from "./media/video-player-object.js";
-import { createInactiveRemoteBrowserDebugSnapshot, createRemoteBrowserObjectRuntime, createRemoteBrowserOpenUrlPatch } from "./media/remote-browser-object.js";
+import { createInactiveRemoteBrowserDebugSnapshot, createRemoteBrowserObjectRuntime, createRemoteBrowserOpenUrlPatch, remoteBrowserSiteStatus } from "./media/remote-browser-object.js";
 import {
   createRemoteBrowserVrKeyboardView,
   cycleRemoteBrowserVrKeyboardLayout,
@@ -403,6 +403,7 @@ onLocaleChange(() => {
   setStatus(statusSource);
   updateVrButtonState();
   syncAudioControls();
+  syncRemoteBrowserControls();
   if (!guestOnboardingEl.hidden) renderGuestOnboarding();
   if (!roomAccessEndedEl.hidden && roomAccessEndedEl.dataset.reason) showRoomEnded(roomAccessEndedEl.dataset.reason);
 });
@@ -2271,6 +2272,7 @@ function syncRemoteBrowserControls(): void {
   const canInput = hasRoomPermission(debugState.access.permissions, "remote-browser.input");
   const hasOtherObject = Boolean(activeObject && activeObject.type !== REMOTE_BROWSER_OBJECT_TYPE);
   const hasControl = snapshot.localHasControl;
+  const siteStatus = remoteBrowser ? remoteBrowserSiteStatus(remoteBrowser.state, snapshot.errorCode) : null;
   debugState.remoteBrowser.enabled = runtimeFlags.remoteBrowserEnabled;
   debugState.remoteBrowser.experimental = runtimeFlags.remoteBrowserExperimental;
   remoteBrowserControlEl.hidden = !remoteBrowser
@@ -2286,10 +2288,12 @@ function syncRemoteBrowserControls(): void {
     remoteBrowserStatusEl.textContent = `Surface occupied by ${activeObject?.type ?? "object"}`;
   } else if (!remoteBrowser) {
     remoteBrowserStatusEl.textContent = canOpen ? "Remote browser idle" : "Host role required";
+  } else if (siteStatus) {
+    remoteBrowserStatusEl.textContent = siteStatus;
   } else if (snapshot.errorCode) {
     remoteBrowserStatusEl.textContent = `Remote browser issue: ${snapshot.errorCode}`;
-  } else if (snapshot.frameConnected) {
-    remoteBrowserStatusEl.textContent = `Remote browser streaming${snapshot.currentUrl ? `: ${snapshot.currentUrl}` : ""}`;
+  } else if (snapshot.frameConnected || snapshot.mediaConnected) {
+    remoteBrowserStatusEl.textContent = t("browser.streaming");
   } else if (remoteBrowser.state.executorSessionId) {
     remoteBrowserStatusEl.textContent = "Remote browser waiting for frames";
   } else {

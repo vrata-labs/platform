@@ -17,6 +17,8 @@ export async function openIsolatedChromium(options: {
   headless?: boolean;
   display?: string;
   pulseServer?: string;
+  proxyCertificate?: string;
+  viewport?: { width: number; height: number };
 }) {
   const { signal } = options;
   signal.throwIfAborted();
@@ -56,7 +58,7 @@ export async function openIsolatedChromium(options: {
     await mkdir(database, { recursive: true, mode: 0o700 });
     await exec("certutil", ["-N", "--empty-password", "-d", `sql:${database}`], { signal });
     await exec("certutil", ["-A", "-d", `sql:${database}`, "-n", "Vrata isolated gateway",
-      "-t", "C,,", "-i", publicHttpsCertificate], { signal });
+      "-t", "C,,", "-i", options.proxyCertificate ?? publicHttpsCertificate], { signal });
     await new Promise<void>((resolve, reject) => {
       proxy.once("error", reject);
       proxy.listen(0, "127.0.0.1", () => {
@@ -69,7 +71,9 @@ export async function openIsolatedChromium(options: {
     browser = await chromium.launch({
       channel: "chromium", headless: options.headless ?? true, chromiumSandbox: true,
       proxy: { server: `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`, bypass: "<-loopback>" },
-      args: ["--disable-quic", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"],
+      args: ["--disable-quic", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--autoplay-policy=no-user-gesture-required",
+        "--deny-permission-prompts",
+        ...(!options.headless && options.display ? ["--kiosk"] : [])],
       env: {
         PATH: process.env.PATH, HOME: home, LANG: "C.UTF-8",
         DISPLAY: options.display, PULSE_SERVER: options.pulseServer
@@ -77,7 +81,9 @@ export async function openIsolatedChromium(options: {
       timeout: 10000
     });
     signal.throwIfAborted();
-    const context = await browser.newContext({ serviceWorkers: "block", acceptDownloads: false });
+    const context = await browser.newContext({
+      serviceWorkers: "block", acceptDownloads: false, viewport: options.viewport, permissions: []
+    });
     signal.throwIfAborted();
     return { context, close };
   } catch (error) {

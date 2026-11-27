@@ -9,6 +9,30 @@ const record = (event, fields = {}) => appendFileSync(observations, `${JSON.stri
 function serve(request, response) {
   const path = new URL(request.url, "https://fixture.test").pathname;
   record("http", { path });
+  if (/^\/media-(red|blue|purple)$/.test(path)) {
+    const color = path.slice(7);
+    const frequency = { red: 440, blue: 880, purple: 660 }[color];
+    response.writeHead(200, { "content-type": "text/html", "cache-control": "no-store" }).end(`<!doctype html>
+      <style>body{background:${color}} #indicator{position:fixed;left:35%;top:35%;width:30%;height:30%;}</style>
+      <div id="indicator"></div><script>
+      const context = new AudioContext(), oscillator = context.createOscillator(), gain = context.createGain();
+      oscillator.frequency.value = ${frequency}; gain.gain.value = 0.2;
+      oscillator.connect(gain).connect(context.destination); oscillator.start();
+      setInterval(() => indicator.style.background = indicator.style.background === "lime" ? "yellow" : "lime", 180);
+      fetch("/hold/${color}").catch(() => {});
+      navigator.permissions.query({name:"microphone"}).then(permission => {
+        const exposed = "LivekitClient" in window || "__VRATA_REMOTE_BROWSER_LIVEKIT__" in window
+          || "__VRATA_REMOTE_BROWSER_PUBLISH_RESULT__" in window || permission.state === "granted";
+        return fetch(exposed ? "/page-has-authority" : "/page-without-authority");
+      }).catch(() => {});
+      document.onclick = event => {
+        if (event.clientX < innerWidth / 3) location.href = "https://denied.test/hidden";
+        else if (event.clientX < 2 * innerWidth / 3) location.href = "/media-blue";
+        else fetch("https://denied.test/resource.png",{mode:"no-cors"}).catch(() => {});
+      };
+      </script>`);
+    return;
+  }
   switch (path) {
     case "/redirect":
       response.writeHead(302, { location: "https://allowed.test/document" }).end();
@@ -31,13 +55,16 @@ function serve(request, response) {
         <a id="popup" href="https://denied.test/popup" target="_blank">New window</a>
       `);
       break;
-    case "/hold": {
+    case "/hold":
+    case "/hold/red":
+    case "/hold/blue":
+    case "/hold/purple": {
       response.writeHead(200, { "content-type": "text/plain", "cache-control": "no-store" });
       response.write("controlled stream\n");
       const heartbeat = setInterval(() => response.write("controlled stream\n"), 100);
       response.once("close", () => {
         clearInterval(heartbeat);
-        record("stream-closed");
+        record("stream-closed", { path });
       });
       break;
     }

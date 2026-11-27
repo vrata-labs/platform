@@ -30,6 +30,7 @@ services:
   public-https-chromium:
     volumes:
       - ${NETWORK_FIXTURE_DIR}:/fixture:ro
+      - public-https-data:/var/lib/vrata-public-https/data:ro
 
   fixture-dns:
     image: ${REMOTE_BROWSER_IMAGE_REPO}:${IMAGE_TAG}
