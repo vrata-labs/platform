@@ -1,0 +1,51 @@
+# This profile is inert until a trusted runtime and publisher are installed.
+x-isolation: &isolation
+  image: ${REMOTE_BROWSER_IMAGE_REPO:-vrata-remote-browser}:${IMAGE_TAG:-local}
+  build:
+    context: ../..
+    dockerfile: apps/remote-browser/Dockerfile
+  profiles: [public-https-network]
+  init: true
+  cap_drop: [ALL]
+  read_only: true
+  tmpfs: [/tmp]
+  healthcheck:
+    disable: true
+
+services:
+  public-https-gateway:
+    <<: *isolation
+    command: [node, apps/remote-browser/dist/public-https-gateway-service.js]
+    user: "1000:1001"
+    security_opt: [no-new-privileges:true]
+    networks: [public-https-egress]
+    environment:
+      REMOTE_BROWSER_PUBLIC_HTTPS_DENY_CIDRS: ${REMOTE_BROWSER_PUBLIC_HTTPS_DENY_CIDRS:-}
+    volumes:
+      - public-https-data:/var/lib/vrata-public-https/data
+      - public-https-control:/var/lib/vrata-public-https/control
+    pids_limit: 128
+    mem_limit: 512m
+
+  public-https-chromium:
+    <<: *isolation
+    # Template for a single per-session worker. Task 5 supplies the trusted entry point.
+    command: ["true"]
+    network_mode: none
+    user: "1001:1001"
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:chromium-seccomp.json
+    volumes:
+      - public-https-data:/var/lib/vrata-public-https/data:ro
+    shm_size: 256m
+    pids_limit: 256
+    mem_limit: 1g
+
+networks:
+  public-https-egress:
+    driver: bridge
+
+volumes:
+  public-https-control:
+  public-https-data:

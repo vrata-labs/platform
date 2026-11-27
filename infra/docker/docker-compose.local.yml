@@ -1,3 +1,6 @@
+include:
+  - compose.remote-browser-isolation.yml
+
 services:
   postgres:
     image: postgres:16

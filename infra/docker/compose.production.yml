@@ -1,3 +1,6 @@
+include:
+  - compose.remote-browser-isolation.yml
+
 services:
   preflight:
     image: node:22-bookworm-slim

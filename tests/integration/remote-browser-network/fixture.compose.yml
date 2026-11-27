@@ -1,0 +1,85 @@
+# Only this test overlay puts globally shaped synthetic addresses on an
+# internal bridge with no internet route and no published port.
+x-observer: &observer
+  image: ${REMOTE_BROWSER_IMAGE_REPO}:${IMAGE_TAG}
+  command: [node, /fixture/observer.mjs]
+  healthcheck:
+    test: [CMD, test, -f, /tmp/observations.jsonl]
+    interval: 1s
+    timeout: 1s
+    retries: 10
+  volumes:
+    - ${NETWORK_FIXTURE_DIR}:/fixture:ro
+    - ${NETWORK_FIXTURE_CERTS}:/fixture-ca:ro
+
+services:
+  public-https-gateway:
+    dns: [11.53.49.53]
+    environment:
+      NODE_EXTRA_CA_CERTS: /fixture-ca/ca.pem
+    volumes:
+      - ${NETWORK_FIXTURE_DIR}:/fixture:ro
+      - ${NETWORK_FIXTURE_CERTS}:/fixture-ca:ro
+    healthcheck:
+      disable: false
+      test: [CMD-SHELL, test -S /var/lib/vrata-public-https/control/gateway.sock && test -f /var/lib/vrata-public-https/data/ca.pem]
+      interval: 1s
+      timeout: 1s
+      retries: 10
+
+  public-https-chromium:
+    volumes:
+      - ${NETWORK_FIXTURE_DIR}:/fixture:ro
+
+  fixture-dns:
+    image: ${REMOTE_BROWSER_IMAGE_REPO}:${IMAGE_TAG}
+    command: [node, /fixture/dns.mjs]
+    healthcheck:
+      test: [CMD, test, -f, /tmp/dns-ready]
+      interval: 1s
+      timeout: 1s
+      retries: 10
+    volumes:
+      - ${NETWORK_FIXTURE_DIR}:/fixture:ro
+    networks:
+      public-https-egress:
+        ipv4_address: 11.53.49.53
+
+  origin-allowed:
+    <<: *observer
+    networks:
+      public-https-egress:
+        ipv4_address: 11.53.49.10
+
+  origin-denied:
+    <<: *observer
+    networks:
+      public-https-egress:
+        ipv4_address: 11.53.49.11
+
+  origin-certificate:
+    <<: *observer
+    networks:
+      public-https-egress:
+        ipv4_address: 11.53.49.12
+
+  origin-channel:
+    <<: *observer
+    networks:
+      public-https-egress:
+        ipv4_address: 11.53.49.13
+
+  origin-dns-candidate:
+    <<: *observer
+    networks:
+      public-https-egress:
+        ipv4_address: 11.53.49.14
+
+networks:
+  public-https-egress:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+    ipam:
+      config:
+        - subnet: 11.53.49.0/24

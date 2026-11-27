@@ -20,8 +20,10 @@ ENV NODE_ENV=production \
 WORKDIR /app
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends pulseaudio pulseaudio-utils libasound2-plugins \
-  && rm -rf /var/lib/apt/lists/*
+  && apt-get install -y --no-install-recommends pulseaudio pulseaudio-utils libasound2-plugins libnss3-tools openssl \
+  && rm -rf /var/lib/apt/lists/* \
+  && install -d -o 1000 -g 1001 -m 0711 /var/lib/vrata-public-https/data \
+  && install -d -o 1000 -g 1001 -m 0770 /var/lib/vrata-public-https/control
 
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/node_modules ./node_modules

@@ -36,6 +36,19 @@ jobs:
           echo "e2e=$e2e" >> "$GITHUB_OUTPUT"
           echo "browser e2e: $e2e"
 
+  public-https-network:
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Observe the public HTTPS network boundary with Chromium
+        run: node tests/integration/remote-browser-network/run.mjs
+
   core:
     runs-on: ubuntu-24.04
     services:
