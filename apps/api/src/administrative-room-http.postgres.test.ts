@@ -9,6 +9,55 @@ function noGrant(response: AuthorHttpResponse) {
   for (const value of ["identityCredential", '"token"', "rs2.", "ri2.", "sessionId"]) assert.equal(response.bytes.toString().includes(value), false);
 }
 
+test("only the room administrator can read or change the browser URL policy of a saved private room", postgres, async t => {
+  const h = await startAuthorHttpFixture(t);
+  const { room, host } = await h.room();
+  const member = await h.session(room.roomId);
+  const other = await h.room();
+  const path = `/api/rooms/${room.roomId}`;
+  const read = (headers: Record<string, string> = h.adminHeaders, roomPath = path) => h.request(roomPath, "GET", headers);
+  const patch = (body: unknown, headers: Record<string, string> = h.adminHeaders, roomPath = path) => h.request(roomPath, "PATCH", headers, body);
+  const control = async (token: string) => {
+    const result = await h.request(`${path}/session-control`, "GET", authorHttpBearer(token));
+    assert.equal(result.status, 200);
+    return result.json<{ participant: { role: string; permissions: string[] } }>().participant;
+  };
+  const policy = { remoteBrowserUrlPolicy: "public-https" };
+  assert.equal((await read()).json().remoteBrowserUrlPolicy, "allowlist");
+  assert.equal((await patch(policy)).status, 400);
+  assert.equal((await patch({ visibility: "unlisted", ...policy })).status, 400);
+  assert.equal((await patch({ remoteBrowserUrlPolicy: null })).status, 400);
+  assert.equal((await read()).json().visibility, "public");
+
+  assert.equal((await patch({ visibility: "private" })).status, 200);
+  const permissions = await Promise.all([control(host.token), control(member.token)]);
+  assert.deepEqual(permissions.map(participant => participant.role), ["host", "member"]);
+  const changed = await patch(policy);
+  assert.equal(changed.status, 200);
+  assert.equal(changed.json().remoteBrowserUrlPolicy, "public-https");
+  assert.equal((await read()).json().remoteBrowserUrlPolicy, "public-https");
+  for (const token of [host.token, member.token]) {
+    const headers = authorHttpBearer(token);
+    const details = await read(headers);
+    assert.equal(details.status, 200);
+    assert.equal(details.json().remoteBrowserUrlPolicy, undefined);
+    assert.equal((await patch({ remoteBrowserUrlPolicy: "allowlist" }, headers)).status, 403);
+  }
+  assert.deepEqual(await Promise.all([control(host.token), control(member.token)]), permissions);
+  const stale = await h.held(room.roomId, () => patch(policy), async client => {
+    await client.query("update rooms set visibility='unlisted' where room_id=$1", [room.roomId]);
+  });
+  assert.deepEqual([stale.status, stale.json().error], [409, "room_visibility_changed"]);
+  const afterRace = (await read()).json();
+  assert.deepEqual([afterRace.visibility, afterRace.remoteBrowserUrlPolicy], ["unlisted", "allowlist"]);
+  assert.equal((await read(h.adminHeaders, `/api/rooms/${other.room.roomId}`)).json().remoteBrowserUrlPolicy, "allowlist");
+  const virtual = await patch({ visibility: "private", ...policy }, h.adminHeaders, `/api/rooms/virtual-${randomUUID()}`);
+  assert.equal(virtual.status, 404);
+  await h.storage.transitionReferenceTemplateCatalog("active");
+  const reference = await h.storage.createRoom({ name: "Reference private room", templateId: "meeting-room-basic", visibility: "private" });
+  assert.equal((await patch(policy, h.adminHeaders, `/api/rooms/${reference.roomId}`)).status, 400);
+});
+
 test("administrative HTTP creation preserves legacy behavior and refuses queued seeds after cutover", postgres, async t => {
   const h = await startAuthorHttpFixture(t, 1, false, true);
   const input = (roomId = `admin-${randomUUID()}`) => ({ roomId, tenantId: "demo-tenant", templateId: "personal-workspace-basic",

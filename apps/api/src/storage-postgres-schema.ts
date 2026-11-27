@@ -178,6 +178,21 @@ export async function ensurePostgresStorageSchema(client: PoolClient, installRoo
   await client.query(`alter table rooms add column if not exists disabled_at timestamptz`);
   await client.query(`alter table rooms add column if not exists disabled_by text`);
   await client.query(`alter table rooms add column if not exists visibility text not null default 'public'`);
+  await client.query(`
+    alter table rooms add column if not exists remote_browser_url_policy text
+      check (remote_browser_url_policy is null or (remote_browser_url_policy = 'public-https' and visibility = 'private'));
+    create or replace function vrata_reset_room_browser_url_policy() returns trigger language plpgsql as $$
+    begin
+      new.remote_browser_url_policy := null;
+      return new;
+    end;
+    $$;
+    -- A previous API version can still change visibility without knowing about the new column.
+    create or replace trigger reset_room_browser_url_policy before update of visibility on rooms
+      for each row when (old.visibility is distinct from new.visibility and new.visibility <> 'private'
+        and new.remote_browser_url_policy is not null)
+      execute function vrata_reset_room_browser_url_policy();
+  `);
   await client.query(`alter table rooms add column if not exists room_type text not null default 'standard'`);
   await client.query(`alter table rooms add column if not exists owner_participant_id text`);
   await client.query(`alter table rooms add column if not exists personal_state jsonb not null default '${DEFAULT_PERSONAL_STATE_JSON}'::jsonb`);

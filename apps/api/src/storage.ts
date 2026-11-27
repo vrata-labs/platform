@@ -67,6 +67,7 @@ import type {
 import { initializePostgresStorage } from "./storage-postgres-init.js";
 import { DEFAULT_SESSION_CONTROL_JSON, DEFAULT_PERSONAL_STATE_JSON } from "./storage-postgres-schema.js";
 import { assertRoomTemplatePatch, materializeStoredRoomInput } from "./room-template-policy.js";
+import { roomSupportsRemoteBrowserUrlPolicy } from "./room-browser-url-policy.js";
 import { transitionPostgresReferenceCatalog } from "./storage-template-catalog.js";
 import { createMemoryRoomIdentities } from "./identity/memory.js";
 import { createPostgresRoomIdentities, assertPostgresEffect, loadPostgresPersonalOwner } from "./identity/postgres.js";
@@ -647,7 +648,8 @@ export class MemoryStorage implements Storage {
     if (input.templateId !== undefined && input.templateId !== existing.templateId) {
       throw new Error("room_template_binding_changed");
     }
-    const { templateId: _inputTemplateId, templateVersion: _inputTemplateVersion, templateSnapshot: _inputTemplateSnapshot, managed: _inputManaged, ...safeInput } = input;
+    const { templateId: _inputTemplateId, templateVersion: _inputTemplateVersion, templateSnapshot: _inputTemplateSnapshot, managed: _inputManaged,
+      remoteBrowserUrlPolicy, ...safeInput } = input;
     const { templateVersion: _existingTemplateVersion, templateSnapshot: _existingTemplateSnapshot, ...existingWithoutTemplateMetadata } = existing;
     const updatedWithoutTemplateMetadata: RoomRecordWithoutTemplateMetadata = {
       ...existingWithoutTemplateMetadata,
@@ -675,6 +677,15 @@ export class MemoryStorage implements Storage {
       sessionControl: defaultSessionControl(input.sessionControl ?? existing.sessionControl),
       personalState: defaultPersonalState(input.personalState ?? existing.personalState)
     };
+    if (remoteBrowserUrlPolicy !== undefined
+      && (existing.managed || !roomSupportsRemoteBrowserUrlPolicy(existing, updatedWithoutTemplateMetadata.visibility))) {
+      throw new Error("room_remote_browser_url_policy_not_supported");
+    }
+    if (updatedWithoutTemplateMetadata.visibility !== "private" || remoteBrowserUrlPolicy === "allowlist") {
+      delete updatedWithoutTemplateMetadata.remoteBrowserUrlPolicy;
+    } else if (remoteBrowserUrlPolicy === "public-https") {
+      updatedWithoutTemplateMetadata.remoteBrowserUrlPolicy = remoteBrowserUrlPolicy;
+    }
     const updated = bindRoomTemplateMetadata(
       updatedWithoutTemplateMetadata,
       this.requireTemplateVersion(existing.templateId, existing.templateVersion)
@@ -1127,6 +1138,9 @@ export class MemoryStorage implements Storage {
     if (!room?.managed) return null;
     if (room.managed.status === "closed") return "room_closed";
     if (room.managed.revision !== expectedRevision) return "revision_mismatch";
+    if (patch.remoteBrowserUrlPolicy !== undefined && !roomSupportsRemoteBrowserUrlPolicy(room)) {
+      throw new Error("room_remote_browser_url_policy_not_supported");
+    }
     if (patch.accessUntil !== undefined || patch.graceSeconds !== undefined || patch.status !== undefined) {
       this.managedRooms.noteManagedRoomAccessChange(room, patch.status ?? room.managed.status);
     }
@@ -1140,6 +1154,8 @@ export class MemoryStorage implements Storage {
       lastOperationId: operationId,
       updatedAt: new Date().toISOString()
     };
+    if (patch.remoteBrowserUrlPolicy === "public-https") room.remoteBrowserUrlPolicy = patch.remoteBrowserUrlPolicy;
+    if (patch.remoteBrowserUrlPolicy === "allowlist") delete room.remoteBrowserUrlPolicy;
     return structuredClone(room);
   }
   beginIntegrationOperation(input: IntegrationOperationStart): Promise<{ created: boolean; operation: IntegrationOperationRecord }> { return this.integrationOperations.begin(input); }
@@ -1717,7 +1733,7 @@ export class PostgresStorage implements Storage {
              tv.template_id as template_version_template_id, tv.version as template_version_resolved,
              tv.snapshot as template_version_snapshot, tv.content_hash as template_version_content_hash,
              r.name, r.room_type, r.owner_participant_id,
-             r.status, r.disabled_at, r.disabled_by, r.visibility, r.scene_bundle_url, r.features,
+             r.status, r.disabled_at, r.disabled_by, r.visibility, r.remote_browser_url_policy, r.scene_bundle_url, r.features,
              r.asset_ids, r.theme, r.guest_allowed, r.avatar_config, r.session_control, r.personal_state,
              ${MANAGED_ROOM_COLUMNS_SQL}
       from rooms r
@@ -1735,7 +1751,7 @@ export class PostgresStorage implements Storage {
              tv.template_id as template_version_template_id, tv.version as template_version_resolved,
              tv.snapshot as template_version_snapshot, tv.content_hash as template_version_content_hash,
              r.name, r.room_type, r.owner_participant_id,
-             r.status, r.disabled_at, r.disabled_by, r.visibility, r.scene_bundle_url, r.features,
+             r.status, r.disabled_at, r.disabled_by, r.visibility, r.remote_browser_url_policy, r.scene_bundle_url, r.features,
              r.asset_ids, r.theme, r.guest_allowed, r.avatar_config, r.session_control, r.personal_state,
              ${MANAGED_ROOM_COLUMNS_SQL}
       from rooms r
@@ -1856,21 +1872,39 @@ export class PostgresStorage implements Storage {
     });
   }
   async updateRoom(roomId: string, input: Partial<RoomRecord>, expectedTemplateBinding?: ExpectedRoomTemplateBinding): Promise<RoomRecord | null> {
-    const existing = await this.getRoom(roomId);
-    if (!existing) {
-      return null;
-    }
-    if (input.tenantId !== undefined && input.tenantId !== existing.tenantId) {
-      const bindings = await this.pool.query(`select 1 from room_identity_authority_v2 where tenant_id=$1 and room_id=$2`, [existing.tenantId, roomId]);
-      if (bindings.rowCount) throw new Error(IDENTITY_LIFECYCLE_REQUIRES_V2);
-    }
-    assertRoomTemplatePatch(existing, input);
+    const snapshot = await this.getRoom(roomId);
+    if (!snapshot) return null;
     if (
       expectedTemplateBinding
-      && (existing.templateId !== expectedTemplateBinding.templateId || existing.templateVersion !== expectedTemplateBinding.templateVersion)
+      && (snapshot.templateId !== expectedTemplateBinding.templateId || snapshot.templateVersion !== expectedTemplateBinding.templateVersion)
     ) {
       throw new Error("room_template_binding_changed");
     }
+    const versionSnapshot = await this.getTemplateVersion(snapshot.templateId, snapshot.templateVersion);
+    if (!versionSnapshot) throw new Error(`template_version_not_found:${snapshot.templateId}`);
+    return roomFenceTransaction(this.pool, {}, async client => {
+      const locked = await client.query("select 1 from rooms where room_id=$1 for update", [roomId]);
+      if (!locked.rowCount) return null;
+      // Merge the patch into the latest record under the lock, so a policy-only
+      // update cannot restore old lifecycle settings or participant access.
+      const existing = await new PostgresStorage(this.pool, this.identityNow, client).getRoom(roomId);
+      if (!existing) return null;
+      if (existing.templateId !== snapshot.templateId || existing.templateVersion !== snapshot.templateVersion
+        || existing.roomType !== snapshot.roomType || existing.tenantId !== snapshot.tenantId) {
+        throw new Error("room_template_binding_changed");
+      }
+      if (existing.visibility !== snapshot.visibility) throw new Error("room_visibility_changed");
+      return this.updateLockedRoom(client, existing, input, versionSnapshot);
+    });
+  }
+  private async updateLockedRoom(client: PoolClient, existing: RoomRecord, input: Partial<RoomRecord>,
+    versionSnapshot: RoomTemplateVersionSnapshotV1): Promise<RoomRecord> {
+    const roomId = existing.roomId;
+    if (input.tenantId !== undefined && input.tenantId !== existing.tenantId) {
+      const bindings = await client.query(`select 1 from room_identity_authority_v2 where tenant_id=$1 and room_id=$2`, [existing.tenantId, roomId]);
+      if (bindings.rowCount) throw new Error(IDENTITY_LIFECYCLE_REQUIRES_V2);
+    }
+    assertRoomTemplatePatch(existing, input);
     if (input.templateId !== undefined && input.templateId !== existing.templateId) {
       throw new Error("room_template_binding_changed");
     }
@@ -1902,22 +1936,45 @@ export class PostgresStorage implements Storage {
       sessionControl: defaultSessionControl(input.sessionControl ?? existing.sessionControl),
       personalState: defaultPersonalState(input.personalState ?? existing.personalState)
     };
-    const versionSnapshot = await this.getTemplateVersion(existing.templateId, existing.templateVersion);
-    if (!versionSnapshot) throw new Error(`template_version_not_found:${existing.templateId}`);
     const updated = bindRoomTemplateMetadata(updatedWithoutTemplateMetadata, versionSnapshot);
-    const result = await this.pool.query(
-      `update rooms set name = $2, room_type = case when $22::boolean then $3 else room_type end, owner_participant_id = case when $23::boolean then $4 else owner_participant_id end, status = $5, disabled_at = $6, disabled_by = $7, visibility = $8, scene_bundle_url = $9, features = $10::jsonb, asset_ids = $11::jsonb, theme = $12::jsonb, guest_allowed = $13, avatar_config = $14::jsonb, session_control = case when $24::boolean then $15::jsonb else session_control end, personal_state = case when $21::boolean then $16::jsonb else personal_state end, template_version = $17, template_snapshot = $18::jsonb where room_id = $1 and template_id = $19 and coalesce(template_version, (select t.current_version from templates t where t.template_id = rooms.template_id)) = $20 and (case when room_type = 'personal' then 'personal' else 'standard' end) = $25 returning room_type, owner_participant_id, session_control, personal_state`,
-      [roomId, updated.name, updated.roomType, updated.ownerParticipantId ?? null, updated.status, updated.disabledAt ?? null, updated.disabledBy ?? null, updated.visibility, updated.sceneBundleUrl ?? null, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed, JSON.stringify(updated.avatarConfig), JSON.stringify(updated.sessionControl), JSON.stringify(updated.personalState), updated.templateVersion, JSON.stringify(updated.templateSnapshot), existing.templateId, existing.templateVersion, input.personalState != null, input.roomType != null, input.ownerParticipantId !== undefined, input.sessionControl != null, defaultRoomType(existing.roomType)]
-    );
-    if ((result.rowCount ?? 0) === 0) {
-      if (await this.getRoom(roomId)) throw new Error("room_template_binding_changed");
-      return null;
+    if (input.remoteBrowserUrlPolicy !== undefined
+      && (existing.managed || !roomSupportsRemoteBrowserUrlPolicy(existing, updated.visibility))) {
+      throw new Error("room_remote_browser_url_policy_not_supported");
     }
+    const result = await client.query(
+      `update rooms set name = $2, room_type = case when $22::boolean then $3 else room_type end,
+        owner_participant_id = case when $23::boolean then $4 else owner_participant_id end, status = $5, disabled_at = $6,
+        disabled_by = $7, visibility = $8, scene_bundle_url = $9, features = $10::jsonb, asset_ids = $11::jsonb,
+        theme = $12::jsonb, guest_allowed = $13, avatar_config = $14::jsonb,
+        session_control = case when $24::boolean then $15::jsonb else session_control end,
+        personal_state = case when $21::boolean then $16::jsonb else personal_state end,
+        template_version = $17, template_snapshot = $18::jsonb,
+        remote_browser_url_policy = case
+          when $8 <> 'private' or $26 = 'allowlist' then null
+          when $26 = 'public-https' then 'public-https'
+          else remote_browser_url_policy end
+      where room_id = $1 and template_id = $19
+        and coalesce(template_version, (select t.current_version from templates t where t.template_id = rooms.template_id)) = $20
+        and (case when room_type = 'personal' then 'personal' else 'standard' end) = $25
+      returning room_type, owner_participant_id, session_control, personal_state, remote_browser_url_policy`,
+      [
+        roomId, updated.name, updated.roomType, updated.ownerParticipantId ?? null, updated.status,
+        updated.disabledAt ?? null, updated.disabledBy ?? null, updated.visibility, updated.sceneBundleUrl ?? null,
+        JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed,
+        JSON.stringify(updated.avatarConfig), JSON.stringify(updated.sessionControl), JSON.stringify(updated.personalState),
+        updated.templateVersion, JSON.stringify(updated.templateSnapshot), existing.templateId, existing.templateVersion,
+        input.personalState != null, input.roomType != null, input.ownerParticipantId !== undefined, input.sessionControl != null,
+        defaultRoomType(existing.roomType), input.remoteBrowserUrlPolicy ?? null
+      ]
+    );
+    if (!result.rowCount) throw new Error("room_template_binding_changed");
     const row = result.rows[0];
     updated.roomType = defaultRoomType(row.room_type ?? undefined);
     updated.ownerParticipantId = row.owner_participant_id ?? null;
     updated.sessionControl = defaultSessionControl(row.session_control);
     updated.personalState = defaultPersonalState(row.personal_state ?? updated.personalState);
+    if (row.remote_browser_url_policy === "public-https") updated.remoteBrowserUrlPolicy = row.remote_browser_url_policy;
+    else delete updated.remoteBrowserUrlPolicy;
     return updated;
   }
   async deleteRoom(roomId: string, pluginDeletion?: { tenantId: string; deletionId: string; cleanedDocumentKeys?: readonly string[] }, documentStorageKeys?: string[]): Promise<boolean> {
@@ -2569,8 +2626,8 @@ export class PostgresStorage implements Storage {
   }
   async updateManagedRoomAccess(roomId: string, expectedRevision: number, patch: ManagedRoomAccessPatch, operationId: string): Promise<RoomRecord | "revision_mismatch" | "room_closed" | null> {
     return roomFenceTransaction(this.pool, {}, async client => {
-      if (patch.mediaModes) {
-        // Document effects holding the room fence finish before these permissions change.
+      if (patch.mediaModes || patch.remoteBrowserUrlPolicy !== undefined) {
+        // Serialize with document effects and keep visibility stable through a browser policy update.
         await client.query("select 1 from rooms where room_id=$1 for update", [roomId]);
       }
       const result = await client.query(
@@ -2592,7 +2649,15 @@ export class PostgresStorage implements Storage {
         if (!existing.rows[0]) return null;
         return existing.rows[0].status === "closed" ? "room_closed" : "revision_mismatch";
       }
-      return new PostgresStorage(this.pool, this.identityNow, client).getRoom(roomId);
+      const scoped = new PostgresStorage(this.pool, this.identityNow, client);
+      const room = await scoped.getRoom(roomId);
+      if (patch.remoteBrowserUrlPolicy === undefined) return room;
+      if (!room || !roomSupportsRemoteBrowserUrlPolicy(room)) throw new Error("room_remote_browser_url_policy_not_supported");
+      const policy = patch.remoteBrowserUrlPolicy === "public-https" ? patch.remoteBrowserUrlPolicy : null;
+      await client.query("update rooms set remote_browser_url_policy = $2 where room_id = $1", [roomId, policy]);
+      if (policy) room.remoteBrowserUrlPolicy = policy;
+      else delete room.remoteBrowserUrlPolicy;
+      return room;
     });
   }
   beginIntegrationOperation(input: IntegrationOperationStart): Promise<{ created: boolean; operation: IntegrationOperationRecord }> { return this.integrationOperations.begin(input); }

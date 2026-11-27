@@ -55,6 +55,7 @@ import {
   isAdhocRoomsAllowed
 } from "./feature-flags.js";
 import { effectiveRoomMediaPolicy, roomAllowsDocument } from "./room-media-policy.js";
+import { isRemoteBrowserUrlPolicy } from "./room-browser-url-policy.js";
 import { createLegacyIdentityBoundary, IdentityBoundaryError, legacyBoundaryApplies, legacyBoundaryAllowsAdministrator } from "./identity/legacy-boundary.js";
 import { assertVirtualRoomId, InvalidVirtualRoomId } from "./identity/virtual-effect-facade.js";
 import { validId } from "./identity/authority.js";
@@ -1392,12 +1393,14 @@ function canManageDisabledRoom(request: IncomingMessage): boolean {
 
 /** Room metadata is visible to invitees; owner-only state has a separate
  * authority-fenced endpoint and must never hitchhike in a generic room DTO. */
-function roomResponseRecord(request: IncomingMessage, room: RoomRecord): RoomRecord | Omit<RoomRecord, "personalState"> {
+function roomResponseRecord(request: IncomingMessage, room: RoomRecord): RoomRecord | Omit<RoomRecord, "personalState" | "remoteBrowserUrlPolicy"> {
   const actor = resolveControlPlaneActor(request);
   const record = { ...room };
   Reflect.deleteProperty(record, "currentOwnerParticipantId");
-  if (actor.ok && actor.actor.actorType === "admin-token") return record;
-  const { personalState: _privateState, ...metadata } = record;
+  const { personalState, remoteBrowserUrlPolicy, ...metadata } = record;
+  if (actor.ok && actor.actor.actorType === "admin-token") {
+    return { ...metadata, personalState, ...(room.managed ? {} : { remoteBrowserUrlPolicy: remoteBrowserUrlPolicy ?? "allowlist" }) };
+  }
   return metadata;
 }
 
@@ -2790,6 +2793,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const actor = await requireControlPlanePermission(request, response, { permission: "room.create", action: "room.create", objectType: "room" });
     if (!actor) return;
     const rawPayload = normalizeRoomAvatarOverrides((await parseBody<RoomPayloadInput>(request)) ?? {});
+    if (rawPayload.remoteBrowserUrlPolicy !== undefined) return json(response, 400, { error: "room_remote_browser_url_policy_requires_patch" });
     if (await isManagedTenant(storage, rawPayload.tenantId)) return writeManagedResourceDenied(request, response, "tenant", String(rawPayload.tenantId));
     const allowUnownedPersonal = await legacyIdentityBoundary.minimum() >= 2;
     let payload: Partial<RoomRecord>;
@@ -3368,6 +3372,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const payload = normalizeRoomPayload(rawPayload, "patch");
     if (payload.visibility !== undefined && !isRoomVisibility(payload.visibility)) return json(response, 400, { error: "invalid_room_visibility" });
     if (payload.roomType !== undefined && payload.roomType !== "standard" && payload.roomType !== "personal") return json(response, 400, { error: "invalid_room_type" });
+    if (payload.remoteBrowserUrlPolicy !== undefined && !isRemoteBrowserUrlPolicy(payload.remoteBrowserUrlPolicy)) {
+      return json(response, 400, { error: "invalid_remote_browser_url_policy" });
+    }
     if (payload.templateId !== undefined) {
       if (payload.templateId !== existingRoom.templateId) {
         const templateIds = new Set((await storage.listTemplates()).map((template) => template.templateId));
@@ -3387,7 +3394,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       if (assetValidationError) return json(response, 400, { error: assetValidationError });
     }
     if (Object.keys(payload).length === 0) {
-      json(response, 200, { ...existingRoom, roomLink: createRoomLink(existingRoom.roomId, request), manifest: await buildManifest(existingRoom.roomId, request, existingRoom) });
+      json(response, 200, { ...roomResponseRecord(request, existingRoom), roomLink: createRoomLink(existingRoom.roomId, request), manifest: await buildManifest(existingRoom.roomId, request, existingRoom) });
       return;
     }
     let updated: RoomRecord | null;
@@ -3399,13 +3406,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     } catch (error) {
       const templateFailure = templateInputError(error);
       if (templateFailure) return json(response, templateFailure.status, { error: templateFailure.code });
-      if (error instanceof Error && error.message === "room_template_binding_changed") {
-        return json(response, 409, { error: "room_template_binding_changed" });
+      if (error instanceof Error && error.message === "room_remote_browser_url_policy_not_supported") {
+        return json(response, 400, { error: error.message });
       }
       throw error;
     }
     if (!updated) return json(response, 404, { error: "room_not_found" });
-    json(response, 200, { ...updated, roomLink: createRoomLink(updated.roomId, request), manifest: await buildManifest(updated.roomId, request, updated) });
+    json(response, 200, { ...roomResponseRecord(request, updated), roomLink: createRoomLink(updated.roomId, request), manifest: await buildManifest(updated.roomId, request, updated) });
     return;
   }
 
@@ -4521,6 +4528,10 @@ export function startApiServer(port = apiPort) {
       }
       if (error instanceof Error && error.message === IDENTITY_LIFECYCLE_REQUIRES_V2) {
         json(response, 409, { error: "identity_required", reason: "identity_upgrade_required" });
+        return;
+      }
+      if (error instanceof Error && error.message === "room_visibility_changed") {
+        json(response, 409, { error: error.message });
         return;
       }
       const requestId = attachRequestId(request, response);

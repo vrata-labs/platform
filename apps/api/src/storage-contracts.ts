@@ -34,6 +34,7 @@ export interface RoomAvatarConfig {
 }
 
 export type RoomVisibility = "public" | "unlisted" | "private";
+export type RemoteBrowserUrlPolicy = "allowlist" | "public-https";
 
 export type RoomStatus = "active" | "disabled";
 
@@ -168,6 +169,7 @@ export interface RoomRecord {
   disabledAt?: string | null;
   disabledBy?: string | null;
   visibility?: RoomVisibility;
+  remoteBrowserUrlPolicy?: RemoteBrowserUrlPolicy;
   sceneBundleUrl?: string;
   features: RoomFeatures;
   assetIds: string[];
@@ -306,6 +308,7 @@ export interface ManagedRoomAccessPatch {
   graceSeconds?: number;
   status?: ManagedRoomStatus;
   mediaModes?: RoomMediaModes;
+  remoteBrowserUrlPolicy?: RemoteBrowserUrlPolicy;
 }
 
 export interface IntegrationTenantRecord {

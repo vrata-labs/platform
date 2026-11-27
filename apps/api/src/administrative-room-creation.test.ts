@@ -88,6 +88,16 @@ test("memory administrative creation preserves legacy seeds and admits only owne
   assert.deepEqual([outcome.value.ownerParticipantId, outcome.value.sessionControl?.hostParticipantId], [null, null]);
 });
 
+test("memory storage resets the browser URL policy when a room becomes non-private", async () => {
+  const storage = new MemoryStorage();
+  const room = await storage.createAdministrativeRoom({ name: "Browser URL policy" });
+  await assert.rejects(storage.updateRoom(room.roomId, { remoteBrowserUrlPolicy: "public-https" }), /room_remote_browser_url_policy_not_supported/);
+  const enabled = await storage.updateRoom(room.roomId, { visibility: "private", remoteBrowserUrlPolicy: "public-https" });
+  assert.equal(enabled?.remoteBrowserUrlPolicy, "public-https");
+  assert.equal((await storage.updateRoom(room.roomId, { visibility: "unlisted" }))?.remoteBrowserUrlPolicy, undefined);
+  assert.equal((await storage.updateRoom(room.roomId, { visibility: "private" }))?.remoteBrowserUrlPolicy, undefined);
+});
+
 test("metadata-only PostgreSQL patches preserve sparse and concurrently changed frozen columns", {
   skip: !process.env.VRATA_TEST_POSTGRES_URL && !process.env.CI, timeout: 60_000
 }, async t => {
@@ -112,9 +122,9 @@ test("metadata-only PostgreSQL patches preserve sparse and concurrently changed 
     }
   }(pool);
   const metadata = { name: "Only requested metadata changes" };
-  async function race(id: string, change: Partial<RoomRecord>) {
+  async function race(id: string, change: Partial<RoomRecord>, pendingPatch: Partial<RoomRecord> = metadata) {
     target = id; read = deferred(); proceed = deferred();
-    const pending = settled(reader.updateRoom(id, metadata));
+    const pending = settled(reader.updateRoom(id, pendingPatch));
     try { await read.promise; await storage.updateRoom(id, change); } finally { proceed.resolve(); }
     return pending;
   }
@@ -127,6 +137,28 @@ test("metadata-only PostgreSQL patches preserve sparse and concurrently changed 
     template_snapshot->'roomConfig' as config from rooms where room_id=$1`, [stale.roomId])).rows[0];
   assert.deepEqual([raw.name, raw.room_type, raw.visibility, raw.guest_allowed, raw.owner_participant_id, raw.host], ["Concurrent legacy config", "personal", "private", false, "owner-new", "host-new"]);
   assert.deepEqual([raw.config.roomType, raw.config.visibility, raw.config.guestAllowed], ["personal", "private", false]);
+  const policyRoom = await storage.createAdministrativeRoom({ name: "Concurrent browser rule", visibility: "private" });
+  const stalePolicy = await race(policyRoom.roomId, { visibility: "unlisted" }, { remoteBrowserUrlPolicy: "public-https" });
+  assert.ok(!stalePolicy.ok && /room_visibility_changed/.test(String(stalePolicy.error)));
+  const readPolicy = async () => {
+    const room = await storage.getRoom(policyRoom.roomId);
+    return [room?.visibility, room?.remoteBrowserUrlPolicy];
+  };
+  assert.deepEqual(await readPolicy(), ["unlisted", undefined]);
+  const combined = await storage.updateRoom(policyRoom.roomId, { visibility: "private", remoteBrowserUrlPolicy: "public-https" });
+  assert.deepEqual([combined?.visibility, combined?.remoteBrowserUrlPolicy], ["private", "public-https"]);
+  const staleMetadata = await race(policyRoom.roomId, { remoteBrowserUrlPolicy: "allowlist" });
+  assert.ok(staleMetadata.ok);
+  assert.equal(staleMetadata.value?.remoteBrowserUrlPolicy, undefined);
+  assert.deepEqual(await readPolicy(), ["private", undefined]);
+  const policyOnly = await race(policyRoom.roomId, { status: "disabled", guestAllowed: false }, { remoteBrowserUrlPolicy: "public-https" });
+  assert.ok(policyOnly.ok);
+  const policyAndAccess = await storage.getRoom(policyRoom.roomId);
+  assert.deepEqual([policyAndAccess?.remoteBrowserUrlPolicy, policyAndAccess?.status, policyAndAccess?.guestAllowed], ["public-https", "disabled", false]);
+  await storage.updateRoom(policyRoom.roomId, { visibility: "public" });
+  assert.deepEqual(await readPolicy(), ["public", undefined]);
+  await storage.updateRoom(policyRoom.roomId, { visibility: "private" });
+  assert.deepEqual(await readPolicy(), ["private", undefined]);
   await storage.identityProtocol.raise(2);
   const retried = await storage.updateRoom(stale.roomId, metadata), reread = await storage.getRoom(stale.roomId);
   const fields = (room: RoomRecord | null) => [room?.name, room?.roomType, room?.visibility, room?.guestAllowed, room?.ownerParticipantId, room?.sessionControl?.hostParticipantId, room?.templateSnapshot?.roomConfig];

@@ -84,7 +84,7 @@ test("integration API authenticates every call with a fresh, scoped service asse
   } finally { await h.close(); }
 });
 
-test("private room media modes are revisioned, replayable and isolated by room", async () => {
+test("private room media modes and browser URL policy are independent, revisioned and replayable", async () => {
   const h = await harness();
   try {
     const tenantId = await h.managedTenant();
@@ -104,20 +104,43 @@ test("private room media modes are revisioned, replayable and isolated by room",
     };
     const room = await makeRoom("office");
     const other = await makeRoom("meeting");
+    const mode = "public-https";
+    assert.equal((await h.call("GET", room)).body?.remoteBrowserUrlPolicy, "allowlist");
+    const policyKey = key();
+    const policyPatch = { body: { expectedRevision: 0, remoteBrowserUrlPolicy: mode }, idempotencyKey: policyKey };
+    const enabled = await h.call("PATCH", `${room}/access`, policyPatch);
+    assert.deepEqual([enabled.status, enabled.body?.revision, enabled.body?.remoteBrowserUrlPolicy, enabled.body?.mediaModes],
+      [200, 1, mode, DEFAULT_PRIVATE_ROOM_MEDIA_MODES]);
+    const foreign = await h.call("PATCH", `${room}/access`, { ...policyPatch, as: prod });
+    assert.deepEqual([foreign.status, foreign.body?.error.code], [403, "tenant_mismatch"]);
+    const wrongTenant = await h.managedTenant();
+    const wrongRoom = room.replace(tenantId, wrongTenant);
+    assert.equal((await h.call("PATCH", `${wrongRoom}/access`, policyPatch)).status, 404);
+    assert.equal((await h.call("PATCH", `${room}/access`, { ...policyPatch, scope: ["getRoom"] })).status, 403);
+    assert.equal((await h.call("GET", room, { as: prod })).status, 403);
+    assert.equal((await h.call("PATCH", `${other}/access`, {
+      body: { expectedRevision: 0, remoteBrowserUrlPolicy: "https" }, idempotencyKey: key()
+    })).status, 400);
     const mediaModes = { whiteboard: false, remoteBrowser: true, pdf: true, video: true };
     const idempotencyKey = key();
-    const patch = { body: { expectedRevision: 0, mediaModes }, idempotencyKey };
+    const patch = { body: { expectedRevision: 1, mediaModes }, idempotencyKey };
     const updated = await h.call("PATCH", `${room}/access`, patch);
     assert.equal(updated.status, 200);
-    assert.deepEqual([updated.body?.revision, updated.body?.mediaModes], [1, mediaModes]);
+    assert.deepEqual([updated.body?.revision, updated.body?.mediaModes, updated.body?.remoteBrowserUrlPolicy], [2, mediaModes, mode]);
     const replay = await h.call("PATCH", `${room}/access`, patch);
     assert.equal(replay.headers.get("idempotency-replayed"), "true");
     assert.deepEqual(replay.body, updated.body);
     const stale = await h.call("PATCH", `${room}/access`, { ...patch, idempotencyKey: key() });
     assert.equal(stale.body?.error.code, "revision_mismatch");
+    const revoked = await h.call("PATCH", `${room}/access`, { body: { expectedRevision: 2, remoteBrowserUrlPolicy: "allowlist" }, idempotencyKey: key() });
+    assert.deepEqual([revoked.status, revoked.body?.revision, revoked.body?.remoteBrowserUrlPolicy, revoked.body?.mediaModes],
+      [200, 3, "allowlist", mediaModes]);
+    assert.deepEqual((await h.call("PATCH", `${room}/access`, policyPatch)).body, enabled.body, "replays keep the original receipt");
+    assert.equal((await h.call("GET", room)).body?.remoteBrowserUrlPolicy, "allowlist", "replay does not restore revoked policy");
     const invalid = await h.call("PATCH", `${other}/access`, { body: { expectedRevision: 0, mediaModes: { video: true } }, idempotencyKey: key() });
     assert.equal(invalid.status, 400);
-    assert.deepEqual((await h.call("GET", other)).body?.mediaModes, DEFAULT_PRIVATE_ROOM_MEDIA_MODES);
+    const untouched = (await h.call("GET", other)).body;
+    assert.deepEqual([untouched?.remoteBrowserUrlPolicy, untouched?.mediaModes], ["allowlist", DEFAULT_PRIVATE_ROOM_MEDIA_MODES]);
   } finally { await h.close(); }
 });
 
