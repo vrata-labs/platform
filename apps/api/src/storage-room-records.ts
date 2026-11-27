@@ -200,6 +200,7 @@ export function mapRoomRow(row: {
   disabled_at?: string | Date | null;
   disabled_by?: string | null;
   visibility?: RoomVisibility;
+  remote_browser_url_policy?: unknown;
   scene_bundle_url: string | null;
   features: RoomFeatures;
   asset_ids: string[];
@@ -221,6 +222,7 @@ export function mapRoomRow(row: {
     disabledAt: isoString(row.disabled_at),
     disabledBy: row.disabled_by ?? null,
     visibility: defaultRoomVisibility(row.visibility, roomType),
+    ...(row.remote_browser_url_policy === "public-https" ? { remoteBrowserUrlPolicy: row.remote_browser_url_policy } : {}),
     sceneBundleUrl: row.scene_bundle_url ?? undefined,
     features: row.features,
     assetIds: row.asset_ids,

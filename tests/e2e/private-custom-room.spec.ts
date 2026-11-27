@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { startReferenceTemplateFixture } from "./reference-template-fixture.js";
 import { assertPrivateClip, assertPrivateHeldProp, privateClipFixture } from "./private-clip-fixture.js";
+import { enterBrowserRoom, openBrowserAddress, readBrowserRoom, waitForBrowserObject } from "./m1-media/remote-browser-room";
 
 test.use({ trace: "off", screenshot: "off", video: "off" });
 test("private custom room: same owner can reopen, update and roll back a protected scene", async ({
@@ -57,6 +58,7 @@ test("private custom room: same owner can reopen, update and roll back a protect
     fixture = await startReferenceTemplateFixture(process.env.VRATA_TEST_POSTGRES_URL!, {
       identityProtocol: 2,
       devRoleQuery: false,
+      remoteBrowserFixture: !archive,
       extraEnv: (origin) => ({
         VRATA_PORTAL_MANAGED: "true",
         VRATA_ADHOC_ROOMS: "false",
@@ -180,6 +182,45 @@ test("private custom room: same owner can reopen, update and roll back a protect
         await client.close();
       }
     };
+    if (!archive) await test.step("the managed room uses the same executor only while its browser is enabled", async () => {
+      const roomPath = `${prefix}${path}`;
+      const readRoom = async () => {
+        const response = await request.get(roomPath, { headers: headers() });
+        expect(response.status()).toBe(200);
+        return response.json();
+      };
+      const update = async (fields: Record<string, unknown>) => {
+        const current = await readRoom();
+        const response = await request.patch(`${roomPath}/access`, {
+          headers: headers(), data: { expectedRevision: current.revision, ...fields }
+        });
+        expect(response.status()).toBe(200);
+        return response.json();
+      };
+      const original = await readRoom();
+      const context = await browser.newContext();
+      try {
+        const disabled = await update({ remoteBrowserUrlPolicy: "public-https" });
+        expect(disabled.mediaModes.remoteBrowser).toBe(false);
+        const grant = await permit(subject);
+        expect(grant.status()).toBe(201);
+        const page = await context.newPage();
+        await enterBrowserRoom(page, (await grant.json()).entryUrl, "Private owner");
+        await expect.poll(async () => (await readBrowserRoom(page))?.access?.role).toBe("host");
+        await expect(page.locator("#open-remote-browser")).toBeDisabled();
+        await expect(page.locator("#remote-browser-control")).toBeHidden();
+        expect((await readBrowserRoom(page))?.mediaObjects?.surfaces?.some(surface => surface.activeObjectType === "remote-browser")).toBe(false);
+        await update({ mediaModes: { ...disabled.mediaModes, remoteBrowser: true } });
+        const controlled = "https://shared-browser.test/control";
+        await openBrowserAddress(page, controlled);
+        await waitForBrowserObject(page, controlled, "fixture-video:");
+        await update({ remoteBrowserUrlPolicy: "allowlist" });
+        await expect.poll(async () => (await readBrowserRoom(page))?.remoteBrowser?.status, { timeout: 10_000 }).toBe("failed");
+      } finally {
+        await context.close();
+        await update({ remoteBrowserUrlPolicy: original.remoteBrowserUrlPolicy, mediaModes: original.mediaModes });
+      }
+    });
     const first = await visit(authored.label, 0, 3_600_000);
     expect(first.person).toBeTruthy();
     const original = await visit(authored.label, 1, -3_600_000);

@@ -3,6 +3,7 @@ import { randomInt, randomUUID } from "node:crypto";
 import test from "node:test";
 
 import { Pool } from "pg";
+import { DEFAULT_PRIVATE_ROOM_MEDIA_MODES, REMOTE_BROWSER_ROOM_POLICY_PATH } from "@vrata/shared-types";
 
 import { integrationRequestHash } from "./integration-routes.js";
 import { PostgresStorage } from "./storage.js";
@@ -41,6 +42,7 @@ test("portal-managed rooms on PostgreSQL: grants, exchange, cutoff, close, epoch
     STATE_TOKEN_SECRET: stateSecret,
     VRATA_INTERNAL_SERVICE_TOKEN: internalToken,
     VRATA_PORTAL_MANAGED: "true",
+    REMOTE_BROWSER_ENABLED: "true",
     VRATA_INTEGRATION_KEYS: integrationKeysEnv([key]),
     VRATA_DEMO_POLICIES: JSON.stringify([demoPolicy, { ...demoPolicy, policyId: "qa-meeting-only", templates: ["meeting-room-basic"] }]),
     VRATA_MANAGED_ENFORCER_INTERVAL_MS: "300",
@@ -114,6 +116,73 @@ test("portal-managed rooms on PostgreSQL: grants, exchange, cutoff, close, epoch
     assert.deepEqual([demo.status, demo.body?.kind, demo.body?.demoPolicyId, demo.body?.visibility], [201, "demo-instance", "qa-demo-v1", "private"], JSON.stringify(demo.body));
     const demoId = demo.body!.roomId as string;
     const grantsPath = `/integration/v1/tenants/${tenant}/rooms/${demoId}/grants`;
+
+    const policyPatch = { expectedRevision: 0, remoteBrowserUrlPolicy: "public-https" };
+    for (const roomId of [referenceId, demoId]) {
+      const denied = await call("PATCH", `${roomsPath}/${roomId}/access`, { body: policyPatch, key: idempotencyKey() });
+      assert.deepEqual([denied.status, denied.body?.error.code], [400, "invalid_request"]);
+      assert.equal((await storage.getRoom(roomId))?.managed?.revision, 0);
+    }
+    const customVersion = {
+      tenantId: tenant, bundleId: "office", version: "v1", bundleVersionId: randomUUID(), archiveSha256: "a".repeat(64),
+      contentHash: "b".repeat(64), sizeBytes: 0, files: [], state: "candidate" as const,
+      createdAt: new Date().toISOString(), validation: { issues: [] }
+    };
+    await storage.registerPrivateSceneVersion(customVersion);
+    const custom = await storage.createManagedRoom({ roomId: randomUUID(), tenantId: tenant, name: "Managed private scene" }, {
+      managedBy: "portal:stage", kind: "custom", customVersion, ownerSubject: "acct_01JBQ7Z8K3M4N5P6Q7R8S9T0VW",
+      accessUntil: createBody.accessUntil, graceSeconds: 0, operationId: randomUUID()
+    });
+    const customAccess = `${roomsPath}/${custom.roomId}/access`;
+    const browserPolicy = () => call("POST", REMOTE_BROWSER_ROOM_POLICY_PATH, {
+      body: { roomId: custom.roomId }, headers: { "x-vrata-internal-token": internalToken }
+    });
+    const original = await call("GET", `${roomsPath}/${custom.roomId}`);
+    assert.deepEqual([original.status, original.body?.remoteBrowserUrlPolicy], [200, "allowlist"]);
+    assert.equal(await storage.publishPrivateScene(custom.roomId, customVersion.bundleVersionId, null, randomUUID()), true);
+    const customGrant = await call("POST", `${roomsPath}/${custom.roomId}/grants`, {
+      body: { role: "host", purpose: "visit", subject: custom.managed?.ownerSubject }, key: idempotencyKey()
+    });
+    assert.equal(customGrant.status, 201, JSON.stringify(customGrant.body));
+    const customHost = await exchange(custom.roomId, codeOf(customGrant.body!.entryUrl));
+    assert.deepEqual([customHost.status, customHost.body?.role], [200, "host"], JSON.stringify(customHost.body));
+    const hostToken = customHost.body!.sessionToken;
+    const hostPermissions = async () => {
+      const control = await call("GET", `/api/rooms/${custom.roomId}/session-control`, { headers: { authorization: `Bearer ${hostToken}` } });
+      assert.equal(control.status, 200);
+      return control.body?.participant;
+    };
+    const permissions = await hostPermissions();
+    assert.equal(permissions?.role, "host");
+    const hostPatch = await call("PATCH", customAccess, { body: policyPatch, key: idempotencyKey(), token: hostToken });
+    assert.deepEqual([hostPatch.status, hostPatch.body?.error.code], [401, "unauthenticated"]);
+
+    const requests = ["first operator", "second operator"].map(reason => ({
+      body: { ...policyPatch, reason }, key: idempotencyKey()
+    }));
+    const results = await Promise.all(requests.map(request => call("PATCH", customAccess, request)));
+    assert.deepEqual(results.map(result => result.status).sort(), [200, 409]);
+    const winnerIndex = results.findIndex(result => result.status === 200);
+    const winner = results[winnerIndex]!;
+    assert.deepEqual([winner.body?.revision, winner.body?.remoteBrowserUrlPolicy, winner.body?.mediaModes],
+      [1, "public-https", DEFAULT_PRIVATE_ROOM_MEDIA_MODES]);
+    assert.equal(results[1 - winnerIndex]?.body?.error.code, "revision_mismatch");
+    const replay = await call("PATCH", customAccess, requests[winnerIndex]);
+    assert.equal(replay.headers.get("idempotency-replayed"), "true");
+    assert.deepEqual(replay.body, winner.body);
+    const after = await storage.getRoom(custom.roomId);
+    assert.equal(after?.remoteBrowserUrlPolicy, "public-https");
+    assert.deepEqual([after?.managed?.revision, after?.managed?.accessEpoch, after?.managed?.accessUntil, after?.managed?.status],
+      [1, custom.managed?.accessEpoch, custom.managed?.accessUntil, custom.managed?.status]);
+    assert.equal((await browserPolicy()).status, 403, "an extended URL rule does not enable the browser");
+    assert.deepEqual(await hostPermissions(), permissions);
+    await pool.query("update rooms set visibility='unlisted' where room_id=$1", [custom.roomId]);
+    const refused = await call("PATCH", customAccess, {
+      body: { expectedRevision: 1, remoteBrowserUrlPolicy: "public-https", status: "paused" }, key: idempotencyKey()
+    });
+    assert.deepEqual([refused.status, refused.body?.error.code], [400, "invalid_request"]);
+    const unchanged = await storage.getRoom(custom.roomId);
+    assert.deepEqual([unchanged?.managed?.revision, unchanged?.managed?.status, unchanged?.remoteBrowserUrlPolicy], [1, "active", undefined]);
 
     // The code is shown once: the replay of the same request answers without it, and only its hash is stored.
     const visitKey = idempotencyKey();
@@ -253,15 +322,17 @@ test("portal-managed rooms on PostgreSQL: grants, exchange, cutoff, close, epoch
 
     // Usage: room-state verifications are counted as participant-seconds of the tenant.
     const session = (await renew(demoId, host.body!.identityCredential)).body!;
-    // Presence over several enforcer ticks: a tick bills its own window, fractions carry to the next.
-    for (let index = 0; index < 16; index++) {
-      assert.equal((await verify(demoId, host.body!.participantId, session.token)).status, 200);
-      await delay(150);
-    }
-    await delay(700);
     const day = new Date().toISOString().slice(0, 10);
-    const usage = await call("GET", `/integration/v1/tenants/${tenant}/usage?day=${day}`);
-    assert.equal(usage.status, 200, JSON.stringify(usage.body));
+    const usagePath = `/integration/v1/tenants/${tenant}/usage?day=${day}`;
+    const usageDeadline = Date.now() + 10_000;
+    let usage;
+    do {
+      // Keep sending presence until the enforcer has stored a whole second.
+      assert.equal((await verify(demoId, host.body!.participantId, session.token)).status, 200);
+      await delay(75);
+      usage = await call("GET", usagePath);
+      assert.equal(usage.status, 200, JSON.stringify(usage.body));
+    } while (usage.body!.participantSeconds === 0 && Date.now() < usageDeadline);
     assert.deepEqual([usage.body!.tenantId, usage.body!.day], [tenant, day]);
     assert(usage.body!.participantSeconds > 0, JSON.stringify(usage.body));
     assert.equal((await call("GET", `/integration/v1/tenants/${tenant}/usage?day=2026-13-40`)).body?.error.code, "invalid_request");
@@ -315,6 +386,25 @@ test("portal-managed rooms on PostgreSQL: grants, exchange, cutoff, close, epoch
     const replayedAssertion = await call("GET", `/integration/v1/tenants/${tenant}/rooms/${referenceId}`, { token: usedAssertion });
     assert.deepEqual([replayedAssertion.status, replayedAssertion.body?.error.details.reason], [401, "replayed_jti"]);
     assert.equal((await call("GET", `/integration/v1/tenants/${tenant}/rooms/${demoId}`)).body?.status, "closed");
+
+    // An executor permission cannot be renewed across disable/re-enable or room closure.
+    await pool.query("update rooms set visibility='private' where room_id=$1", [custom.roomId]);
+    const mediaModes = { ...DEFAULT_PRIVATE_ROOM_MEDIA_MODES, remoteBrowser: true };
+    const patchBrowser = (body: Record<string, unknown>) => call("PATCH", customAccess, { body, key: idempotencyKey() });
+    assert.equal((await patchBrowser({ ...policyPatch, expectedRevision: 1, mediaModes })).status, 200);
+    const grant = await browserPolicy();
+    assert.deepEqual([grant.status, grant.body?.mode, grant.body?.tenantId], [200, "public-https", tenant]);
+    assert.equal((await patchBrowser({ expectedRevision: 2, mediaModes: { ...mediaModes, whiteboard: !mediaModes.whiteboard } })).status, 200);
+    assert.equal((await browserPolicy()).body?.policyRevision, grant.body?.policyRevision);
+    assert.equal((await patchBrowser({ expectedRevision: 3, mediaModes: { ...mediaModes, remoteBrowser: false } })).status, 200);
+    assert.equal((await browserPolicy()).status, 403);
+    assert.equal((await patchBrowser({ expectedRevision: 4, mediaModes })).status, 200);
+    assert.notEqual((await browserPolicy()).body?.policyRevision, grant.body?.policyRevision);
+    const closedBrowserRoom = await call("POST", `${roomsPath}/${custom.roomId}/close`, {
+      body: { expectedRevision: 5, reason: "test finished" }, key: idempotencyKey()
+    });
+    assert.equal(closedBrowserRoom.status, 200);
+    assert.equal((await browserPolicy()).status, 403);
   } finally {
     await api?.stop();
     await pool.end();

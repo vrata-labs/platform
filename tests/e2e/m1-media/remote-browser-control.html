@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8">
+  <title>Vrata shared browser media check</title>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; background: #f00000; }
+  </style>
+  <script>
+    const colors = ["#f00000", "#0000f0"];
+    let frame = 0;
+    setInterval(() => document.documentElement.style.background = document.body.style.background = colors[++frame % 2], 700);
+    window.addEventListener("load", async () => {
+      const audio = new AudioContext();
+      const tone = new OscillatorNode(audio, { frequency: 880 });
+      const volume = new GainNode(audio, { gain: 0.16 });
+      tone.connect(volume).connect(audio.destination);
+      tone.start();
+      await audio.resume();
+    });
+  </script>
+  <body></body>
+</html>

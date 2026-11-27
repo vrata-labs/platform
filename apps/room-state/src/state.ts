@@ -18,7 +18,9 @@ import {
   hasRoomPermission,
   isMediaObjectDefinitionAvailable,
   isMediaObjectDefinitionEnabled,
+  isRemoteBrowserSiteIssue,
   parseRoomRole,
+  remoteBrowserDisplayUrl,
   roomAllowsMediaObject,
   type MediaObjectCommandBlockedReason,
   type MediaObjectCommandResult,
@@ -557,10 +559,10 @@ function normalizeRemoteBrowserExecutorInputState(input: RemoteBrowserExecutorIn
     receivedAtMs: Math.round(input.receivedAtMs),
     appliedAtMs: Math.round(input.appliedAtMs),
     status: input.status,
-    pageUrl: input.pageUrl?.trim().slice(0, 500) || undefined,
+    pageUrl: remoteBrowserDisplayUrl(input.pageUrl)?.slice(0, 500),
     pageClosed: input.pageClosed,
     targetDetail: input.targetDetail?.replace(/[\r\n\t]+/g, " ").trim().slice(0, 500) || undefined,
-    errorDetail: normalizeRemoteBrowserErrorDetail(input.errorDetail)
+    errorDetail: input.status === "failed" ? "input_failed" : undefined
   };
 }
 
@@ -590,6 +592,11 @@ function isRemoteBrowserPatch(input: unknown): input is RemoteBrowserPatch {
   if (patch.type === "mark-input-applied") {
     return isRemoteBrowserExecutorInputState(patch.input);
   }
+  if (patch.type === "mark-site-status") {
+    const site = patch as Partial<Extract<RemoteBrowserPatch, { type: "mark-site-status" }>>;
+    return (site.scope === "navigation" || site.scope === "resource")
+      && (site.issue === null || isRemoteBrowserSiteIssue(site.issue));
+  }
   if (patch.type === "mark-stopped") {
     return true;
   }
@@ -605,11 +612,6 @@ function isRemoteBrowserPatch(input: unknown): input is RemoteBrowserPatch {
   return false;
 }
 
-function normalizeRemoteBrowserErrorDetail(input: string | undefined): string | undefined {
-  const normalized = input?.replace(/[\r\n\t]+/g, " ").trim().slice(0, 500);
-  return normalized || undefined;
-}
-
 function isRemoteBrowserRealtimeInputPatch(input: unknown): input is Extract<RemoteBrowserPatch, { type: "pointer" | "scroll" | "keyboard" }> {
   if (!input || typeof input !== "object") {
     return false;
@@ -618,11 +620,12 @@ function isRemoteBrowserRealtimeInputPatch(input: unknown): input is Extract<Rem
   return patch.type === "pointer" || patch.type === "scroll" || patch.type === "keyboard";
 }
 
-function isRemoteBrowserExecutorPatch(input: unknown): input is Extract<RemoteBrowserPatch, { type: "mark-publishing" | "mark-active" | "mark-source-rect" | "mark-input-applied" | "mark-failed" | "mark-stopped" }> {
+function isRemoteBrowserExecutorPatch(input: unknown): input is Extract<RemoteBrowserPatch, { type: "mark-publishing" | "mark-active" | "mark-source-rect" | "mark-site-status" | "mark-input-applied" | "mark-failed" | "mark-stopped" }> {
   if (!isRemoteBrowserPatch(input)) {
     return false;
   }
-  return input.type === "mark-publishing" || input.type === "mark-active" || input.type === "mark-source-rect" || input.type === "mark-input-applied" || input.type === "mark-failed" || input.type === "mark-stopped";
+  return input.type === "mark-publishing" || input.type === "mark-active" || input.type === "mark-source-rect"
+    || input.type === "mark-site-status" || input.type === "mark-input-applied" || input.type === "mark-failed" || input.type === "mark-stopped";
 }
 
 function isWhiteboardColor(input: unknown): input is WhiteboardStroke["color"] {
@@ -1178,7 +1181,9 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
       mediaTrackSid: undefined,
       audioTrackSid: undefined,
       mediaSourceRect: undefined,
-      currentUrl: patch.url,
+      currentUrl: remoteBrowserDisplayUrl(patch.url),
+      navigationIssue: undefined,
+      resourceIssue: undefined,
       errorCode: undefined,
       streamErrorCode: undefined,
       errorDetail: undefined,
@@ -1192,7 +1197,7 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
   }
   if (patch.type === "mark-publishing") {
     // A stopped instance stays stopped; only open-url starts a new one. Its media identity is the instance.
-    if (!current.executorSessionId || current.status === "stopped" || patch.mediaParticipantId.trim() !== current.executorInstanceId) {
+    if (!current.executorSessionId || current.status === "stopped" || current.status === "failed" || patch.mediaParticipantId.trim() !== current.executorInstanceId) {
       return null;
     }
     return {
@@ -1210,7 +1215,7 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
     };
   }
   if (patch.type === "mark-active") {
-    if (!current.executorSessionId || current.status === "stopped" || current.mediaParticipantId !== patch.mediaParticipantId.trim()) {
+    if (!current.executorSessionId || current.status === "stopped" || current.status === "failed" || current.mediaParticipantId !== patch.mediaParticipantId.trim()) {
       return null;
     }
     return {
@@ -1251,6 +1256,16 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
       lastInputEventId: patch.inputEventId
     };
   }
+  if (patch.type === "mark-site-status") {
+    if (!current.executorSessionId || current.status === "failed" || current.status === "stopped") return null;
+    const issue = patch.issue ?? undefined;
+    if (patch.scope === "resource") {
+      if (current.resourceIssue === issue) return null;
+      return { ...current, resourceIssue: issue, lastInputEventId: patch.inputEventId };
+    }
+    if (current.navigationIssue === issue) return null;
+    return { ...current, navigationIssue: issue, lastInputEventId: patch.inputEventId };
+  }
   if (patch.type === "mark-stopped") {
     return {
       ...current,
@@ -1276,7 +1291,7 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
       mediaSourceRect: undefined,
       errorCode: patch.errorCode,
       streamErrorCode: patch.errorCode,
-      errorDetail: normalizeRemoteBrowserErrorDetail(patch.errorDetail),
+      errorDetail: undefined,
       streamUpdatedAtMs: nowMs,
       lastInputEventId: patch.inputEventId
     };

@@ -15,10 +15,12 @@ import { basename, dirname, extname, join, normalize, resolve, sep } from "node:
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { AccessToken } from "livekit-server-sdk";
+import { AccessToken, TrackSource } from "livekit-server-sdk";
 import { PDFDocument } from "pdf-lib";
 import { extractSceneBundleZipToTemp, normalizeSceneBundleRelativePath, validateSceneBundlePath, validateSceneBundleReference } from "@vrata/asset-pipeline";
-import { createRoomAccessDebugState, createUserMediaIdentity, userMediaScope, getRoomPermissions, hasRoomPermission, parseRoomRole, type RoomPermission, type RoomRole } from "@vrata/shared-types";
+import { createRoomAccessDebugState, createUserMediaIdentity, userMediaScope, getRoomPermissions, hasRoomPermission, parseRoomRole,
+  isRemoteBrowserPublicHttpsBinding, REMOTE_BROWSER_ROOM_POLICY_PATH, type RemoteBrowserPublicHttpsBinding,
+  type RoomPermission, type RoomRole } from "@vrata/shared-types";
 import { getRoomSessionTokenSecret, isRotatedDevelopmentSession, signRoomSessionToken, verifyRoomSessionToken, type RoomSessionRoleSource, type RoomSessionTokenPayload, type RoomSessionTokenVerificationResult } from "@vrata/shared-types/session-token";
 
 import {
@@ -55,6 +57,7 @@ import {
   isAdhocRoomsAllowed
 } from "./feature-flags.js";
 import { effectiveRoomMediaPolicy, roomAllowsDocument } from "./room-media-policy.js";
+import { isRemoteBrowserUrlPolicy, readRemoteBrowserRoomPolicy } from "./room-browser-url-policy.js";
 import { createLegacyIdentityBoundary, IdentityBoundaryError, legacyBoundaryApplies, legacyBoundaryAllowsAdministrator } from "./identity/legacy-boundary.js";
 import { assertVirtualRoomId, InvalidVirtualRoomId } from "./identity/virtual-effect-facade.js";
 import { validId } from "./identity/authority.js";
@@ -217,6 +220,7 @@ interface RemoteBrowserMediaTokenRequest {
   executorInstanceId?: string;
   mediaParticipantId?: string;
   preferPublicLivekitUrl?: boolean;
+  publicHttpsBinding?: RemoteBrowserPublicHttpsBinding;
 }
 
 interface RemoteBrowserFrameTokenRequest {
@@ -634,9 +638,9 @@ function isAuthorizedRemoteBrowserRequest(request: IncomingMessage, env: NodeJS.
   return typeof provided === "string" && safeEqual(provided, token);
 }
 
-async function verifyRemoteBrowserAuthority(input: { roomId: string; objectId: string; executorSessionId: string; executorInstanceId: string; mediaParticipantId?: string; frameStreamId?: string }, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+async function verifyRemoteBrowserAuthority(input: { roomId: string; objectId: string; executorSessionId: string; executorInstanceId: string; mediaParticipantId?: string; frameStreamId?: string; publicHttpsBinding?: RemoteBrowserPublicHttpsBinding }, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
   const baseUrl = env.ROOM_STATE_INTERNAL_URL?.trim();
-  if (!baseUrl) return env.NODE_ENV !== "production";
+  if (!baseUrl) return !input.publicHttpsBinding && env.NODE_ENV !== "production";
   try {
     const response = await fetch(new URL("/api/internal/remote-browser/bindings/verify", baseUrl), {
       method: "POST",
@@ -644,7 +648,7 @@ async function verifyRemoteBrowserAuthority(input: { roomId: string; objectId: s
       signal: AbortSignal.timeout(5000),
       body: JSON.stringify(input)
     });
-    return response.ok;
+    return response.ok && (!input.publicHttpsBinding || (await response.json() as { publicHttpsAuthorized?: boolean }).publicHttpsAuthorized === true);
   } catch {
     return false;
   }
@@ -1392,12 +1396,14 @@ function canManageDisabledRoom(request: IncomingMessage): boolean {
 
 /** Room metadata is visible to invitees; owner-only state has a separate
  * authority-fenced endpoint and must never hitchhike in a generic room DTO. */
-function roomResponseRecord(request: IncomingMessage, room: RoomRecord): RoomRecord | Omit<RoomRecord, "personalState"> {
+function roomResponseRecord(request: IncomingMessage, room: RoomRecord): RoomRecord | Omit<RoomRecord, "personalState" | "remoteBrowserUrlPolicy"> {
   const actor = resolveControlPlaneActor(request);
   const record = { ...room };
   Reflect.deleteProperty(record, "currentOwnerParticipantId");
-  if (actor.ok && actor.actor.actorType === "admin-token") return record;
-  const { personalState: _privateState, ...metadata } = record;
+  const { personalState, remoteBrowserUrlPolicy, ...metadata } = record;
+  if (actor.ok && actor.actor.actorType === "admin-token") {
+    return { ...metadata, personalState, ...(room.managed ? {} : { remoteBrowserUrlPolicy: remoteBrowserUrlPolicy ?? "allowlist" }) };
+  }
   return metadata;
 }
 
@@ -2474,6 +2480,17 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return json(response, 200, { minimumProtocolVersion, roomRequiresV2 });
   }
 
+  if (method === "POST" && url.pathname === REMOTE_BROWSER_ROOM_POLICY_PATH) {
+    if (!getInternalServiceToken() || !isAuthorizedInternalRequest(request)) return json(response, 403, { error: "forbidden" });
+    const payload = await parseBody<{ roomId?: unknown }>(request).catch(() => null);
+    if (typeof payload?.roomId !== "string" || !payload.roomId || payload.roomId.length > 512) {
+      return json(response, 400, { error: "invalid_room_id" });
+    }
+    const policy = await readRemoteBrowserRoomPolicy(storage, payload.roomId);
+    response.setHeader("cache-control", "no-store");
+    return policy ? json(response, 200, policy) : json(response, 403, { error: "remote_browser_not_authorized" });
+  }
+
   if (method === "POST" && url.pathname === "/api/internal/identity-session/verify") {
     if (!isAuthorizedInternalRequest(request)) return json(response, 403, { error: "forbidden" });
     const payload = await parseBody<{ roomId?: unknown; participantId?: unknown; sessionToken?: unknown; includeSceneContext?: unknown }>(request);
@@ -2790,6 +2807,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const actor = await requireControlPlanePermission(request, response, { permission: "room.create", action: "room.create", objectType: "room" });
     if (!actor) return;
     const rawPayload = normalizeRoomAvatarOverrides((await parseBody<RoomPayloadInput>(request)) ?? {});
+    if (rawPayload.remoteBrowserUrlPolicy !== undefined) return json(response, 400, { error: "room_remote_browser_url_policy_requires_patch" });
     if (await isManagedTenant(storage, rawPayload.tenantId)) return writeManagedResourceDenied(request, response, "tenant", String(rawPayload.tenantId));
     const allowUnownedPersonal = await legacyIdentityBoundary.minimum() >= 2;
     let payload: Partial<RoomRecord>;
@@ -3368,6 +3386,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const payload = normalizeRoomPayload(rawPayload, "patch");
     if (payload.visibility !== undefined && !isRoomVisibility(payload.visibility)) return json(response, 400, { error: "invalid_room_visibility" });
     if (payload.roomType !== undefined && payload.roomType !== "standard" && payload.roomType !== "personal") return json(response, 400, { error: "invalid_room_type" });
+    if (payload.remoteBrowserUrlPolicy !== undefined && !isRemoteBrowserUrlPolicy(payload.remoteBrowserUrlPolicy)) {
+      return json(response, 400, { error: "invalid_remote_browser_url_policy" });
+    }
     if (payload.templateId !== undefined) {
       if (payload.templateId !== existingRoom.templateId) {
         const templateIds = new Set((await storage.listTemplates()).map((template) => template.templateId));
@@ -3387,7 +3408,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       if (assetValidationError) return json(response, 400, { error: assetValidationError });
     }
     if (Object.keys(payload).length === 0) {
-      json(response, 200, { ...existingRoom, roomLink: createRoomLink(existingRoom.roomId, request), manifest: await buildManifest(existingRoom.roomId, request, existingRoom) });
+      json(response, 200, { ...roomResponseRecord(request, existingRoom), roomLink: createRoomLink(existingRoom.roomId, request), manifest: await buildManifest(existingRoom.roomId, request, existingRoom) });
       return;
     }
     let updated: RoomRecord | null;
@@ -3399,13 +3420,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     } catch (error) {
       const templateFailure = templateInputError(error);
       if (templateFailure) return json(response, templateFailure.status, { error: templateFailure.code });
-      if (error instanceof Error && error.message === "room_template_binding_changed") {
-        return json(response, 409, { error: "room_template_binding_changed" });
+      if (error instanceof Error && error.message === "room_remote_browser_url_policy_not_supported") {
+        return json(response, 400, { error: error.message });
       }
       throw error;
     }
     if (!updated) return json(response, 404, { error: "room_not_found" });
-    json(response, 200, { ...updated, roomLink: createRoomLink(updated.roomId, request), manifest: await buildManifest(updated.roomId, request, updated) });
+    json(response, 200, { ...roomResponseRecord(request, updated), roomLink: createRoomLink(updated.roomId, request), manifest: await buildManifest(updated.roomId, request, updated) });
     return;
   }
 
@@ -4347,6 +4368,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!isRemoteBrowserIdentityBinding({ objectId: payload.objectId, executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId, mediaParticipantId: payload.mediaParticipantId })) {
       return json(response, 400, { error: "invalid_session_binding" });
     }
+    const publicBinding = payload.publicHttpsBinding;
+    if (publicBinding !== undefined && (!isRemoteBrowserPublicHttpsBinding(publicBinding)
+      || publicBinding.roomId !== payload.roomId || publicBinding.objectId !== payload.objectId
+      || publicBinding.sessionId !== payload.executorSessionId || publicBinding.executorInstanceId !== payload.executorInstanceId)) {
+      return json(response, 400, { error: "invalid_session_binding" });
+    }
     const remoteBrowserRoom = await storage.getRoom(payload.roomId);
     if (!remoteBrowserRoom && !isAdhocRoomsAllowed()) return json(response, 404, { error: "room_not_found", requestId });
     if (remoteBrowserRoom && effectiveRoomMediaPolicy(remoteBrowserRoom)?.modes.remoteBrowser === false) {
@@ -4354,7 +4381,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
     const remoteBrowserBlock = getManagedAccessBlockReason(remoteBrowserRoom);
     if (remoteBrowserBlock) return json(response, sessionBlockStatusCode(remoteBrowserBlock), { error: "room_access_denied", reason: remoteBrowserBlock });
-    if (!await verifyRemoteBrowserAuthority({ roomId: payload.roomId, objectId: payload.objectId, executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId, mediaParticipantId: payload.mediaParticipantId })) {
+    if (!await verifyRemoteBrowserAuthority({ roomId: payload.roomId, objectId: payload.objectId, executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId, mediaParticipantId: payload.mediaParticipantId, publicHttpsBinding: publicBinding })) {
       return json(response, 409, { error: "remote_browser_session_not_authoritative" });
     }
     const configError = getMediaTokenConfigError();
@@ -4391,18 +4418,19 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const accessToken = new AccessToken(apiKey, apiSecret, {
       identity: payload.mediaParticipantId,
       name: `Remote Browser ${payload.objectId}`,
-      ttl: `${ttlSeconds}s`
+      ttl: `${publicBinding ? Math.min(ttlSeconds, 10) : ttlSeconds}s`
     });
     accessToken.addGrant({
       room: mediaRoom,
       roomJoin: true,
       canPublish: true,
-      canSubscribe: false
+      canSubscribe: false,
+      ...(publicBinding ? { canPublishData: false, canPublishSources: [TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO] } : {})
     });
     const executorToken = await accessToken.toJwt();
     const reply = () => json(response, 200, {
       token: executorToken,
-      expiresInSeconds: ttlSeconds,
+      expiresInSeconds: publicBinding ? Math.min(ttlSeconds, 10) : ttlSeconds,
       livekitUrl: getRemoteBrowserLivekitUrl(request, payload),
       participantId: payload.mediaParticipantId
     });
@@ -4416,7 +4444,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!authority || authority.lifecycle.endedAt) return json(response, 409, { error: "remote_browser_session_not_authoritative" });
     if (!await verifyRemoteBrowserAuthority({ roomId: payload.roomId, objectId: payload.objectId,
       executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId,
-      mediaParticipantId: payload.mediaParticipantId })) {
+      mediaParticipantId: payload.mediaParticipantId, publicHttpsBinding: publicBinding })) {
       return json(response, 409, { error: "remote_browser_session_not_authoritative" });
     }
     // The signed room name is released only while its codec and room generation are still current.
@@ -4521,6 +4549,10 @@ export function startApiServer(port = apiPort) {
       }
       if (error instanceof Error && error.message === IDENTITY_LIFECYCLE_REQUIRES_V2) {
         json(response, 409, { error: "identity_required", reason: "identity_upgrade_required" });
+        return;
+      }
+      if (error instanceof Error && error.message === "room_visibility_changed") {
+        json(response, 409, { error: error.message });
         return;
       }
       const requestId = attachRequestId(request, response);

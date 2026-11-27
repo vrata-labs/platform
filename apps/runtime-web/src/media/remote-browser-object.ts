@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { remoteBrowserDisplayUrl } from "@vrata/shared-types";
 import type {
   MediaObjectInstance,
   RemoteBrowserExecutorInputState,
@@ -10,6 +11,18 @@ import type {
 } from "@vrata/shared-types";
 
 import type { SurfaceCommandResult } from "../room-state-client.js";
+import { t } from "../i18n/i18n.js";
+
+export function remoteBrowserSiteStatus(state: RemoteBrowserObjectState, localError?: string | null): string | null {
+  const code = state.errorCode ?? localError;
+  const issue = state.navigationIssue
+    ?? (code === "url_not_allowed" || code === "redirect_not_allowed" ? "room_policy"
+      : code === "url_resolution_blocked" ? "private_destination"
+        : code === "navigation_failed" ? "site_unavailable" : undefined);
+  if (issue) return t(`browser.${issue}`);
+  if (state.resourceIssue && !code) return t("browser.resourceIssue", { message: t(`browser.${state.resourceIssue}`) });
+  return null;
+}
 
 interface RemoteBrowserFrameTokenResponse {
   frameStreamUrl?: string;
@@ -354,7 +367,7 @@ export class RemoteBrowserObjectRuntime {
       surfaceId: object?.surfaceId ?? this.options.surfaceId,
       active: Boolean(object),
       status: state?.status ?? "idle",
-      currentUrl: state?.currentUrl ?? null,
+      currentUrl: remoteBrowserDisplayUrl(state?.currentUrl) ?? null,
       controllerParticipantId,
       executorSessionId: state?.executorSessionId ?? null,
       frameStreamId: state?.frameStreamId ?? null,

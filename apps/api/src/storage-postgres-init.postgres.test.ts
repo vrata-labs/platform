@@ -10,6 +10,58 @@ const installRoomExtensions = async (client: import("pg").PoolClient) => { await
 
 const postgresUrl = process.env.VRATA_TEST_POSTGRES_URL;
 
+test("browser URL policy migration preserves old room rows and supports previous visibility writers", {
+  skip: !postgresUrl && !process.env.CI, timeout: 120_000
+}, async t => {
+  assert.ok(postgresUrl);
+  const schema = `browser_policy_${randomUUID().replaceAll("-", "")}`;
+  const admin = new Pool({ connectionString: postgresUrl });
+  const pool = new Pool({ connectionString: postgresUrl, max: 1, options: `-c search_path=${schema},public` });
+  t.after(async () => {
+    await pool.end();
+    try { await admin.query(`drop schema if exists "${schema}" cascade`); }
+    finally { await admin.end(); }
+  });
+  await admin.query(`create schema "${schema}"`);
+  const storage = new PostgresStorage(pool);
+  await storage.init();
+  const before = await storage.createRoom({ name: "Old private room", visibility: "private" });
+  const roomId = before.roomId;
+  // Remove only this migration's objects: the schema and populated rows are now in the pre-policy shape.
+  await pool.query(`drop trigger reset_room_browser_url_policy on rooms;
+    drop function vrata_reset_room_browser_url_policy();
+    drop trigger version_room_browser_policy on rooms;
+    drop function vrata_version_room_browser_policy();
+    alter table rooms drop column remote_browser_url_policy, drop column remote_browser_policy_revision`);
+  const oldRead = async () => (await pool.query("select name, visibility, guest_allowed from rooms where room_id=$1", [roomId])).rows[0];
+  const oldRow = await oldRead();
+
+  await storage.init();
+  assert.deepEqual(await storage.getRoom(roomId), before);
+  const storedPolicy = async () => (await pool.query("select remote_browser_url_policy from rooms where room_id=$1", [roomId])).rows[0].remote_browser_url_policy;
+  assert.equal(await storedPolicy(), null);
+  await assert.rejects(pool.query("update rooms set remote_browser_url_policy='http' where room_id=$1", [roomId]), { code: "23514" });
+  await storage.updateRoom(roomId, { remoteBrowserUrlPolicy: "public-https" });
+  const revision = (await storage.getRoomForRemoteBrowser(roomId))?.policyRevision;
+  assert.ok(revision);
+  await storage.init();
+  assert.equal(await storedPolicy(), "public-https");
+  assert.equal((await storage.getRoom(roomId))?.remoteBrowserUrlPolicy, "public-https");
+  assert.equal((await storage.getRoomForRemoteBrowser(roomId))?.policyRevision, revision);
+  assert.deepEqual(await oldRead(), oldRow);
+  for (const visibility of ["unlisted", "private"]) {
+    // Previous API versions write only visibility; reopening must not recover the former opt-in.
+    await pool.query("update rooms set visibility=$2 where room_id=$1", [roomId, visibility]);
+    assert.equal(await storedPolicy(), null);
+    assert.equal((await storage.getRoom(roomId))?.remoteBrowserUrlPolicy, undefined);
+  }
+  await storage.updateRoom(roomId, { remoteBrowserUrlPolicy: "public-https" });
+  assert.notEqual((await storage.getRoomForRemoteBrowser(roomId))?.policyRevision, revision);
+  await assert.rejects(pool.query("update rooms set visibility='public', remote_browser_url_policy='public-https' where room_id=$1", [
+    (await storage.createRoom({ name: "Public room" })).roomId
+  ]), { code: "23514" });
+});
+
 test("Postgres initialization rolls back schema/data changes, unlocks and permits reinitialization on the same connection", {
   skip: postgresUrl ? false : "VRATA_TEST_POSTGRES_URL is required",
   timeout: 120_000

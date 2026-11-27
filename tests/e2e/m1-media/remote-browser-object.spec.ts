@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { enterBrowserRoom, openBrowserAddress, waitForBrowserObject } from "./remote-browser-room";
 
 type RemoteBrowserDebug = {
   roomStateConnected?: boolean;
@@ -505,4 +506,59 @@ test("M1.7 remote browser publishes required viewport video and audio track stat
     hasAudioTrackState: true,
     mediaHasAudio: true
   });
+});
+
+test("a saved private room uses its browser URL rule without changing its neighbour", {
+  annotation: { type: "fixture", description: "Extended executor simulates publication state; network and captured media are tested separately." }
+}, async ({ browser, request }) => {
+  test.setTimeout(120_000);
+  const headers = { "x-vrata-admin-token": "test-admin-token" };
+  const fixtureOrigin = "https://shared-browser.test";
+  const rooms: string[] = [];
+  const contexts = await Promise.all([browser.newContext({ locale: "en-US" }), browser.newContext({ locale: "en-US" })]);
+  const createRoom = async () => {
+    const response = await request.post("/api/rooms", { headers, data: {
+      tenantId: "demo-tenant", name: "Browser policy fixture", templateId: "meeting-room-basic", visibility: "private"
+    } });
+    expect(response.status()).toBe(201);
+    const { roomId } = await response.json();
+    rooms.push(roomId);
+    const grant = await request.post(`/api/rooms/${roomId}/invites`, { headers, data: { role: "host", expiresInSeconds: 600 } });
+    expect(grant.status()).toBe(201);
+    return { roomId, entryUrl: (await grant.json()).inviteLink as string };
+  };
+  try {
+    const selected = await createRoom();
+    const neighbour = await createRoom();
+    const response = await request.patch(`/api/rooms/${selected.roomId}`, { headers, data: { remoteBrowserUrlPolicy: "public-https" } });
+    expect(response.status()).toBe(200);
+    const host = await contexts[0].newPage();
+    const otherHost = await contexts[1].newPage();
+    await Promise.all([
+      enterBrowserRoom(host, selected.entryUrl, "Selected host"),
+      enterBrowserRoom(otherHost, neighbour.entryUrl, "Neighbour host")
+    ]);
+
+    const status = host.locator("#remote-browser-status");
+    await openBrowserAddress(host, `${fixtureOrigin}/restricted`);
+    await expect(status).toHaveText("The browser cannot connect to a private or restricted destination.");
+    await openBrowserAddress(host, `${fixtureOrigin}/unavailable`);
+    await expect(status).toHaveText("The browser could not reach this site.");
+    await openBrowserAddress(host, `${fixtureOrigin}/resource-error`);
+    await expect(status).toHaveText("A page resource could not load. The browser cannot connect to a private or restricted destination.");
+    await waitForBrowserObject(host, `${fixtureOrigin}/resource-error`, "fixture-video:");
+    await openBrowserAddress(host, `${fixtureOrigin}/control`);
+    await waitForBrowserObject(host, `${fixtureOrigin}/control`, "fixture-video:");
+    await expect(status).not.toContainText("A page resource could not load");
+
+    await openBrowserAddress(otherHost, `${fixtureOrigin}/control`);
+    await expect(otherHost.locator("#remote-browser-status")).toHaveText("This address is blocked by the room's browser policy.");
+    await openBrowserAddress(otherHost, "/remote-browser-demo.html");
+    await waitForBrowserObject(otherHost, new URL("/remote-browser-demo.html", otherHost.url()).href, "mock-remote-browser-video:");
+  } finally {
+    await Promise.all(contexts.map(context => context.close()));
+    await Promise.all(rooms.map(async roomId => {
+      expect((await request.delete(`/api/rooms/${roomId}`, { headers })).ok()).toBe(true);
+    }));
+  }
 });

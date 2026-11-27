@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { isPrivateAddress, isRemoteBrowserOriginAllowed, parseAllowedOrigins, validateRemoteBrowserUrl } from "./url-policy.js";
+import {
+  createPublicHttpsAddressPolicy, isPrivateAddress, isRemoteBrowserOriginAllowed, parseAllowedOrigins,
+  parsePublicHttpsTarget, validateRemoteBrowserUrl
+} from "./url-policy.js";
 
 test("remote browser URL policy allows only configured origins", async () => {
   const policy = { allowedOrigins: ["http://localhost:4000"], allowPrivateAllowedOrigins: true };
@@ -44,4 +47,29 @@ test("remote browser URL policy supports wildcard subdomain origins", () => {
   assert.equal(isRemoteBrowserOriginAllowed("https://rtbcdn.ru", allowedOrigins), false);
   assert.equal(isRemoteBrowserOriginAllowed("http://static.rtbcdn.ru", allowedOrigins), false);
   assert.equal(isRemoteBrowserOriginAllowed("https://evilrutube.ru", allowedOrigins), false);
+});
+
+test("public HTTPS requires the HTTPS default port without credentials or a local host", () => {
+  assert.deepEqual(parsePublicHttpsTarget("https://public.test:443/web?q=test"), {
+    hostname: "public.test", authority: "public.test"
+  });
+  assert.deepEqual(parsePublicHttpsTarget("https://[2606:4700::1]/"), {
+    hostname: "2606:4700::1", authority: "[2606:4700::1]"
+  });
+  for (const url of ["http://public.test", "wss://public.test", "https://public.test:444",
+    "https://user:pass@public.test", "https://service", "https://service.local", "https://x.home.arpa"]) {
+    assert.equal(parsePublicHttpsTarget(url), undefined, url);
+  }
+});
+
+test("public HTTPS rejects special and deployment-local IPv4 and IPv6 addresses", () => {
+  const isPublic = createPublicHttpsAddressPolicy(["11.53.49.11/32", "2606:4700:ffff::/48"]);
+  for (const address of ["127.0.0.1", "169.254.1.1", "192.0.2.44", "192.88.99.1", "240.0.0.1",
+    "::ffff:7f00:1", "::ffff:0b35:310a", "::", "fc00::1", "fec0::1", "ff02::1", "fe80::1",
+    "64:ff9b::1", "2001:db8::1", "2002::1", "3fff::1", "11.53.49.11", "2606:4700:ffff::1", "invalid"]) {
+    assert.equal(isPublic(address), false, address);
+  }
+  assert.equal(isPublic("11.53.49.10"), true);
+  assert.equal(isPublic("2606:4700::1"), true);
+  assert.throws(() => createPublicHttpsAddressPolicy(["not-an-address"]));
 });

@@ -5,12 +5,19 @@ import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
 import { chromium, type Browser, type BrowserContext, type Frame, type Page } from "playwright-core";
 import { WebSocketServer, WebSocket } from "ws";
-import type { RemoteBrowserErrorCode, RemoteBrowserExecutorInputState, RemoteBrowserMediaSourceRect, RemoteBrowserPatch, SurfaceInputEvent } from "@vrata/shared-types";
+import {
+  isRemoteBrowserLeaseDuration, isRemoteBrowserPublicHttpsBinding, sameRemoteBrowserPublicHttpsBinding,
+  REMOTE_BROWSER_PUBLIC_HTTPS_AUTHORITY_PATH, REMOTE_BROWSER_PUBLIC_HTTPS_SESSION_PATH,
+  type RemoteBrowserErrorCode, type RemoteBrowserExecutorInputState, type RemoteBrowserMediaSourceRect, type RemoteBrowserPatch,
+  remoteBrowserDisplayUrl, type RemoteBrowserPublicHttpsBinding, type SurfaceInputEvent
+} from "@vrata/shared-types";
 
 import { admitRemoteBrowserFrameSocket, type RemoteBrowserFrameAdmission } from "./frame-token.js";
 import type { FrameMediaPeerNegotiation } from "./frame-media-peer.js";
 import { attachFrameSocketLifetime, type FrameSocketLifetime } from "./frame-socket-lifetime.js";
 import { remoteBrowserCloseMediaPeerInPage, remoteBrowserCreateMediaAnswerInPage, type RemoteBrowserMediaAnswerResult, type RemoteBrowserPageMediaAnswerInput } from "./frame-media-page.js";
+import { PublicHttpsSessions, type PublicHttpsRuntime } from "./public-https-sessions.js";
+import { createPublicHttpsRuntime } from "./public-https-runtime.js";
 import { canStartRemoteBrowserSession, resolveRemoteBrowserFrameStreamId, resolveRemoteBrowserFrameTokenSecret, resolveRemoteBrowserServicePolicy, scheduleRemoteBrowserSessionExpiry, validateRemoteBrowserSessionIdentity } from "./service-policy.js";
 import { createRemoteBrowserUrlPolicy, validateRemoteBrowserUrl, type RemoteBrowserUrlPolicy } from "./url-policy.js";
 
@@ -26,6 +33,7 @@ interface RemoteBrowserSession {
   url: string;
   context: BrowserContext;
   page: Page;
+  diagnosticAddress: { hasPrivateParts: boolean };
   publisherPage: Page;
   clients: Map<WebSocket, FrameSocketGuard>;
   mediaClients: Set<WebSocket>;
@@ -675,8 +683,8 @@ function remoteBrowserExecutorInputEventId(session: RemoteBrowserSessionRef, kin
   return `${session.sessionId}:${kind}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function getInternalHeaders(): Record<string, string> {
-  const token = getInternalServiceToken();
+function getInternalHeaders(env = process.env): Record<string, string> {
+  const token = getInternalServiceToken(env);
   return {
     "content-type": "application/json",
     ...(token ? { "x-vrata-internal-token": token } : {})
@@ -748,11 +756,12 @@ async function grantCurrentTabDisplayCapture(session: RemoteBrowserSession): Pro
   await grantPageDisplayCapture(session, session.page, new URL(session.page.url()).origin);
 }
 
-async function patchRemoteBrowserExecutorState(session: RemoteBrowserSessionRef, patch: RemoteBrowserPatch): Promise<void> {
-  const response = await fetch(`${roomStateInternalUrl}/api/internal/remote-browser/sessions/${encodeURIComponent(session.sessionId)}`, {
+async function patchRemoteBrowserExecutorState(session: RemoteBrowserSessionRef, patch: RemoteBrowserPatch, env = process.env, signal?: AbortSignal): Promise<void> {
+  const baseUrl = env.ROOM_STATE_INTERNAL_URL?.trim() || roomStateInternalUrl;
+  const response = await fetch(new URL(`/api/internal/remote-browser/sessions/${encodeURIComponent(session.sessionId)}`, baseUrl), {
     method: "POST",
-    headers: getInternalHeaders(),
-    signal: AbortSignal.timeout(5000),
+    headers: getInternalHeaders(env),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(5000)]) : AbortSignal.timeout(5000),
     body: JSON.stringify(remoteBrowserExecutorCallbackBody(session, patch))
   });
   if (!response.ok) {
@@ -807,11 +816,6 @@ function remoteBrowserSessionErrorCode(error: unknown): RemoteBrowserErrorCode {
     return "navigation_failed";
   }
   return "executor_crashed";
-}
-
-function remoteBrowserErrorDetail(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.replace(/[\r\n\t]+/g, " ").slice(0, 500);
 }
 
 async function publishViewportFromCapturePage(input: { page: Page; livekitUrl: string; token: string; captureOptions: DisplayMediaStreamOptions; audioOptions: MediaStreamConstraints; buttonId: string; removeButtonAfterCapture?: boolean }): Promise<RemoteBrowserViewportPublishResult> {
@@ -1036,7 +1040,6 @@ async function startViewportPublisher(session: RemoteBrowserSession): Promise<vo
     await patchRemoteBrowserExecutorState(session, {
       type: "mark-failed",
       errorCode: remoteBrowserPublishErrorCode(error),
-      errorDetail: remoteBrowserErrorDetail(error),
       inputEventId: remoteBrowserExecutorInputEventId(session, "failed")
     }).catch(() => undefined);
   }
@@ -1396,13 +1399,17 @@ async function createSession(input: { sessionId: string; executorInstanceId: str
   });
   const serviceAllowedOrigins = new Set<string>();
   const page = await context.newPage();
+  const diagnosticAddress = { hasPrivateParts: remoteBrowserHasPrivateUrlParts(input.url) };
+  page.on("framenavigated", frame => {
+    if (frame === page.mainFrame() && remoteBrowserHasPrivateUrlParts(frame.url())) diagnosticAddress.hasPrivateParts = true;
+  });
   await installRequestGuard(page, urlPolicy, { serviceAllowedOrigins: () => serviceAllowedOrigins });
   await installRemoteBrowserPageStyles(page);
   try {
     await page.goto(validation.normalizedUrl, { waitUntil: "domcontentloaded", timeout: 15000 });
-  } catch (error) {
+  } catch {
     await context.close().catch(() => undefined);
-    throw new Error(`navigation_failed:${error instanceof Error ? error.message : "unknown"}`);
+    throw new Error("navigation_failed");
   }
   await ensureRemoteBrowserPageStyles(page);
   await page.evaluate(remoteBrowserCaptureTitleGuard, remoteBrowserCaptureTargetTitle).catch(() => undefined);
@@ -1424,6 +1431,7 @@ async function createSession(input: { sessionId: string; executorInstanceId: str
     url: page.url(),
     context,
     page,
+    diagnosticAddress,
     publisherPage,
     clients: new Map<WebSocket, FrameSocketGuard>(),
     mediaClients: new Set<WebSocket>(),
@@ -1482,10 +1490,15 @@ type RemoteBrowserRealtimeInputPatch = Extract<RemoteBrowserPatch, { type: "poin
 
 function remoteBrowserPageUrl(page: Page): string | undefined {
   try {
-    return page.url();
+    return remoteBrowserDisplayUrl(page.url());
   } catch {
     return undefined;
   }
+}
+
+function remoteBrowserHasPrivateUrlParts(value: string): boolean {
+  const url = URL.parse(value);
+  return Boolean(url && (url.username || url.password || url.search || url.hash));
 }
 
 async function remoteBrowserInputTargetDetail(page: Page, point: { x: number; y: number }): Promise<string | undefined> {
@@ -1587,9 +1600,9 @@ function createInputDiagnostic(session: RemoteBrowserSession, patch: RemoteBrows
     receivedAtMs: input.receivedAtMs,
     appliedAtMs: Date.now(),
     status: input.status,
-    pageUrl: remoteBrowserPageUrl(session.page),
+    pageUrl: session.diagnosticAddress.hasPrivateParts ? undefined : remoteBrowserPageUrl(session.page),
     pageClosed: session.page.isClosed(),
-    targetDetail: input.targetDetail,
+    targetDetail: session.diagnosticAddress.hasPrivateParts ? undefined : input.targetDetail,
     errorDetail: input.errorDetail
   };
 }
@@ -1633,8 +1646,8 @@ async function applyInput(session: RemoteBrowserSession, patch: RemoteBrowserPat
     }
     requestInputFrameCapture(session);
     return createInputDiagnostic(session, patch, point, { receivedAtMs, status: "applied", targetDetail: await remoteBrowserInputTargetDetail(session.page, point) });
-  } catch (error) {
-    return createInputDiagnostic(session, patch, point, { receivedAtMs, status: "failed", targetDetail: await remoteBrowserInputTargetDetail(session.page, point), errorDetail: remoteBrowserErrorDetail(error) });
+  } catch {
+    return createInputDiagnostic(session, patch, point, { receivedAtMs, status: "failed", errorDetail: "input_failed" });
   }
 }
 
@@ -1647,7 +1660,9 @@ function requestInputFrameCapture(session: RemoteBrowserSession): void {
   void captureFrame(session, { force: true }).catch(() => undefined);
 }
 
-async function handleRequest(request: IncomingMessage, response: ServerResponse, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+async function handleRequest(
+  request: IncomingMessage, response: ServerResponse, env: NodeJS.ProcessEnv, publicHttps: PublicHttpsSessions | undefined
+): Promise<void> {
   const id = requestId(request);
   response.setHeader("x-request-id", id);
   metrics.requestsTotal += 1;
@@ -1674,6 +1689,36 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
     html(response, 200, remoteBrowserViewportPublisherHtml());
     return;
   }
+  if (url.pathname === REMOTE_BROWSER_PUBLIC_HTTPS_SESSION_PATH && (request.method === "POST" || request.method === "DELETE")) {
+    if (!getInternalServiceToken(env) || !isAuthorizedInternalRequest(request, env)) {
+      return json(response, 403, { error: "forbidden" });
+    }
+    const payload = await parseBody<RemoteBrowserPublicHttpsBinding>(request).catch(() => null);
+    if (!isRemoteBrowserPublicHttpsBinding(payload)) return json(response, 400, { error: "invalid_session_binding" });
+    const { tenantId, roomId, surfaceId, objectId, sessionId, executorInstanceId, policyRevision } = payload;
+    const binding = { tenantId, roomId, surfaceId, objectId, sessionId, executorInstanceId, policyRevision };
+    if (request.method === "DELETE") return json(response, 200, { ok: publicHttps?.stop(binding) ?? false });
+    if (!policy.enabled) return json(response, 503, { error: "remote_browser_disabled" });
+    if (!publicHttps) return json(response, 503, { error: "executor_unavailable" });
+    if (pendingSessionIds.has(binding.sessionId) || [...closingSessions].some(session => session.sessionId === binding.sessionId)) {
+      return json(response, 409, { error: "session_start_in_progress" });
+    }
+    if (!canStartRemoteBrowserSession(sessions.size + pendingSessionIds.size + closingSessions.size + publicHttps.size,
+      sessions.has(binding.sessionId) || publicHttps.has(binding.sessionId), policy.maxSessions)) return json(response, 429, { error: "session_limit_exceeded" });
+    const accepted = await publicHttps.start(binding, policy.sessionTtlMs);
+    return json(response, accepted ? 200 : 409, { ok: accepted });
+  }
+  if (url.pathname === `${REMOTE_BROWSER_PUBLIC_HTTPS_SESSION_PATH}/input` && request.method === "POST") {
+    if (!getInternalServiceToken(env) || !isAuthorizedInternalRequest(request, env)) return json(response, 403, { error: "forbidden" });
+    const body = await parseBody<{ binding?: unknown; patch?: RemoteBrowserPatch }>(request).catch(() => null);
+    const patch = body?.patch;
+    if (!isRemoteBrowserPublicHttpsBinding(body?.binding) || !patch
+      || (patch.type !== "pointer" && patch.type !== "scroll" && patch.type !== "keyboard") || !patch.event) {
+      return json(response, 400, { error: "invalid_session_payload" });
+    }
+    const applied = policy.enabled && publicHttps?.input(body.binding, patch);
+    return json(response, applied ? 200 : 404, { ok: Boolean(applied) });
+  }
   if (request.method === "POST" && url.pathname === "/api/sessions") {
     if (!isAuthorizedInternalRequest(request, env)) {
       incrementCounter(metrics.deniedTotal, "forbidden");
@@ -1696,6 +1741,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
       json(response, 400, { error: "invalid_session_binding" });
       return;
     }
+    if (publicHttps?.has(payload.sessionId)) return json(response, 409, { error: "session_start_in_progress" });
+    if (publicHttps?.size && !canStartRemoteBrowserSession(sessions.size + pendingSessionIds.size + closingSessions.size + publicHttps.size,
+      sessions.has(payload.sessionId), policy.maxSessions)) return json(response, 429, { error: "session_limit_exceeded" });
     let session: RemoteBrowserSession;
     try {
       session = await createSession({ sessionId: payload.sessionId, executorInstanceId: payload.executorInstanceId, frameStreamId: payload.frameStreamId, mediaParticipantId: payload.mediaParticipantId, roomId: payload.roomId, surfaceId, objectId: payload.objectId, url: payload.url }, policy);
@@ -1718,7 +1766,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
       json(response, statusCode, { error: errorCode });
       return;
     }
-    json(response, 200, { ok: true, sessionId: session.sessionId, mediaParticipantId: session.mediaParticipantId, frameStreamId: session.frameStreamId, url: session.url });
+    json(response, 200, { ok: true, sessionId: session.sessionId, mediaParticipantId: session.mediaParticipantId, frameStreamId: session.frameStreamId, url: remoteBrowserDisplayUrl(session.url) });
     return;
   }
   const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
@@ -1788,12 +1836,76 @@ function admitFrameSocketRequest(request: IncomingMessage, listenPort: number, e
   }
 }
 
-export function startRemoteBrowserService(listenPort = port, env: NodeJS.ProcessEnv = process.env) {
+function publicHttpsSessionRef(binding: RemoteBrowserPublicHttpsBinding): RemoteBrowserSessionRef {
+  return { ...binding, mediaParticipantId: binding.executorInstanceId, frameStreamId: resolveRemoteBrowserFrameStreamId(binding) };
+}
+
+async function requestPublicHttpsMediaCredentials(binding: RemoteBrowserPublicHttpsBinding, signal: AbortSignal, env: NodeJS.ProcessEnv) {
+  const response = await fetch(new URL("/api/tokens/remote-browser-media", env.API_INTERNAL_URL?.trim() || apiInternalUrl), {
+    method: "POST", headers: getInternalHeaders(env), redirect: "error",
+    signal: AbortSignal.any([signal, AbortSignal.timeout(4000)]),
+    body: JSON.stringify({
+      roomId: binding.roomId, objectId: binding.objectId, executorSessionId: binding.sessionId,
+      executorInstanceId: binding.executorInstanceId, mediaParticipantId: binding.executorInstanceId, publicHttpsBinding: binding
+    })
+  });
+  if (!response.ok) throw new Error("livekit_token_failed");
+  const result = await response.json() as RemoteBrowserMediaTokenResponse;
+  const url = URL.parse(env.REMOTE_BROWSER_PUBLIC_HTTPS_LIVEKIT_URL?.trim() || result.livekitUrl || "");
+  if (!result.token || result.participantId !== binding.executorInstanceId || !url
+    || (url.protocol !== "ws:" && url.protocol !== "wss:") || url.username || url.password) {
+    throw new Error("livekit_token_failed");
+  }
+  return { token: result.token, livekitUrl: url.href };
+}
+
+export function startRemoteBrowserService(listenPort = port, env: NodeJS.ProcessEnv = process.env, publicHttpsRuntime: PublicHttpsRuntime | undefined = createPublicHttpsRuntime({
+  env,
+  requestCredentials: (binding, signal) => requestPublicHttpsMediaCredentials(binding, signal, env),
+  patch: (binding, patch, signal) => patchRemoteBrowserExecutorState(publicHttpsSessionRef(binding), patch, env, signal)
+})) {
+  const publicHttps = publicHttpsRuntime && new PublicHttpsSessions({
+    runtime: publicHttpsRuntime,
+    async retirePredecessor(binding) {
+      const previous = sessions.get(binding.sessionId);
+      if (!previous) return;
+      if (previous.roomId !== binding.roomId || previous.surfaceId !== binding.surfaceId || previous.objectId !== binding.objectId) {
+        throw new Error("invalid_session_binding");
+      }
+      await stopSession(previous.sessionId, "replaced");
+    },
+    async authorize(binding, purpose, signal) {
+      if (!resolveRemoteBrowserServicePolicy(env).enabled) return { status: "denied" };
+      const response = await fetch(new URL(REMOTE_BROWSER_PUBLIC_HTTPS_AUTHORITY_PATH, env.ROOM_STATE_INTERNAL_URL?.trim() || roomStateInternalUrl), {
+        method: "POST", headers: getInternalHeaders(env), redirect: "error",
+        signal: AbortSignal.any([signal, AbortSignal.timeout(3000)]),
+        body: JSON.stringify({ binding, purpose })
+      });
+      if (response.status === 403) return { status: "denied" };
+      if (!response.ok) return { status: "unavailable" };
+      const result = await response.json() as { binding?: unknown; validForMs?: unknown; url?: unknown } | null;
+      if (!isRemoteBrowserLeaseDuration(result?.validForMs) || !isRemoteBrowserPublicHttpsBinding(result.binding)
+        || !sameRemoteBrowserPublicHttpsBinding(result.binding, binding)) return { status: "unavailable" };
+      if (purpose === "start") {
+        if (typeof result.url !== "string") return { status: "denied" };
+        return { status: "allowed", validForMs: result.validForMs, url: result.url };
+      }
+      return { status: "allowed", validForMs: result.validForMs };
+    },
+    onStop(binding, reason, errorCode) {
+      const inputEventId = `${binding.executorInstanceId}:public-https:${reason}`;
+      const patch: RemoteBrowserPatch = reason === "manual"
+        ? { type: "mark-stopped", inputEventId }
+        : { type: "mark-failed", inputEventId, errorCode: errorCode ?? (reason === "expired" ? "session_expired" : "executor_unavailable") };
+      void patchRemoteBrowserExecutorState(publicHttpsSessionRef(binding), patch, env).catch(() => undefined);
+    }
+  });
   activeListenPort = listenPort;
   const server = createServer((request, response) => {
-    handleRequest(request, response, env).catch((error: unknown) => {
+    handleRequest(request, response, env, publicHttps).catch(() => {
       metrics.requestFailuresTotal += 1;
       const id = requestId(request);
+      const path = (request.url ?? "").split("?", 1)[0];
       response.setHeader("x-request-id", id);
       logEvent({
         service: "remote-browser",
@@ -1801,13 +1913,11 @@ export function startRemoteBrowserService(listenPort = port, env: NodeJS.Process
         env: env.NODE_ENV ?? "development",
         requestId: id,
         errorCode: "remote_browser_error",
-        // The query can carry credentials such as frame tokens; log the path only.
-        path: (request.url ?? "").split("?")[0],
+        ...(["/health/live", "/health/ready", "/health", "/metrics"].includes(path ?? "") ? { path } : {}),
         method: request.method ?? "GET",
-        message: error instanceof Error ? error.message : "unknown",
         timestamp: new Date().toISOString()
       });
-      json(response, 500, { error: "remote_browser_error", message: error instanceof Error ? error.message : "unknown" });
+      json(response, 500, { error: "remote_browser_error" });
     });
   });
   const wss = new WebSocketServer({ noServer: true });
@@ -1853,6 +1963,7 @@ export function startRemoteBrowserService(listenPort = port, env: NodeJS.Process
     });
   });
   server.on("close", () => {
+    publicHttps?.close();
     for (const sessionId of [...sessions.keys()]) void stopSession(sessionId, "shutdown");
     void browserPromise?.then((browser) => browser.close()).catch(() => undefined);
     browserPromise = null;

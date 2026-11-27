@@ -34,6 +34,7 @@ export interface RoomAvatarConfig {
 }
 
 export type RoomVisibility = "public" | "unlisted" | "private";
+export type RemoteBrowserUrlPolicy = "allowlist" | "public-https";
 
 export type RoomStatus = "active" | "disabled";
 
@@ -168,6 +169,7 @@ export interface RoomRecord {
   disabledAt?: string | null;
   disabledBy?: string | null;
   visibility?: RoomVisibility;
+  remoteBrowserUrlPolicy?: RemoteBrowserUrlPolicy;
   sceneBundleUrl?: string;
   features: RoomFeatures;
   assetIds: string[];
@@ -306,6 +308,7 @@ export interface ManagedRoomAccessPatch {
   graceSeconds?: number;
   status?: ManagedRoomStatus;
   mediaModes?: RoomMediaModes;
+  remoteBrowserUrlPolicy?: RemoteBrowserUrlPolicy;
 }
 
 export interface IntegrationTenantRecord {
@@ -551,6 +554,7 @@ export interface Storage extends IntegrationStore {
   listAssets(): Promise<AssetRecord[]>;
   listRooms(): Promise<RoomRecord[]>;
   getRoom(roomId: string): Promise<RoomRecord | null>;
+  getRoomForRemoteBrowser(roomId: string): Promise<{ room: RoomRecord; policyRevision: string } | null>;
   createRoom(input: Partial<RoomRecord>): Promise<RoomRecord>;
   /** Administrative metadata receipt, not a grant; floor 2 rejects raw owner/host/presenter seeds. */
   createAdministrativeRoom(input: Partial<RoomRecord>): Promise<RoomRecord>;

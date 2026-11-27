@@ -1,3 +1,6 @@
+include:
+  - compose.remote-browser-isolation.yml
+
 services:
   postgres:
     image: postgres:16
@@ -16,6 +19,32 @@ services:
     ports:
       - "7880:7880"
       - "7881:7881/udp"
+
+  remote-browser:
+    image: ${REMOTE_BROWSER_IMAGE_REPO:-vrata-remote-browser}:${IMAGE_TAG:-local}
+    build:
+      context: ../..
+      dockerfile: apps/remote-browser/Dockerfile
+    profiles: [public-https-network]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    ports: ["127.0.0.1:4010:4010"]
+    environment:
+      NODE_ENV: development
+      API_INTERNAL_URL: http://host.docker.internal:4000
+      ROOM_STATE_INTERNAL_URL: http://host.docker.internal:2567
+      REMOTE_BROWSER_ENABLED: ${REMOTE_BROWSER_ENABLED:-true}
+      REMOTE_BROWSER_PUBLIC_HTTPS_ENABLED: ${REMOTE_BROWSER_PUBLIC_HTTPS_ENABLED:-false}
+      REMOTE_BROWSER_PUBLIC_HTTPS_LIVEKIT_URL: ${REMOTE_BROWSER_PUBLIC_HTTPS_LIVEKIT_URL:-ws://livekit:7880}
+      REMOTE_BROWSER_INTERNAL_TOKEN: ${REMOTE_BROWSER_INTERNAL_TOKEN:-}
+      REMOTE_BROWSER_ALLOWED_ORIGINS: ${REMOTE_BROWSER_ALLOWED_ORIGINS:-}
+      REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS: ${REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS:-false}
+    volumes:
+      - public-https-control:/var/lib/vrata-public-https/control:ro
+      - public-https-data:/var/lib/vrata-public-https/data:ro
+      - public-https-display-91:/var/lib/vrata-public-https/slot-91-display:ro
+      - public-https-display-92:/var/lib/vrata-public-https/slot-92-display:ro
+      - public-https-proxy-91:/var/lib/vrata-public-https/slot-91-proxy
+      - public-https-proxy-92:/var/lib/vrata-public-https/slot-92-proxy
 
 volumes:
   postgres-data:

@@ -28,7 +28,7 @@ type Bag = Record<string, unknown>;
 type Counters = Record<string, number>;
 type Hold = "legacy-control-entry" | "control-written" | "admission-write" | "admission-written";
 interface Mac { token: string; participantId: string; exp: number; role: unknown; roleSource: unknown }
-interface Raw { text: string; control: Bag; columns: Bag }
+interface Raw { text: string; control: Bag; columns: Bag; browserPolicyRevision: string }
 
 /** Settles to true once the reply arrives; never rejects. */
 function watch(response: Promise<AuthorHttpResponse>): () => boolean {
@@ -94,7 +94,8 @@ function controls(h: Fixture) {
     assert.equal(response.status === 503 && response.bytes.toString("utf8") === UNAVAILABLE, true, `one fixed 503 (status ${response.status})`);
   }
   async function raw(roomId: string): Promise<Raw> {
-    const row = (await h.pool.query(`select session_control::text as text, session_control as control, to_jsonb(r) - 'session_control' as columns
+    const row = (await h.pool.query(`select session_control::text as text, session_control as control,
+      to_jsonb(r) - 'session_control' - 'remote_browser_policy_revision' as columns, remote_browser_policy_revision as "browserPolicyRevision"
       from "${h.schema}".rooms r where room_id=$1`, [roomId])).rows[0];
     assert.ok(row, "the fixture room exists"); return row as Raw;
   }
@@ -167,6 +168,7 @@ test("floor-1 session control is guarded, fresh and acknowledged over native HTT
         x.selective(before.control, after.control, ["hostParticipantId", ...WRITES[command]]);
         assert.deepEqual([after.columns, after.control[command === "lock" ? "lockedBy" : "endedBy"]], [before.columns, ADMIN],
           `${command}: name, theme, avatar and status are untouched`);
+        assert.equal(after.browserPolicyRevision !== before.browserPolicyRevision, command === "end", `${command}: browser policy revision`);
       }
       await x.settled();
     });

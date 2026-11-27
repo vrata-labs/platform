@@ -1,0 +1,5 @@
+include:
+  - path:
+      - ${NETWORK_FIXTURE_DIR}/../../../infra/docker/compose.remote-browser-isolation.yml
+      - ${NETWORK_FIXTURE_DIR}/fixture.compose.yml
+      - ${NETWORK_FIXTURE_DIR}/media.compose.yml

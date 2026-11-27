@@ -25,8 +25,9 @@ test("Postgres initialization preserves the full original query/phase/client lif
   assert.deepEqual(h.trace.slice(start, commit), integration.trace);
   assert.equal(commit, start + integrationSql.length);
   const original = [...h.trace.slice(0, start), ...h.trace.slice(commit)];
-  // Preserve the historical base trace; extensions have their own explicit position/await contract.
-  assert.equal(createHash("sha256").update(JSON.stringify(original.filter(entry => entry.kind !== "installRoomExtensions"))).digest("hex"), "3058f515129030d1f7822bc000352c9a63340a893e01192402d9223349e6bdaf");
+  // Preserve the entire current base trace, including the new migrations. The schema test separately
+  // verifies that the pre-existing SQL remains in place.
+  assert.equal(createHash("sha256").update(JSON.stringify(original.filter(entry => entry.kind !== "installRoomExtensions"))).digest("hex"), "1a4f9835a4e50942f44fcf8caad23c7b60f5688d6cdecf86396212a87b5c6c88");
   assert.deepEqual(transactionTrace(h), ["connect", lockSql, "begin", "installRoomExtensions", "seed", "validateStoredTemplateVersions", "synchronizeTemplateCatalog", "commit", unlockSql, "release"]);
 });
 
@@ -34,10 +35,11 @@ test("Postgres integration schema is additive and keeps managed rows from being 
   const h = createStorageInitHarness();
   await ensureIntegrationStorageSchema(h.client);
   const sql = h.queries.map(query => query.sql.replace(/\s+/g, " ").trim());
-  // Only new integration tables, indexes and columns: an older build ignores all of them.
+  // New integration tables, indexes and columns; the triggers enforce close and policy revision semantics.
   assert(sql.every(statement => /^create (table|index) if not exists integration_/.test(statement)
     || /^alter table integration_[a-z_]+ (add column if not exists [^,]+(, )?)+$/.test(statement)
-    || /^create or replace (function|trigger) integration_rooms_closed_terminal\b/.test(statement)), sql.join("\n"));
+    || /^create or replace (function|trigger) integration_rooms_closed_terminal\b/.test(statement)
+    || /^create or replace function vrata_version_managed_browser_policy\(\).*; create or replace trigger version_managed_browser_policy before update of status, media_modes, access_until, grace_seconds on integration_rooms for each row execute function vrata_version_managed_browser_policy\(\);$/.test(statement)), sql.join("\n"));
   assert(!sql.some(statement => /on delete cascade|drop |alter table (rooms|tenants)|alter column/.test(statement)));
   assert(sql.some(statement => statement.includes("room_id text primary key references rooms(room_id),")));
   assert(sql.some(statement => statement.includes("constraint integration_operations_principal_key_unique unique (principal, idempotency_key)")));
