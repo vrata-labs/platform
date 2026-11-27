@@ -254,17 +254,17 @@ test("PostgresStorage upgrades legacy schema and preserves pinned template versi
       templateId: "meeting-room-basic",
       name: "Concurrent Binding Room"
     });
-    let bindingChangedBeforeGuardedUpdate = false;
+    let bindingChangedBeforeRoomLock = false;
     const racingPool = {
-      async query(sql: string, values?: unknown[]) {
-        if (!bindingChangedBeforeGuardedUpdate && /^\s*update rooms set name\s*=/.test(sql)) {
-          bindingChangedBeforeGuardedUpdate = true;
-          await pools[1].query(
-            `update rooms set template_id = 'showroom-basic' where room_id = $1`,
-            [concurrentBindingRoom.roomId]
-          );
-        }
-        return pools[0].query(sql, values);
+      query: pools[0].query.bind(pools[0]),
+      async connect() {
+        // The initial read has happened; change the binding before the transactional row lock.
+        await pools[1].query(
+          `update rooms set template_id = 'showroom-basic' where room_id = $1`,
+          [concurrentBindingRoom.roomId]
+        );
+        bindingChangedBeforeRoomLock = true;
+        return pools[0].connect();
       }
     };
     const racingStorage = new PostgresStorage(racingPool as unknown as Pool);
@@ -272,7 +272,7 @@ test("PostgresStorage upgrades legacy schema and preserves pinned template versi
       racingStorage.updateRoom(concurrentBindingRoom.roomId, { name: "Must Not Cross Binding" }),
       /room_template_binding_changed/
     );
-    assert.equal(bindingChangedBeforeGuardedUpdate, true);
+    assert.equal(bindingChangedBeforeRoomLock, true);
     const concurrentBindingAfterRejectedUpdate = await storages[0].getRoom(concurrentBindingRoom.roomId);
     assert.equal(concurrentBindingAfterRejectedUpdate?.templateId, "showroom-basic");
     assert.equal(concurrentBindingAfterRejectedUpdate?.name, "Concurrent Binding Room");

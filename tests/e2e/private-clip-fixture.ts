@@ -96,6 +96,12 @@ export async function privateClipFixture() {
     glbPath: "scene.glb",
     spawnPoints: [{ id: "main", position: { x: 0, y: 0, z: 3 }, yaw: 0 }],
     bounds: { width: 5, height: 4, depth: 5 },
+    mediaSurfaces: [{
+      surfaceId: "debug-main", representation: "platform-runtime-plane",
+      position: { x: 0, y: 1.5, z: -2 }, yaw: 0, widthM: 2.4, heightM: 1.35,
+      pixelDimensions: { width: 1280, height: 720 }, frontFace: "local-positive-z",
+      input: { enabled: true, maxDistanceM: 12 }
+    }],
     sceneEffects: [{
       id: "move", kind: "clip-loop", root: "mover", clips: ["glide"],
       audio: { path: sound.path, sha256: createHash("sha256").update(sound.bytes).digest("hex"), gain: 0.2, nearM: 1, farM: 8 }

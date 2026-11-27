@@ -77,8 +77,9 @@ const seed = (f: Fixture, sessionControl: RoomSessionControlState = {}) =>
   f.s.createRoom({ tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Control", visibility: "private", sessionControl });
 /** The stored row: other columns (minus `drop`) as exact text, and the raw control. */
 async function stored(f: Fixture, roomId: string, drop: readonly string[] = []) {
-  return (await f.probe.query(`select (to_jsonb(r) - 'session_control' - $2::text[])::text as columns, session_control as control
-    from rooms r where room_id=$1`, [roomId, drop])).rows[0] as { columns: string; control: RoomSessionControlState } | undefined;
+  return (await f.probe.query(`select (to_jsonb(r) - 'session_control' - 'remote_browser_policy_revision' - $2::text[])::text as columns,
+    remote_browser_policy_revision as "browserPolicyRevision", session_control as control
+    from rooms r where room_id=$1`, [roomId, drop])).rows[0] as { columns: string; browserPolicyRevision: string; control: RoomSessionControlState } | undefined;
 }
 const mac = (room: Scope, participantId: string, role: RoomRole = "host", roleSource: RoomSessionRoleSource = "trusted") => signRoomSessionToken({
   tenantId: room.tenantId, roomId: room.roomId, participantId, displayName: participantId, role, roleSource, permissions: [],
@@ -221,8 +222,11 @@ test("Postgres: rename, disable, delete, a v2 binding and another control queue 
     const merged = { ...before.control, removedParticipants: { ...before.control.removedParticipants, "p-2": { removedAt: iso(NOW), removedBy: "host-1", reason: "noisy" } } };
     assert.deepEqual([await later, await facts(r.roomId)], [expected, fact], name);
     if (name === "v2 binding") assert.equal(await control(f.s, input(f, r, ADMIN, unlock())), UPGRADE, "the binding committed after the control");
-    else if (after) assert.deepEqual([after.columns === before.columns, after.control], [true,
-      name === "control" ? { ...merged, lockedAt: iso(NOW), lockedBy: LEGACY_CONTROL_ADMIN_ID } : merged], `${name}: both writes survive, nothing else moved`);
+    else if (after) {
+      assert.deepEqual([after.columns === before.columns, after.control], [true,
+        name === "control" ? { ...merged, lockedAt: iso(NOW), lockedBy: LEGACY_CONTROL_ADMIN_ID } : merged], `${name}: both writes survive, nothing else moved`);
+      assert.equal(after.browserPolicyRevision !== before.browserPolicyRevision, name === "disable", `${name}: browser policy revision`);
+    }
   }
 });
 

@@ -120,16 +120,17 @@ const routed = (error: unknown) => error instanceof LegacyAdmissionDeadlineExpir
   || (error instanceof IdentityStorageError && error.code === "room_not_found") || (error instanceof IdentityBoundaryError && error.status === 409)
   ? label(error) : "503";
 
-interface Stored { columns: string; rest: string; control: unknown; snap: LegacyRoomControlSnapshot }
+interface Stored { columns: string; browserPolicyRevision?: string; rest: string; control: unknown; snap: LegacyRoomControlSnapshot }
 const isBag = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 /** The row as stored: every other column, and the control without `keys`, as exact text; the raw control; the reducer's view. */
 async function stored(f: Fixture, roomId: string, keys: readonly string[] = []): Promise<Stored> {
   if (f.probe) {
-    const row = (await f.probe.query(`select tenant_id, room_id, status, disabled_at, session_control, (to_jsonb(r) - 'session_control')::text as columns,
+    const row = (await f.probe.query(`select tenant_id, room_id, status, disabled_at, session_control, remote_browser_policy_revision,
+      (to_jsonb(r) - 'session_control' - 'remote_browser_policy_revision')::text as columns,
       (case when jsonb_typeof(session_control)='object' then session_control - $2::text[] else session_control end)::text as rest
       from rooms r where room_id=$1`, [roomId, keys])).rows[0];
     assert.ok(row, "the fixture room exists");
-    return { columns: row.columns, rest: row.rest, control: row.session_control, snap: { tenantId: row.tenant_id, roomId: row.room_id,
+    return { columns: row.columns, browserPolicyRevision: row.remote_browser_policy_revision, rest: row.rest, control: row.session_control, snap: { tenantId: row.tenant_id, roomId: row.room_id,
       status: row.status, disabledAt: row.disabled_at, rawControl: row.session_control } };
   }
   const room = f.rooms!.get(roomId);
@@ -141,7 +142,7 @@ async function stored(f: Fixture, roomId: string, keys: readonly string[] = []):
 }
 
 /** One command against the pure reducer on the raw row the store reads at its own instant: an applied patch merges over that column,
- * every other control key and room column stays byte-equal and the receipt is the column as written; any other answer writes nothing. */
+ * every unrelated column and control key stays byte-equal; ending the room invalidates existing browser leases. */
 async function checked(f: Fixture, i: LegacyRoomControlInput): Promise<string> {
   const { roomId } = i.scope;
   // The same genuine roster for the expectation, read without recording a sample.
@@ -152,6 +153,11 @@ async function checked(f: Fixture, i: LegacyRoomControlInput): Promise<string> {
   const after = await stored(f, roomId, keys);
   assert.equal(typeof outcome === "string" ? outcome : summary(outcome), want, `${i.command.type}: the store answers as the reducer`);
   assert.deepEqual([after.columns === before.columns, after.rest === before.rest], [true, true], `${name}: every other byte survives`);
+  if (f.probe) {
+    const endedAt = isBag(before.control) ? before.control.endedAt : undefined;
+    const invalidatesBrowser = expected.kind === "apply" && "endedAt" in expected.patch && expected.patch.endedAt !== endedAt;
+    assert.equal(after.browserPolicyRevision !== before.browserPolicyRevision, invalidatesBrowser, `${name}: browser policy revision`);
+  }
   assert.deepEqual(after.control, expected.kind === "apply" ? { ...(before.control as object), ...expected.patch } : before.control, name);
   if (typeof outcome !== "string" && outcome.kind === "applied") {
     assert.deepEqual(outcome.state, sanitizeSessionControlState(after.control as RoomSessionControlState), `${name}: the receipt is the written column`);

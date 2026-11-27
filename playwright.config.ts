@@ -73,7 +73,9 @@ export default defineConfig({
     { name: "api", url: new URL("/health", baseURL).toString() }
   ].map(({ name, url }) => ({
     name,
-    command: `bash -c ${shellQuote(`${serverNode} apps/${name}/dist/index.js >${serviceLog(name)} 2>&1`)}`,
+    command: `bash -c ${shellQuote(`${serverNode} ${name === "remote-browser"
+      ? "tests/e2e/m1-media/remote-browser-fixture.mjs"
+      : `apps/${name}/dist/index.js`} >${serviceLog(name)} 2>&1`)}`,
     url,
     reuseExistingServer: false,
     env: localServerEnv

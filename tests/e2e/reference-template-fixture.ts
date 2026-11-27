@@ -30,6 +30,7 @@ type ReferenceTemplateFixtureOptions = {
   devRoleQuery?: boolean;
   stateTokenSecret?: string;
   livekitUrl?: string;
+  remoteBrowserFixture?: boolean;
   documentUploadMaxBytes?: number;
   /** Raised after seeding, as on an activated deployment. VRATA_E2E_IDENTITY_FLOOR=2 reruns unpinned
    * scenarios on floor 2 before a shared activation; callers that depend on a floor pass it explicitly. */
@@ -56,6 +57,7 @@ export async function startReferenceTemplateFixture(postgresUrl: string, options
   await new Promise<void>(resolve => assetServer.listen(0, "127.0.0.1", resolve));
   const assetsOrigin = `http://127.0.0.1:${(assetServer.address() as { port: number }).port}`;
   const apiPort = await freePort(), statePort = await freePort();
+  const browserPort = options.remoteBrowserFixture ? await freePort() : undefined;
   const origin = `http://127.0.0.1:${apiPort}`;
   const stateOrigin = `http://127.0.0.1:${statePort}`;
   const connection = new URL(postgresUrl); connection.searchParams.set("options", `-c search_path=${schema},public`);
@@ -65,6 +67,7 @@ export async function startReferenceTemplateFixture(postgresUrl: string, options
   let storage: InstanceType<typeof PostgresStorage>;
   let apiChild: ChildProcess | undefined;
   let roomStateChild: ChildProcess | undefined;
+  let remoteBrowserChild: ChildProcess | undefined;
   let apiOperation = Promise.resolve();
   let closing = false;
   let closePromise: Promise<void> | undefined;
@@ -76,6 +79,10 @@ export async function startReferenceTemplateFixture(postgresUrl: string, options
     ROOM_STATE_INTERNAL_URL: stateOrigin, ROOM_STATE_PUBLIC_URL: `ws://127.0.0.1:${statePort}`, API_INTERNAL_URL: origin,
     VRATA_INTERNAL_SERVICE_TOKEN: "test-internal-token", ROOM_TEMPLATE_ASSET_BASE_URL: assetsOrigin,
     FEATURE_AVATAR_POSE_BINARY: "true", VRATA_DEV_ROLE_QUERY: String(options.devRoleQuery ?? true),
+    ...(browserPort ? {
+      REMOTE_BROWSER_PORT: String(browserPort), REMOTE_BROWSER_VIEWPORT_MOCK: "1", REMOTE_BROWSER_ENABLED: "true",
+      REMOTE_BROWSER_INTERNAL_URL: `http://127.0.0.1:${browserPort}`
+    } : {}),
     ...(stateTokenSecret ? { STATE_TOKEN_SECRET: stateTokenSecret } : {}),
     LIVEKIT_URL: options.livekitUrl ?? "ws://127.0.0.1:7880", LIVEKIT_API_KEY: "devkey", LIVEKIT_API_SECRET: "secret",
     ...(options.livekitUrl ? { LIVEKIT_ROOM_PREFIX: "vrata-", MEDIA_TOKEN_TTL_SECONDS: "120" } : {}),
@@ -146,6 +153,10 @@ export async function startReferenceTemplateFixture(postgresUrl: string, options
     storage = new PostgresStorage(pool); await storage.init();
     roomStateChild = start("apps/room-state/dist/index.js");
     apiChild = start("apps/api/dist/index.js");
+    if (browserPort) {
+      remoteBrowserChild = start("tests/e2e/m1-media/remote-browser-fixture.mjs");
+      await ready(`http://127.0.0.1:${browserPort}/health`, remoteBrowserChild);
+    }
     await ready(`${origin}/health`, apiChild); await ready(`${stateOrigin}/health`, roomStateChild);
     const { seedStagingTemplateFixtures } = await import(pathToFileURL(resolve("tools/seed-staging-template-fixtures.mjs")).href);
     await seedStagingTemplateFixtures(origin, adminToken);
@@ -156,7 +167,7 @@ export async function startReferenceTemplateFixture(postgresUrl: string, options
     }
   } catch (error) {
     closing = true;
-    await Promise.all([apiChild, roomStateChild].filter((child): child is ChildProcess => Boolean(child)).map(stop)); await pool.end();
+    await Promise.all([apiChild, roomStateChild, remoteBrowserChild].filter((child): child is ChildProcess => Boolean(child)).map(stop)); await pool.end();
     await admin.query(`drop schema if exists "${schema}" cascade`); await admin.end();
     await new Promise<void>(resolve => assetServer.close(() => resolve())); throw error;
   }
@@ -173,7 +184,7 @@ export async function startReferenceTemplateFixture(postgresUrl: string, options
           const response = await fetch(`${origin}/api/templates`); const catalog = await response.json();
           assert.equal(catalog.items.length, 4);
         } finally {
-          await Promise.all([apiChild, roomStateChild].filter((child): child is ChildProcess => Boolean(child)).map(stop));
+          await Promise.all([apiChild, roomStateChild, remoteBrowserChild].filter((child): child is ChildProcess => Boolean(child)).map(stop));
           await pool.end(); await admin.query(`drop schema "${schema}" cascade`); await admin.end();
           await new Promise<void>(resolve => assetServer.close(() => resolve()));
           await rm(documentStorageRoot, { recursive: true, force: true });
