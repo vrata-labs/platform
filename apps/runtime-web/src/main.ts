@@ -4691,6 +4691,7 @@ window.addEventListener("pageshow", documentLibraryPageShow);
 const documentMediaPending = createDocumentMediaPendingPatch();
 const {
   presentationInputEventId, documentMediaInputEventId,
+  beginDocumentMediaSeek, endDocumentMediaSeek, cancelDocumentMediaSeek, resetCancelledDocumentMediaSeek, readDocumentMediaSeek,
   renderDocumentMediaControls, renderPresentationControls
 } = createDocumentSurfaceView({
   get participantId() { return participantId; },
@@ -7569,6 +7570,7 @@ bindDocumentControls({
   togglePresentationDisplayMode, stopCurrentPresentation,
   toggleDocumentMediaPlayback, toggleDocumentMediaFit,
   patchCurrentDocumentMedia, documentMediaInputEventId, stopCurrentDocumentMedia,
+  beginDocumentMediaSeek, endDocumentMediaSeek, cancelDocumentMediaSeek, resetCancelledDocumentMediaSeek, readDocumentMediaSeek,
   get selectedDocumentId() { return selectedDocumentId; },
   set selectedDocumentId(value) { selectedDocumentId = value; }
 });

@@ -68,9 +68,9 @@ export function installDocumentTestDom(t: TestContext) {
     Option: class extends DocumentTestElement {
       constructor(text: string, value: string) { super("option"); this.textContent = text; this.value = value; }
     },
-    window: { setTimeout(callback: () => void, delay: number) {
+    window: Object.assign(new EventTarget(), { setTimeout(callback: () => void, delay: number) {
       timers.push({ callback, delay }); return timers.length;
-    } }
+    } })
   };
   for (const [name, value] of Object.entries(globals)) {
     const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
@@ -82,5 +82,5 @@ export function installDocumentTestDom(t: TestContext) {
   }
   t.mock.method(URL, "createObjectURL", (blob: Blob) => { blobs.push(blob); return "blob:document-test"; });
   t.mock.method(URL, "revokeObjectURL", (url: string) => { revoked.push(url); });
-  return { created, body, storage, timers, blobs, revoked };
+  return { created, body, storage, timers, blobs, revoked, window: globals.window };
 }
