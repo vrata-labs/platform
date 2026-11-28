@@ -12,10 +12,14 @@ type SurfaceActions = Pick<ReturnType<typeof createDocumentSurfaceActions>,
   "patchCurrentDocumentMedia" | "stopCurrentDocumentMedia"
 >;
 type DocumentQueries = Pick<ReturnType<typeof createMediaObjectQueries>, "currentPdfPresentationObject">;
-type DocumentIds = Pick<ReturnType<typeof createDocumentSurfaceView>, "documentMediaInputEventId">;
+type DocumentMediaControls = Pick<ReturnType<typeof createDocumentSurfaceView>,
+  "documentMediaInputEventId" | "beginDocumentMediaSeek" | "endDocumentMediaSeek" | "readDocumentMediaSeek" |
+  "cancelDocumentMediaSeek" | "resetCancelledDocumentMediaSeek"
+>;
 type Button = Pick<HTMLButtonElement, "addEventListener">;
+const rangeSeekKeys = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"]);
 
-export interface DocumentControlBindingsContext extends LibraryActions, SurfaceActions, DocumentQueries, DocumentIds {
+export interface DocumentControlBindingsContext extends LibraryActions, SurfaceActions, DocumentQueries, DocumentMediaControls {
   roomId: string;
   selectedDocumentId: string;
   documentSelect: Pick<HTMLSelectElement, "addEventListener" | "value">;
@@ -31,7 +35,7 @@ export interface DocumentControlBindingsContext extends LibraryActions, SurfaceA
   documentMediaPlayButton: Button;
   documentMediaFitButton: Button;
   documentMediaLoopInput: Pick<HTMLInputElement, "addEventListener" | "checked">;
-  documentMediaSeekInput: Pick<HTMLInputElement, "addEventListener" | "value">;
+  documentMediaSeekInput: Pick<HTMLInputElement, "addEventListener">;
   documentMediaStopButton: Button;
 }
 
@@ -46,7 +50,8 @@ export function bindDocumentControls(context: DocumentControlBindingsContext): v
     deleteSelectedDocument, documentRefreshButton, loadRoomDocuments, currentPdfPresentationObject, goToPresentationPage,
     togglePresentationDisplayMode, stopCurrentPresentation,
     toggleDocumentMediaPlayback, toggleDocumentMediaFit,
-    patchCurrentDocumentMedia, documentMediaInputEventId, stopCurrentDocumentMedia
+    patchCurrentDocumentMedia, documentMediaInputEventId, stopCurrentDocumentMedia,
+    beginDocumentMediaSeek, endDocumentMediaSeek, cancelDocumentMediaSeek, resetCancelledDocumentMediaSeek, readDocumentMediaSeek
   } = context;
 
   documentSelect.addEventListener("change", () => {
@@ -106,9 +111,27 @@ export function bindDocumentControls(context: DocumentControlBindingsContext): v
     void patchCurrentDocumentMedia({ type: "set-loop", loop: documentMediaLoopInput.checked, inputEventId: documentMediaInputEventId("loop") });
   });
 
-  documentMediaSeekInput.addEventListener("change", () => {
-    void patchCurrentDocumentMedia({ type: "seek", positionMs: Number(documentMediaSeekInput.value), inputEventId: documentMediaInputEventId("seek") });
+  documentMediaSeekInput.addEventListener("pointerdown", (event) => {
+    // A touch on the range can be non-primary if another finger is down elsewhere.
+    if (event.button === 0) beginDocumentMediaSeek(event.pointerId);
   });
+  // Disabling or hiding the range can redirect release before it captures the pointer.
+  window.addEventListener("pointerup", (event) => endDocumentMediaSeek(event.pointerId, commitDocumentMediaSeek), true);
+  window.addEventListener("pointercancel", (event) => endDocumentMediaSeek(event.pointerId), true);
+  window.addEventListener("blur", cancelDocumentMediaSeek);
+  documentMediaSeekInput.addEventListener("lostpointercapture", (event) => endDocumentMediaSeek(event.pointerId));
+  documentMediaSeekInput.addEventListener("keydown", (event) => {
+    // The window may have lost both focus and the pointer's release event.
+    if (rangeSeekKeys.has(event.key)) resetCancelledDocumentMediaSeek();
+  });
+  documentMediaSeekInput.addEventListener("change", commitDocumentMediaSeek);
+
+  function commitDocumentMediaSeek(): void {
+    const positionMs = readDocumentMediaSeek();
+    if (positionMs !== null) {
+      void patchCurrentDocumentMedia({ type: "seek", positionMs, inputEventId: documentMediaInputEventId("seek") });
+    }
+  }
 
   documentMediaStopButton.addEventListener("click", () => {
     void stopCurrentDocumentMedia();

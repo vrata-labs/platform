@@ -576,10 +576,33 @@ test("image and video documents render and synchronize playback", async ({ page,
   await expect.poll(async () => page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { documentMedia?: { actualPositionMs?: number } } }).__VRATA_DEBUG__?.documentMedia?.actualPositionMs ?? 0), {
     timeout: 15000
   }).toBeGreaterThan(150);
-  await page.locator("#document-media-seek").evaluate((input: HTMLInputElement) => {
-    input.value = String(Math.min(500, Number(input.max)));
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-  });
+  const seek = page.locator("#document-media-seek");
+  await expect(seek).toBeEnabled();
+  await expect.poll(async () => Number(await seek.inputValue())).toBeGreaterThan(0);
+  await seek.scrollIntoViewIfNeeded();
+  const bounds = (await seek.boundingBox())!;
+  const y = bounds.y + bounds.height / 2;
+  await page.mouse.move(bounds.x + bounds.width / 2, y);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + 1, y);
+
+  // The playback clock is rendered even while the pointer is held down.
+  // Observe the next render so the assertion cannot pass before a UI update.
+  await page.locator("#document-media-time").evaluate((time) => new Promise<void>((resolve) => {
+    const observer = new MutationObserver(() => {
+      observer.disconnect();
+      resolve();
+    });
+    observer.observe(time, { childList: true });
+  }));
+  expect(await seek.inputValue()).toBe("0");
+  await page.mouse.up();
+  await expect.poll(() => page.evaluate(() => {
+    const debug = (window as Window & { __VRATA_DEBUG__?: {
+      mediaObjects?: { objects: Array<{ type: string; state: { lastInputEventId?: string; positionMs?: number } }> };
+    } }).__VRATA_DEBUG__;
+    return debug?.mediaObjects?.objects.find((object) => object.type === "video-player")?.state;
+  })).toMatchObject({ lastInputEventId: expect.stringContaining(":document-media:seek:"), positionMs: 0 });
   await page.check("#document-media-loop");
   await expect(page.locator("#document-media-loop")).toBeChecked({ timeout: 10000 });
 
@@ -592,6 +615,7 @@ test("image and video documents render and synchronize playback", async ({ page,
       return { kind: media?.kind ?? null, playbackState: media?.playbackState ?? null, ready: (media?.actualPositionMs ?? 0) > 0, errorCode: media?.errorCode ?? null };
     }), { timeout: 20000 }).toEqual({ kind: "video", playbackState: "playing", ready: true, errorCode: null });
     await expect(memberPage.locator("#document-media-play")).toBeDisabled();
+    await expect(memberPage.locator("#document-media-seek")).toBeDisabled();
     await clickEnabledDomButton(page, "#document-media-play");
     await expect.poll(async () => memberPage.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { documentMedia?: { playbackState?: string } } }).__VRATA_DEBUG__?.documentMedia?.playbackState ?? ""), {
       timeout: 10000
